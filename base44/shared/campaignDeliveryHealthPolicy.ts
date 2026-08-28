@@ -33,7 +33,7 @@ const STALE_TRANSITIONAL_STATES = new Set([
 ]);
 
 export const ZERO_DELIVERY_TEST_HOURS = 72;
-export const MAX_ZERO_DELIVERY_BID_ESCALATIONS = 2;
+export const MAX_ZERO_DELIVERY_BID_ESCALATIONS = 3;
 
 const finite = (value: unknown, fallback = 0): number => {
   const parsed = Number(value);
@@ -152,12 +152,49 @@ export function classifyCampaignDeliveryHealth(input: DeliveryHealthInput): Deli
 export function nextConservativeBid(
   currentBid: number,
   maxBid: number,
-  _configuredIncrement = 0.1,
+  _configuredIncrement = 0.10,
   minBid = 0.02,
 ): number {
-  const safeMin = Math.max(0.02, Number(minBid) || 0.02);
-  const safeCurrent = Math.max(safeMin, Number(currentBid) || safeMin);
-  const cappedMax = Math.max(safeCurrent, Number(maxBid) || safeCurrent);
-  const percentageStep = Math.round(safeCurrent * 1.05 * 100) / 100;
-  return Math.min(cappedMax, Math.max(safeMin, percentageStep));
+  const safeMin = Math.max(
+    0.02,
+    Number(minBid) || 0.02
+  );
+
+  const safeCurrent = Math.max(
+    safeMin,
+    Number(currentBid) || safeMin
+  );
+
+  const cappedMax = Math.max(
+    safeCurrent,
+    Number(maxBid) || safeCurrent
+  );
+
+  /*
+   * ZERO DELIVERY >= 72H
+   *
+   * Cada ciclo aumenta EXATAMENTE R$0,10.
+   *
+   * Exemplo:
+   * 0,50 -> 0,60
+   * 0,60 -> 0,70
+   * 0,70 -> 0,80
+   *
+   * Se safe_max_cpc for 0,73:
+   * 0,70 -> 0,73.
+   *
+   * Nunca ultrapassa o teto econômico.
+   */
+  const nextBid =
+    Math.round(
+      (safeCurrent + 0.10) * 100
+    ) / 100;
+
+  return Math.min(
+    cappedMax,
+    Math.max(
+      safeMin,
+      nextBid
+    )
+  );
 }

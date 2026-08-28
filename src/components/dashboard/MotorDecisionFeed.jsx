@@ -9,6 +9,36 @@ import {
   getMotorActionBadge, getMotorReasonLabel, getAmazonConfirmationStatus,
 } from '@/lib/motorLabels';
 
+
+function isVisibleOperationalDecision(item) {
+  const visibility =
+    String(
+      item?.operational_visibility || ''
+    ).toLowerCase();
+
+  const reason =
+    String(
+      item?.cancelled_reason ||
+      item?.reason_code ||
+      ''
+    ).toUpperCase();
+
+  if (
+    visibility === 'internal'
+  ) {
+    return false;
+  }
+
+  if (
+    reason === 'V3_PREFLIGHT_WINNER_PROTECTION' ||
+    reason === 'V3_PREFLIGHT_ZERO_DELIVERY_DELEGATED'
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 const PAGE_SIZE = 10;
 const CURRENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const MAX_CLEANUP_ROUNDS = 6;
@@ -45,6 +75,120 @@ function deriveTitle(raw) {
   if (raw?.campaign_id) return `Campanha ${raw.campaign_id}`;
   if (raw?.entity_id) return `${raw?.entity_type === 'campaign' ? 'Campanha' : 'Entidade'} ${raw.entity_id}`;
   return 'Decisão do motor';
+}
+
+
+/*
+ * =========================================================
+ * CANONICAL PROFIT ENGINE V3 — CURRENT FEED VISIBILITY
+ * =========================================================
+ *
+ * O histórico completo continua disponível.
+ *
+ * A seção "O que o Motor está fazendo agora" mostra somente
+ * ações operacionais atuais.
+ *
+ * Propostas barradas no pre-flight, superseded e registros
+ * explicitamente internos pertencem à auditoria histórica,
+ * não ao feed corrente.
+ */
+function isCurrentOperationalDecision(item) {
+  const raw = item?.raw || {};
+
+  const visibility =
+    String(
+      raw.operational_visibility || ''
+    )
+      .trim()
+      .toLowerCase();
+
+  if (visibility === 'internal') {
+    return false;
+  }
+
+  const status =
+    String(
+      raw.status ||
+      raw.queue_status ||
+      ''
+    )
+      .trim()
+      .toLowerCase();
+
+  /*
+   * SUPERSEDED significa que outra avaliação V3 venceu.
+   * Não é ação operacional atual.
+   */
+  if (
+    [
+      'superseded',
+      'rejected',
+      'expired'
+    ].includes(status)
+  ) {
+    return false;
+  }
+
+  const reason =
+    String(
+      raw.cancelled_reason ||
+      raw.reason_code ||
+      raw.blocked_reason ||
+      ''
+    )
+      .trim()
+      .toUpperCase();
+
+  /*
+   * Decisões que o V3 deliberadamente converteu em
+   * auditoria interna.
+   */
+  if (
+    [
+      'V3_PREFLIGHT_WINNER_PROTECTION',
+      'V3_PREFLIGHT_ZERO_DELIVERY_DELEGATED',
+      'V3_PREFLIGHT_SUPERSEDED_BLOCKED_PAUSE',
+      'AMAZON_ENABLED_SUPERSEDES_STALE_PAUSE',
+      'SUPERSEDED_BY_WEEKLY_V3',
+      'SUPERSEDED_BY_WEEKLY_V3_REFRESH'
+    ].includes(reason)
+  ) {
+    return false;
+  }
+
+  /*
+   * Uma PAUSE que foi bloqueada/cancelada não é algo que
+   * o motor esteja "fazendo agora".
+   *
+   * Continua visível quando o usuário abre o Histórico.
+   */
+  const action =
+    String(
+      raw.action ||
+      raw.action_type ||
+      raw.canonical_action_type ||
+      ''
+    )
+      .trim()
+      .toLowerCase();
+
+  const blockedPause =
+    action.includes('pause') &&
+    (
+      raw.hard_block === true ||
+      [
+        'blocked',
+        'cancelled',
+        'canceled',
+        'skipped'
+      ].includes(status)
+    );
+
+  if (blockedPause) {
+    return false;
+  }
+
+  return true;
 }
 
 function historicalDedupeKey(item) {
@@ -99,7 +243,7 @@ function buildHistoryCsv(items) {
     ['id', item => item.raw?.id || item.id],
   ];
   const header = columns.map(([name]) => csvCell(name)).join(';');
-  const rows = items.map(item => columns.map(([, getter]) => csvCell(getter(item))).join(';'));
+  const rows = items.filter(isVisibleOperationalDecision).map(item => columns.map(([, getter]) => csvCell(getter(item))).join(';'));
   return `\uFEFF${[header, ...rows].join('\n')}`;
 }
 
@@ -230,10 +374,27 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId }) 
     });
   }, [decisions, bidChanges]);
 
-  const recent = useMemo(() => merged.filter((item) => {
-    const timestamp = new Date(item.timestamp || 0).getTime();
-    return Number.isFinite(timestamp) && timestamp >= Date.now() - CURRENT_WINDOW_MS;
-  }), [merged]);
+  const recent = useMemo(
+    () =>
+      merged.filter((item) => {
+        if (!isCurrentOperationalDecision(item)) {
+          return false;
+        }
+
+        const timestamp =
+          new Date(
+            item.timestamp || 0
+          ).getTime();
+
+        return (
+          Number.isFinite(timestamp) &&
+          timestamp >=
+            Date.now() -
+            CURRENT_WINDOW_MS
+        );
+      }),
+    [merged]
+  );
   const visibleItems = showHistory ? merged : recent;
   const totalItems = visibleItems.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));

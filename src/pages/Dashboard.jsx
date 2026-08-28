@@ -1,22 +1,18 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useReportPolling } from '@/hooks/useReportPolling';
-import { base44 } from '@/api/base44Client';
 import { classifyCampaigns } from '@/lib/campaignUtils';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAccountData, invalidateAccountData } from '@/hooks/useAccountData';
 import { Link } from 'react-router-dom';
 import {
-  ComposedChart, AreaChart, Area, BarChart, Bar, LineChart, Line,
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine
+  ComposedChart, Area, Line,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
-import {
-  RefreshCw, AlertCircle, Loader2,
-  AlertTriangle, BarChart2, Megaphone, BookOpen, Terminal, Zap
+import { AlertCircle, Loader2, BarChart2, Megaphone, BookOpen, Terminal, Zap
 } from 'lucide-react';
 import TokenExpiredBanner from '@/components/amazon/TokenExpiredBanner';
 import MoMComparisonChart from '@/components/dashboard/MoMComparisonChart';
 import UnifiedMetricsPanel from '@/components/dashboard/UnifiedMetricsPanel';
-import PerformanceGoalsPanel from '@/components/dashboard/PerformanceGoalsPanel';
 import AutoWindowStatus from '@/components/dashboard/AutoWindowStatus';
 import AiChangesBreakdown from '@/components/dashboard/AiChangesBreakdown';
 import FinanceSyncDiagnostic from '@/components/dashboard/FinanceSyncDiagnostic';
@@ -906,20 +902,6 @@ export default function Dashboard() {
       {/* ── 3c. RELATÓRIOS UNIFICADOS — blocos inteligentes ─────────────────── */}
       {account ? <UnifiedMetricsPanel amazonAccountId={account.id} /> : null}
 
-      {/* ── 3d. METAS DE PERFORMANCE APLICADAS ──────────────────────────────── */}
-      {account ? (
-        <PerformanceGoalsPanel
-          account={account}
-          metricsData={{
-            acos: kpis.acos,
-            roas: kpis.roas,
-            tacos: realSalesKpis.tacos,
-            cpc: kpis.cpc,
-            today_spend: spendYesterday,
-            total_budget: autopilotConfig?.daily_budget_limit || autopilotConfig?.total_daily_budget || 0,
-          }}
-        />
-      ) : null}
 
       {/* ── 4. RESUMO DE PERFORMANCE ────────────────────────────────────────── */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">

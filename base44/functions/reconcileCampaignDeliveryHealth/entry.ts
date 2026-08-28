@@ -102,9 +102,19 @@ Deno.serve(async (request) => {
       const parsed = Number(value);
       return Math.max(0, Math.min(maximum, Number.isFinite(parsed) ? Math.floor(parsed) : fallback));
     };
-    const maxReplacementsPerRun = configuredLimit(body.max_replacements_per_run, 6, 20);
+    const maxReplacementsPerRun =
+      configuredLimit(
+        body.max_replacements_per_run,
+        20,
+        40
+      );
     const maxStructureRepairsPerRun = configuredLimit(body.max_structure_repairs_per_run, 5, 5);
-    const maxBidRecoveriesPerRun = configuredLimit(body.max_bid_recoveries_per_run, 8, 8);
+    const maxBidRecoveriesPerRun =
+      configuredLimit(
+        body.max_bid_recoveries_per_run,
+        40,
+        80
+      );
     const accounts = body.amazon_account_id
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 50);
@@ -204,6 +214,33 @@ Deno.serve(async (request) => {
       let replacementsAttempted = 0;
       let replacementsConfirmed = 0;
 
+      /*
+       * LF_ZERO_DELIVERY_72H_10CENT_RETROACTIVE
+       *
+       * Regra:
+       *
+       * >=72h sem gasto/entrega:
+       *   bid + R$0,10
+       *
+       * nova janela >=72h sem entrega:
+       *   + R$0,10
+       *
+       * terceira janela:
+       *   + R$0,10
+       *
+       * depois das 3 escaladas:
+       *   PAUSE_AND_REPLACE / reconstrução
+       *
+       * Sempre respeitando:
+       * - safe_max_cpc
+       * - estoque
+       * - buyability
+       * - hard stop
+       * - orçamento da conta
+       *
+       * A ordenação oldest-first faz o catch-up
+       * retroativo das campanhas já antigas.
+       */
       const campaignsOldestFirst = [...campaigns].sort((a: any, b: any) =>
         new Date(String(a.created_at || a.created_date || 0)).getTime() -
         new Date(String(b.created_at || b.created_date || 0)).getTime()

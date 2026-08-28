@@ -17,11 +17,11 @@ const TABS = [
 ];
 
 const LEGACY_LINKS = {
-  pendentes: '/sala-de-comando/legacy?tab=historico',
-  execucao: '/sala-de-comando/legacy?tab=fila',
-  monitoramento: '/sala-de-comando/legacy?tab=alertas',
-  kickoff: '/sala-de-comando/legacy?tab=kickoff',
-  sistema: '/sala-de-comando/legacy?tab=sync_monitor',
+  pendentes: '/sala-de-comando?tab=pendentes',
+  execucao: '/sala-de-comando?tab=execucao',
+  monitoramento: '/sala-de-comando?tab=monitoramento',
+  kickoff: '/sala-de-comando?tab=kickoff',
+  sistema: '/sala-de-comando?tab=sistema',
 };
 
 function formatDate(value) {
@@ -33,6 +33,15 @@ function formatDate(value) {
   });
 }
 
+
+function queueStatus(item) {
+  return String(
+    item?.status || ''
+  )
+    .trim()
+    .toLowerCase();
+}
+
 function queueTimestamp(item) {
   return item?.updated_at || item?.updated_date || item?.completed_at || item?.started_at || item?.scheduled_at || item?.created_at || item?.created_date || null;
 }
@@ -40,6 +49,423 @@ function queueTimestamp(item) {
 function isWithinHours(value, hours) {
   const timestamp = new Date(value || 0).getTime();
   return Number.isFinite(timestamp) && timestamp >= Date.now() - hours * 60 * 60 * 1000;
+}
+
+function parseDecisionData(value) {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+
+  try {
+    return JSON.parse(String(value));
+  } catch {
+    return {};
+  }
+}
+
+function decisionStatus(item) {
+  return String(
+    item?.confirmation_status ||
+    item?.queue_status ||
+    item?.status ||
+    ''
+  ).toLowerCase();
+}
+
+
+
+/*
+ * ========================================================
+ * V3 OPERATIONAL ACTION PLAN
+ * ========================================================
+ *
+ * Prioridades operacionais representam trabalho futuro
+ * decidido/proposto pelo V3.
+ *
+ * NÃO representam alertas informativos.
+ *
+ * Ciclo:
+ *
+ * AI/V3
+ *   -> operational priority
+ *   -> executable queue
+ *   -> Amazon
+ *   -> confirmed execution
+ *
+ * Hard guards permanecem em Proteções.
+ */
+
+function v3PlannedActionType(item) {
+  const action = String(
+    item?.action ||
+    item?.decision_type ||
+    item?.proposed_action ||
+    item?.recommended_action ||
+    ''
+  ).toLowerCase();
+
+  const reason = String(
+    item?.reason ||
+    item?.rationale ||
+    item?.decision_reason ||
+    ''
+  ).toLowerCase();
+
+  const text = `${action} ${reason}`;
+
+  if (
+    /kick.?off|launch_product|product_launch/.test(text)
+  ) {
+    return 'KICKOFF';
+  }
+
+  if (
+    /create.*campaign|new.*campaign|manual_exact|harvest/.test(text)
+  ) {
+    return 'CREATE_CAMPAIGN';
+  }
+
+  if (
+    /replace|rebuild|replacement/.test(text)
+  ) {
+    return 'REBUILD_CAMPAIGN';
+  }
+
+  if (
+    /increase.*bid|raise.*bid|bid_increase/.test(text)
+  ) {
+    return 'INCREASE_BID';
+  }
+
+  if (
+    /reduce.*bid|decrease.*bid|lower.*bid|bid_reduction/.test(text)
+  ) {
+    return 'REDUCE_BID';
+  }
+
+  if (
+    /budget/.test(text)
+  ) {
+    return 'BUDGET';
+  }
+
+  if (
+    /negative/.test(text)
+  ) {
+    return 'NEGATIVE_TARGET';
+  }
+
+  if (
+    /pause/.test(text)
+  ) {
+    return 'PAUSE';
+  }
+
+  if (
+    /reactivat|resume|restart/.test(text)
+  ) {
+    return 'REACTIVATE';
+  }
+
+  if (
+    /zero_delivery|recovery|recover/.test(text)
+  ) {
+    return 'RECOVERY';
+  }
+
+  return 'OPTIMIZATION';
+}
+
+function isV3ProtectionOnly(item) {
+  const text = String(
+    [
+      item?.status,
+      item?.reason,
+      item?.rationale,
+      item?.code,
+      item?.blocker_code,
+      item?.decision_reason
+    ]
+      .filter(Boolean)
+      .join(' ')
+  ).toUpperCase();
+
+  return (
+    /OUT_OF_STOCK/.test(text) ||
+    /PRODUCT_NOT_ELIGIBLE/.test(text) ||
+    /NOT_BUYABLE/.test(text) ||
+    /BUYABILITY/.test(text) ||
+    /LISTING/.test(text) ||
+    /SKU_NOT_AUTHORIZED/.test(text) ||
+    /OUT_OF_SCOPE/.test(text) ||
+    /HARD_GUARD/.test(text)
+  );
+}
+
+function isV3CompletedAction(item) {
+  const status = String(
+    item?.status || ''
+  ).toLowerCase();
+
+  return [
+    'executed',
+    'confirmed',
+    'completed',
+    'amazon_confirmed',
+    'superseded',
+    'cancelled'
+  ].includes(status);
+}
+
+function isV3FutureOperationalAction(item) {
+  if (!item) return false;
+
+  if (isV3ProtectionOnly(item)) {
+    return false;
+  }
+
+  if (isV3CompletedAction(item)) {
+    return false;
+  }
+
+  const status = String(
+    item?.status || ''
+  ).toLowerCase();
+
+  /*
+   * Somente trabalho ainda existente.
+   */
+  if (
+    [
+      'pending',
+      'approved',
+      'scheduled',
+      'ready',
+      'proposed',
+      'planned',
+      'processing',
+      'queued'
+    ].includes(status)
+  ) {
+    return true;
+  }
+
+  /*
+   * Alguns registros V3 podem não possuir status explícito
+   * ainda, mas possuem ação proposta.
+   */
+  return Boolean(
+    item?.action ||
+    item?.proposed_action ||
+    item?.recommended_action
+  );
+}
+
+function v3ActionLabel(item) {
+  switch (v3PlannedActionType(item)) {
+
+    case 'KICKOFF':
+      return 'Kick-off de produto';
+
+    case 'CREATE_CAMPAIGN':
+      return 'Criar nova campanha';
+
+    case 'REBUILD_CAMPAIGN':
+      return 'Substituir campanha ineficiente';
+
+    case 'INCREASE_BID':
+      return 'Aumentar bid';
+
+    case 'REDUCE_BID':
+      return 'Reduzir bid';
+
+    case 'BUDGET':
+      return 'Ajustar orçamento';
+
+    case 'NEGATIVE_TARGET':
+      return 'Adicionar segmentação negativa';
+
+    case 'PAUSE':
+      return 'Pausar campanha ineficiente';
+
+    case 'REACTIVATE':
+      return 'Reativar campanha';
+
+    case 'RECOVERY':
+      return 'Recuperar entrega';
+
+    default:
+      return 'Otimização V3';
+  }
+}
+
+function v3OperationalPriority(item) {
+  const type = v3PlannedActionType(item);
+
+  /*
+   * P0 — impedir prejuízo atual.
+   */
+  if (
+    type === 'REDUCE_BID' ||
+    type === 'PAUSE'
+  ) {
+    return 0;
+  }
+
+  /*
+   * P1 — criar capacidade de venda.
+   */
+  if (
+    type === 'KICKOFF' ||
+    type === 'CREATE_CAMPAIGN' ||
+    type === 'REBUILD_CAMPAIGN' ||
+    type === 'RECOVERY' ||
+    type === 'NEGATIVE_TARGET'
+  ) {
+    return 1;
+  }
+
+  /*
+   * P2 — escalar ativos economicamente bons.
+   */
+  if (
+    type === 'INCREASE_BID' ||
+    type === 'BUDGET' ||
+    type === 'REACTIVATE'
+  ) {
+    return 2;
+  }
+
+  return 3;
+}
+
+function isV3OperationallyActionable(item) {
+  const priority = v3OperationalPriority(item);
+
+  const status = String(
+    item?.status ||
+    item?.queue_status ||
+    ''
+  ).toUpperCase();
+
+  /*
+   * Histórico resolvido não entra nas prioridades.
+   */
+  if (
+    priority >= 4 ||
+    /SUPERSEDED|CANCELLED|CANCELED|CONFIRMED/.test(status)
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function isV3Decision(item) {
+  const data = parseDecisionData(item?.data_used);
+
+  const policy = String(
+    item?.policy_version ||
+    data?.policy_version ||
+    ''
+  ).toUpperCase();
+
+  const owner = String(
+    item?.decision_owner ||
+    item?.canonical_engine ||
+    data?.canonical_engine ||
+    ''
+  ).toUpperCase();
+
+  const source = String(
+    item?.source_function ||
+    data?.original_source_function ||
+    ''
+  );
+
+  /*
+   * Compatibilidade de transição:
+   *
+   * decisões criadas pelos submotores que hoje são
+   * componentes INTERNOS do V3 contam como V3 mesmo
+   * quando registros antigos ainda não receberam todos
+   * os campos policy_version / decision_owner.
+   */
+  const internalV3Sources = new Set([
+    'runDeterministicDecisionEngine',
+    'runSalesModeWasteRotation',
+    'runIntradaySalesRecovery',
+    'runAsinPortfolioDiversificationGuard',
+    'runCanonicalDecisionCycle',
+    'runCanonicalProfitEngineV3',
+  ]);
+
+  return (
+    policy === 'PROFIT_ENGINE_V3' ||
+    owner === 'CANONICAL_PROFIT_ENGINE_V3' ||
+    internalV3Sources.has(source) ||
+    Boolean(item?.canonical_action_type)
+  );
+}
+
+function isConfirmedDecision(item) {
+  const status = decisionStatus(item);
+
+  return (
+    status === 'confirmed' ||
+    String(item?.confirmation_status || '').toLowerCase() === 'confirmed' ||
+    item?.confirmed_at != null
+  );
+}
+
+function isExecutedDecision(item) {
+  const status = decisionStatus(item);
+
+  return (
+    status === 'executed' ||
+    status === 'confirmed' ||
+    item?.executed_at != null ||
+    item?.confirmed_at != null
+  );
+}
+
+function isProtectedDecision(item) {
+  const status = decisionStatus(item);
+
+  const reason = String(
+    item?.cancelled_reason ||
+    item?.reason_code ||
+    item?.blocked_reason ||
+    item?.reason ||
+    ''
+  ).toUpperCase();
+
+  return (
+    ['cancelled', 'canceled', 'superseded', 'rejected'].includes(status) ||
+    /(OUT_OF_STOCK|NOT_BUYABLE|LISTING_|OFFER_|WINNER_PROTECTION|PRODUCT_NOT_ELIGIBLE|SAFE_CPC|ACCOUNT_)/.test(reason)
+  );
+}
+
+function isToday(value) {
+  if (!value) return false;
+
+  const d = new Date(value);
+
+  if (Number.isNaN(d.getTime())) {
+    return false;
+  }
+
+  const now = new Date();
+
+  return (
+    d.toLocaleDateString(
+      'en-CA',
+      { timeZone: 'America/Sao_Paulo' }
+    ) ===
+    now.toLocaleDateString(
+      'en-CA',
+      { timeZone: 'America/Sao_Paulo' }
+    )
+  );
 }
 
 const RETRYABLE_QUEUE_ERROR = /(\b429\b|rate.?limit|throttl|timeout|timed.?out|network|temporar|\b502\b|\b503\b|\b504\b|\b524\b|connection reset|circuit.?open)/i;
@@ -51,12 +477,189 @@ function isRetryableQueueFailure(item) {
 }
 
 function isSafetyBlockedQueue(item, product) {
-  if (['waiting_stock', 'cancelled'].includes(String(item?.status || '').toLowerCase())) return true;
+  if (['waiting_stock', 'cancelled'].includes(queueStatus(item))) return true;
   const scope = String(product?.ads_scope_status || '').toLowerCase();
   if (['not_authorized', 'manual_block', 'mapping_conflict'].includes(scope)) return true;
   if (!product) return false;
   const stock = Number(product.fulfillable_quantity ?? product.available_quantity ?? product.inventory_quantity ?? product.stock ?? product.fba_inventory);
   return Number.isFinite(stock) && stock <= 0;
+}
+
+
+/*
+ * =========================================================
+ * CANONICAL PROFIT ENGINE V3 — AGENDA OPERACIONAL
+ * =========================================================
+ *
+ * Esta lista reflete o scheduler oficial confirmado:
+ *
+ * 22:45 métricas
+ * 23:00 IA + V3
+ * 23:20 executor
+ * 23:35 confirmação Amazon
+ * 23:50 remote truth
+ * domingo 21:00 revisão semanal ampla
+ *
+ * Não é um segundo scheduler no frontend.
+ * É somente representação visual do scheduler real.
+ */
+const V3_SCHEDULED_ACTIONS = [
+  {
+    id: 'daily-metrics',
+    label: 'Atualizar métricas Ads',
+    time: '22:45',
+    hour: 22,
+    minute: 45,
+    cadence: 'daily',
+    detail:
+      'Atualiza métricas de campanhas e SKUs antes da revisão diária.',
+  },
+  {
+    id: 'daily-ai-review',
+    label: 'Revisão diária IA + V3',
+    time: '23:00',
+    hour: 23,
+    minute: 0,
+    cadence: 'daily',
+    highlight: true,
+    detail:
+      'Full scan SKU por SKU: vendas, ACoS, ROAS, CPC, bids, budget, waste, zero delivery, winners, harvesting, kick-off e rebuild.',
+  },
+  {
+    id: 'daily-execution',
+    label: 'Executar decisões admissíveis',
+    time: '23:20',
+    hour: 23,
+    minute: 20,
+    cadence: 'daily',
+    detail:
+      'Envia à execução os ajustes aprovados pelo CANONICAL_PROFIT_ENGINE_V3.',
+  },
+  {
+    id: 'daily-confirmation',
+    label: 'Confirmar alterações na Amazon',
+    time: '23:35',
+    hour: 23,
+    minute: 35,
+    cadence: 'daily',
+    detail:
+      'Confere bids, campanhas, keywords e demais alterações efetivamente aplicadas.',
+  },
+  {
+    id: 'daily-truth',
+    label: 'Sincronizar verdade Amazon',
+    time: '23:50',
+    hour: 23,
+    minute: 50,
+    cadence: 'daily',
+    detail:
+      'Atualiza o estado remoto final; Amazon prevalece sobre expectativas locais antigas.',
+  },
+  {
+    id: 'weekly-ai-review',
+    label: 'Revisão semanal ampla da IA',
+    time: '21:00',
+    hour: 21,
+    minute: 0,
+    cadence: 'sunday',
+    highlight: true,
+    detail:
+      'Domingo: compara 7d × 30d, reavalia campanhas atuais e pausadas, winners, estrutura e ajustes autônomos.',
+  },
+];
+
+function brtParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat(
+    'en-CA',
+    {
+      timeZone: 'America/Sao_Paulo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      weekday: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }
+  ).formatToParts(date);
+
+  return Object.fromEntries(
+    parts.map(part => [
+      part.type,
+      part.value,
+    ])
+  );
+}
+
+function brtMinutesNow() {
+  const parts = brtParts();
+
+  return (
+    Number(parts.hour || 0) * 60 +
+    Number(parts.minute || 0)
+  );
+}
+
+function brtWeekdayIndex() {
+  const short = String(
+    brtParts().weekday || ''
+  ).toLowerCase();
+
+  const map = {
+    sun: 0,
+    mon: 1,
+    tue: 2,
+    wed: 3,
+    thu: 4,
+    fri: 5,
+    sat: 6,
+  };
+
+  return map[short] ?? 0;
+}
+
+function nextScheduledText(item) {
+  const targetMinutes =
+    Number(item.hour || 0) * 60 +
+    Number(item.minute || 0);
+
+  const nowMinutes =
+    brtMinutesNow();
+
+  if (item.cadence === 'daily') {
+    if (targetMinutes > nowMinutes) {
+      return `Hoje às ${item.time}`;
+    }
+
+    return `Amanhã às ${item.time}`;
+  }
+
+  if (item.cadence === 'sunday') {
+    const weekday =
+      brtWeekdayIndex();
+
+    let days =
+      (7 - weekday) % 7;
+
+    if (
+      days === 0 &&
+      targetMinutes <= nowMinutes
+    ) {
+      days = 7;
+    }
+
+    if (days === 0) {
+      return `Hoje às ${item.time}`;
+    }
+
+    if (days === 1) {
+      return `Amanhã às ${item.time}`;
+    }
+
+    return `Domingo às ${item.time}`;
+  }
+
+  return item.time;
 }
 
 function MetricCard({ label, value, detail, tone = 'default', icon: Icon }) {
@@ -76,6 +679,107 @@ function MetricCard({ label, value, detail, tone = 'default', icon: Icon }) {
       </div>
       <p className="text-2xl font-semibold tracking-[-0.04em] mt-3">{value}</p>
       <p className="text-[11px] text-slate-500 mt-1">{detail}</p>
+    </div>
+  );
+}
+
+
+function ScheduledV3Actions() {
+  return (
+    <div className="border-t border-white/[0.06] bg-white/[0.012]">
+      <div className="px-5 pt-5 pb-3">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <Clock3 className="w-4 h-4 text-blue-300" />
+              <h3 className="text-sm font-semibold text-white">
+                Próximas ações programadas
+              </h3>
+            </div>
+
+            <p className="text-[11px] text-slate-500 mt-1">
+              Pipeline automático do CANONICAL_PROFIT_ENGINE_V3 · horário de Brasília
+            </p>
+          </div>
+
+          <span className="inline-flex items-center rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-semibold text-emerald-300">
+            Automático
+          </span>
+        </div>
+      </div>
+
+      <div className="px-5 pb-5">
+        <div className="rounded-xl border border-white/[0.07] bg-black/10 overflow-hidden">
+          {V3_SCHEDULED_ACTIONS.map((item, index) => (
+            <div
+              key={item.id}
+              className={`flex items-start gap-3 px-4 py-3 ${
+                index !== V3_SCHEDULED_ACTIONS.length - 1
+                  ? 'border-b border-white/[0.055]'
+                  : ''
+              }`}
+            >
+              <div
+                className={`mt-0.5 w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                  item.highlight
+                    ? 'bg-blue-500/12 text-blue-300'
+                    : 'bg-white/[0.04] text-slate-400'
+                }`}
+              >
+                {item.id.includes('review') ? (
+                  <Bot className="w-4 h-4" />
+                ) : item.id.includes('confirmation') || item.id.includes('truth') ? (
+                  <CheckCircle2 className="w-4 h-4" />
+                ) : (
+                  <Clock3 className="w-4 h-4" />
+                )}
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="text-xs font-semibold text-slate-200">
+                    {item.time}
+                  </span>
+
+                  <span className="text-xs text-slate-300">
+                    {item.label}
+                  </span>
+
+                  <span className="text-[10px] text-blue-300/80">
+                    {nextScheduledText(item)}
+                  </span>
+                </div>
+
+                <p className="text-[11px] text-slate-500 leading-relaxed mt-1">
+                  {item.detail}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 mt-3 text-[10px] text-slate-500">
+          <span>
+            Métricas
+          </span>
+          <span>→</span>
+          <span>
+            IA + V3
+          </span>
+          <span>→</span>
+          <span>
+            Execução
+          </span>
+          <span>→</span>
+          <span>
+            Confirmação
+          </span>
+          <span>→</span>
+          <span className="text-emerald-400/80">
+            Amazon truth
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -119,12 +823,12 @@ export default function SalaDeComandoPremium() {
       const aid = current.id;
       const [alerts, decisions, kickoff, repair, keyword, syncRuns, bidLogs, products] = await Promise.all([
         base44.entities.Alert.filter({ amazon_account_id: aid }, '-created_at', 100).catch(() => []),
-        base44.entities.OptimizationDecision.filter({ amazon_account_id: aid }, '-created_at', 100).catch(() => []),
-        base44.entities.ProductKickoffQueue.filter({ amazon_account_id: aid }, '-scheduled_at', 100).catch(() => []),
-        base44.entities.AutoCampaignRepairQueue.filter({ amazon_account_id: aid }, '-scheduled_at', 100).catch(() => []),
-        base44.entities.KeywordRepairQueue.filter({ amazon_account_id: aid }, '-scheduled_at', 100).catch(() => []),
+        base44.entities.OptimizationDecision.filter({ amazon_account_id: aid }, '-created_at', 1000).catch(() => []),
+        base44.entities.ProductKickoffQueue.filter({ amazon_account_id: aid }, '-updated_at', 1000).catch(() => []),
+        base44.entities.AutoCampaignRepairQueue.filter({ amazon_account_id: aid }, '-updated_at', 1000).catch(() => []),
+        base44.entities.KeywordRepairQueue.filter({ amazon_account_id: aid }, '-updated_at', 1000).catch(() => []),
         base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid }, '-started_at', 100).catch(() => []),
-        base44.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 200).catch(() => []),
+        base44.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 1000).catch(() => []),
         base44.entities.Product.filter({ amazon_account_id: aid }, '-updated_at', 500).catch(() => []),
       ]);
       setData({ alerts, decisions, kickoff, repair, keyword, syncRuns, bidLogs, products });
@@ -133,7 +837,38 @@ export default function SalaDeComandoPremium() {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+
+    /*
+     * Central operacional V3:
+     * atualizar o estado sem exigir reload manual.
+     */
+    const timer = window.setInterval(
+      () => {
+        load();
+      },
+      60_000
+    );
+
+    const onFocus = () => {
+      load();
+    };
+
+    window.addEventListener(
+      'focus',
+      onFocus
+    );
+
+    return () => {
+      window.clearInterval(timer);
+
+      window.removeEventListener(
+        'focus',
+        onFocus
+      );
+    };
+  }, [load]);
 
   const summary = useMemo(() => {
     const allQueue = [...data.kickoff, ...data.repair, ...data.keyword];
@@ -142,23 +877,141 @@ export default function SalaDeComandoPremium() {
     const activeAlerts = data.alerts.filter(item => item.status === 'active');
     const urgentAlerts = activeAlerts.filter(item => ['critical', 'high'].includes(String(item.severity || '').toLowerCase()));
     const safetyBlockedQueue = allQueue.filter(item => isSafetyBlockedQueue(item, queueProduct(item)));
-    const retryingQueue = allQueue.filter(item => item.status === 'failed' && isRetryableQueueFailure(item));
+    /*
+     * V3 CURRENT-STATE QUEUE CLASSIFICATION
+     *
+     * A UI reflete o estado ATUAL da entidade.
+     * Um item que já foi recuperado de failed -> scheduled
+     * deixa imediatamente de contar como falha.
+     */
+    const retryingQueue = allQueue.filter(item =>
+      queueStatus(item) === 'failed' &&
+      isRetryableQueueFailure(item)
+    );
+
     const failedQueue = allQueue.filter(item =>
-      item.status === 'failed' && isWithinHours(queueTimestamp(item), 24) &&
-      !isSafetyBlockedQueue(item, queueProduct(item)) && !isRetryableQueueFailure(item)
+      queueStatus(item) === 'failed' &&
+      isWithinHours(queueTimestamp(item), 24) &&
+      !isSafetyBlockedQueue(
+        item,
+        queueProduct(item)
+      ) &&
+      !isRetryableQueueFailure(item)
     );
+
     const pendingQueue = allQueue.filter(item =>
-      (['scheduled', 'processing'].includes(item.status) && isWithinHours(queueTimestamp(item), 2)) || retryingQueue.includes(item)
+      (
+        ['scheduled', 'processing'].includes(
+          queueStatus(item)
+        ) &&
+        isWithinHours(
+          queueTimestamp(item),
+          2
+        )
+      ) ||
+      retryingQueue.includes(item)
     );
+
     const historicalQueue = allQueue.filter(item =>
-      (['scheduled', 'processing'].includes(item.status) && !isWithinHours(queueTimestamp(item), 2)) ||
-      (item.status === 'failed' && !isWithinHours(queueTimestamp(item), 24) && !retryingQueue.includes(item))
+      (
+        ['scheduled', 'processing'].includes(
+          queueStatus(item)
+        ) &&
+        !isWithinHours(
+          queueTimestamp(item),
+          2
+        )
+      ) ||
+      (
+        queueStatus(item) === 'failed' &&
+        !isWithinHours(
+          queueTimestamp(item),
+          24
+        ) &&
+        !retryingQueue.includes(item)
+      )
     );
-    const pendingDecisions = data.decisions.filter(item => item.status === 'pending');
-    const executedToday = data.decisions.filter(item => {
-      const date = String(item.executed_at || item.updated_date || item.created_at || '').slice(0, 10);
-      return item.status === 'executed' && date === new Date().toISOString().slice(0, 10);
-    });
+    const v3Decisions =
+      data.decisions.filter(isV3Decision);
+
+    /*
+     * Fila executável real do V3.
+     */
+    const pendingDecisions =
+      v3Decisions.filter(item =>
+        [
+          'pending',
+          'approved',
+          'queued',
+          'processing',
+          'executing',
+          'waiting_retry'
+        ].includes(decisionStatus(item))
+      )
+      .filter(isV3OperationallyActionable)
+      .sort(
+        (a, b) =>
+          v3OperationalPriority(a) -
+          v3OperationalPriority(b)
+      );
+
+    /*
+     * Execuções registradas nas OptimizationDecision.
+     */
+    const executedDecisionToday =
+      v3Decisions.filter(item =>
+        isExecutedDecision(item) &&
+        isToday(
+          item.confirmed_at ||
+          item.executed_at ||
+          item.updated_at ||
+          item.updated_date ||
+          item.created_at
+        )
+      );
+
+    /*
+     * AdsBidChangeLog é evidência operacional de que
+     * uma mutação de bid realmente aconteceu.
+     *
+     * Não deixar o card zerado apenas porque uma decisão
+     * antiga não recebeu confirmation_status.
+     */
+    const bidExecutionToday =
+      data.bidLogs.filter(item =>
+        isToday(
+          item.created_at ||
+          item.created_date ||
+          item.updated_at
+        )
+      );
+
+    const executedToday = [
+      ...executedDecisionToday,
+      ...bidExecutionToday
+    ];
+
+    const confirmedToday =
+      v3Decisions.filter(item =>
+        isConfirmedDecision(item) &&
+        isToday(
+          item.confirmed_at ||
+          item.updated_at ||
+          item.updated_date ||
+          item.executed_at
+        )
+      );
+
+    const protectedDecisions =
+      v3Decisions.filter(
+        isProtectedDecision
+      );
+
+    const awaitingConfirmation =
+      v3Decisions.filter(item =>
+        isExecutedDecision(item) &&
+        !isConfirmedDecision(item)
+      );
     const lastSync = [...data.syncRuns].sort((left, right) =>
       new Date(right.completed_at || right.started_at || right.created_date || 0) - new Date(left.completed_at || left.started_at || left.created_date || 0)
     )[0] || null;
@@ -169,35 +1022,406 @@ export default function SalaDeComandoPremium() {
       urgentAlerts.length ? `${urgentAlerts.length} alerta(s) crítico(s)` : null,
     ].filter(Boolean);
     const healthOk = healthReasons.length === 0;
-    return { allQueue, activeAlerts, urgentAlerts, failedQueue, pendingQueue, retryingQueue, safetyBlockedQueue, historicalQueue, pendingDecisions, executedToday, lastSync, healthOk, healthReasons, syncHealthy };
+    return {
+      allQueue,
+      activeAlerts,
+      urgentAlerts,
+      failedQueue,
+      pendingQueue,
+      retryingQueue,
+      safetyBlockedQueue,
+      historicalQueue,
+      pendingDecisions,
+      executedToday,
+      confirmedToday,
+      protectedDecisions,
+      awaitingConfirmation,
+      v3Decisions,
+      lastSync,
+      healthOk,
+      healthReasons,
+      syncHealthy
+    };
   }, [data]);
 
   const priorityItems = useMemo(() => {
-    const productByAsin = new Map(data.products.map(product => [String(product.asin || '').toUpperCase(), product]));
+    const productByAsin = new Map(
+      data.products.map(product => [
+        String(
+          product.asin || ''
+        ).toUpperCase(),
+        product,
+      ])
+    );
+
     const withProduct = (item) => {
-      const asin = String(item.asin || '').toUpperCase();
-      const product = productByAsin.get(asin);
-      const title = product?.product_name || product?.display_name || product?.title || '';
-      return [asin || item.campaign_name || item.alert_type || 'Motor de alertas', title].filter(Boolean).join(' · ');
+      const asin = String(
+        item?.asin ||
+        item?.advertised_asin ||
+        ''
+      ).toUpperCase();
+
+      const product =
+        productByAsin.get(asin);
+
+      const title =
+        product?.product_name ||
+        product?.display_name ||
+        product?.title ||
+        '';
+
+      return [
+        asin ||
+        item?.campaign_name ||
+        item?.sku ||
+        'V3',
+        title,
+      ]
+        .filter(Boolean)
+        .join(' · ');
     };
-    const alerts = summary.activeAlerts.slice(0, 30).map(item => ({
-      id: `alert-${item.id}`,
-      type: 'Alerta',
-      title: item.title || item.message || item.alert_type || 'Alerta operacional',
-      detail: item.recommendation || item.description || item.message || 'Revisar condição detectada pelo motor.',
-      tone: ['critical', 'high'].includes(String(item.severity || '').toLowerCase()) ? 'danger' : 'warning',
-      meta: withProduct(item),
-    }));
-    const decisions = summary.pendingDecisions.slice(0, 30).map(item => ({
-      id: `decision-${item.id}`,
-      type: 'Decisão',
-      title: item.title || item.action || item.decision_type || 'Decisão pendente',
-      detail: item.rationale || item.reason || 'Aguardando avaliação ou execução.',
-      tone: 'info',
-      meta: withProduct(item),
-    }));
-    return [...alerts, ...decisions];
-  }, [summary, data.products]);
+
+    /*
+     * =====================================================
+     * 1. DECISÕES FUTURAS DO V3
+     * =====================================================
+     *
+     * Alertas NÃO entram aqui.
+     *
+     * Somente decisões ainda existentes no fluxo:
+     * planned/proposed/pending/approved/queued/scheduled.
+     */
+    const plannedDecisions = data.decisions
+      .filter(
+        isV3FutureOperationalAction
+      )
+      .filter(
+        item =>
+          !isV3ProtectionOnly(item)
+      )
+      .map(item => {
+        const actionType =
+          v3PlannedActionType(item);
+
+        const current =
+          item.current_value ??
+          item.value_before;
+
+        const proposed =
+          item.proposed_value ??
+          item.value_after;
+
+        const valueDetail =
+          Number.isFinite(Number(current)) &&
+          Number.isFinite(Number(proposed))
+            ? ` ${Number(current).toFixed(2)} → ${Number(proposed).toFixed(2)}`
+            : '';
+
+        return {
+          id: `decision-${item.id}`,
+
+          raw: item,
+
+          type:
+            'Ação V3',
+
+          actionType,
+
+          title:
+            `${v3ActionLabel(item)}${valueDetail}`,
+
+          detail:
+            item.rationale ||
+            item.reason ||
+            item.decision_reason ||
+            'Ação definida pelo CANONICAL_PROFIT_ENGINE_V3 aguardando execução.',
+
+          tone:
+            (
+              actionType === 'REDUCE_BID' ||
+              actionType === 'PAUSE'
+            )
+              ? 'warning'
+              : (
+                  actionType === 'KICKOFF' ||
+                  actionType === 'CREATE_CAMPAIGN' ||
+                  actionType === 'REBUILD_CAMPAIGN' ||
+                  actionType === 'RECOVERY'
+                )
+                ? 'info'
+                : 'success',
+
+          meta:
+            withProduct(item),
+
+          priority:
+            v3OperationalPriority(item),
+
+          timestamp:
+            item.updated_at ||
+            item.updated_date ||
+            item.created_at ||
+            item.created_date ||
+            null,
+        };
+      });
+
+    /*
+     * =====================================================
+     * 2. KICK-OFF
+     * =====================================================
+     *
+     * Produto novo/elegível que entrou no pipeline.
+     */
+    const kickoffActions = data.kickoff
+      .filter(
+        item =>
+          ['scheduled', 'processing', 'ready', 'queued']
+            .includes(
+              queueStatus(item)
+            )
+      )
+      .filter(
+        item =>
+          !isV3ProtectionOnly(item)
+      )
+      .map(item => ({
+        id: `kickoff-${item.id}`,
+
+        raw: item,
+
+        type:
+          'Ação V3',
+
+        actionType:
+          'KICKOFF',
+
+        title:
+          'Kick-off de produto',
+
+        detail:
+          item.reason ||
+          item.last_error ||
+          item.description ||
+          'Produto elegível aguardando criação ou ativação de cobertura Ads.',
+
+        tone:
+          'info',
+
+        meta:
+          withProduct(item),
+
+        priority:
+          1,
+
+        timestamp:
+          queueTimestamp(item),
+      }));
+
+    /*
+     * =====================================================
+     * 3. REBUILD / REPAIR DE CAMPANHA
+     * =====================================================
+     */
+    const campaignRepairActions = data.repair
+      .filter(
+        item =>
+          ['scheduled', 'processing', 'ready', 'queued']
+            .includes(
+              queueStatus(item)
+            )
+      )
+      .filter(
+        item =>
+          !isV3ProtectionOnly(item)
+      )
+      .map(item => ({
+        id: `repair-${item.id}`,
+
+        raw: item,
+
+        type:
+          'Ação V3',
+
+        actionType:
+          'REBUILD_CAMPAIGN',
+
+        title:
+          'Reparar ou substituir campanha',
+
+        detail:
+          item.last_error ||
+          item.reason ||
+          item.description ||
+          'Estrutura de campanha identificada pelo V3 para reparo/rebuild.',
+
+        tone:
+          'info',
+
+        meta:
+          withProduct(item),
+
+        priority:
+          1,
+
+        timestamp:
+          queueTimestamp(item),
+      }));
+
+    /*
+     * =====================================================
+     * 4. KEYWORD/HARVEST REPAIR
+     * =====================================================
+     */
+    const keywordActions = data.keyword
+      .filter(
+        item =>
+          ['scheduled', 'processing', 'ready', 'queued']
+            .includes(
+              queueStatus(item)
+            )
+      )
+      .filter(
+        item =>
+          !isV3ProtectionOnly(item)
+      )
+      .map(item => ({
+        id: `keyword-${item.id}`,
+
+        raw: item,
+
+        type:
+          'Ação V3',
+
+        actionType:
+          'CREATE_CAMPAIGN',
+
+        title:
+          item.search_term
+            ? `Promover termo: ${item.search_term}`
+            : 'Criar/ajustar segmentação vencedora',
+
+        detail:
+          item.last_error ||
+          item.reason ||
+          item.description ||
+          'Termo/keyword identificado para correção, harvesting ou promoção MANUAL EXACT.',
+
+        tone:
+          'info',
+
+        meta:
+          withProduct(item),
+
+        priority:
+          1,
+
+        timestamp:
+          queueTimestamp(item),
+      }));
+
+    /*
+     * =====================================================
+     * PRIORIDADE FINAL
+     * =====================================================
+     *
+     * P0:
+     * perda econômica atual.
+     *
+     * P1:
+     * criação/recovery/kickoff/rebuild/harvest.
+     *
+     * P2:
+     * scale de winner/budget.
+     */
+    const combined = [
+      ...plannedDecisions,
+      ...kickoffActions,
+      ...campaignRepairActions,
+      ...keywordActions,
+    ];
+
+    /*
+     * Deduplicação operacional.
+     */
+    const unique = new Map();
+
+    for (const item of combined) {
+      const raw = item.raw || {};
+
+      const key = [
+        item.actionType,
+        raw.asin ||
+          raw.advertised_asin ||
+          '',
+        raw.campaign_id ||
+          raw.amazon_campaign_id ||
+          '',
+        raw.ad_group_id ||
+          '',
+        raw.keyword_id ||
+          '',
+        raw.search_term ||
+          '',
+      ].join('|');
+
+      const existing =
+        unique.get(key);
+
+      if (!existing) {
+        unique.set(
+          key,
+          item
+        );
+
+        continue;
+      }
+
+      const currentTime =
+        new Date(
+          item.timestamp || 0
+        ).getTime();
+
+      const existingTime =
+        new Date(
+          existing.timestamp || 0
+        ).getTime();
+
+      if (currentTime > existingTime) {
+        unique.set(
+          key,
+          item
+        );
+      }
+    }
+
+    return [...unique.values()]
+      .sort((a, b) => {
+        const priorityDiff =
+          Number(a.priority || 9) -
+          Number(b.priority || 9);
+
+        if (priorityDiff !== 0) {
+          return priorityDiff;
+        }
+
+        return (
+          new Date(
+            b.timestamp || 0
+          ).getTime()
+          -
+          new Date(
+            a.timestamp || 0
+          ).getTime()
+        );
+      });
+  }, [
+    data.decisions,
+    data.kickoff,
+    data.repair,
+    data.keyword,
+    data.products,
+  ]);
 
   const visiblePriorities = verTodasPrioridades ? priorityItems : priorityItems.slice(0, 5);
 
@@ -209,15 +1433,15 @@ export default function SalaDeComandoPremium() {
             <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between gap-3">
               <div>
                 <h2 className="text-base font-semibold text-white">Prioridades operacionais</h2>
-                <p className="text-xs text-slate-500 mt-1">Itens reais que exigem análise, aprovação ou correção.</p>
+                <p className="text-xs text-slate-500 mt-1">Ações definidas pela IA e pelo V3 que aguardam execução.</p>
               </div>
-              <Link to={LEGACY_LINKS.pendentes} className="text-xs text-blue-300 hover:text-blue-200">Abrir painel completo →</Link>
+              <Link to={LEGACY_LINKS.pendentes} className="text-xs text-blue-300 hover:text-blue-200">Ver decisões completas →</Link>
             </div>
             {priorityItems.length === 0 ? (
               <div className="p-10 text-center">
                 <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto" />
-                <p className="text-sm text-slate-300 mt-3">Nenhuma ação imediata encontrada.</p>
-                <p className="text-xs text-slate-500 mt-1">O histórico e as rotinas continuam disponíveis no painel completo.</p>
+                <p className="text-sm text-slate-300 mt-3">Nenhuma ação V3 aguardando execução.</p>
+                <p className="text-xs text-slate-500 mt-1">A próxima revisão diária ou semanal poderá gerar novas prioridades.</p>
               </div>
             ) : (
               <>
@@ -241,6 +1465,8 @@ export default function SalaDeComandoPremium() {
                     </div>
                   ))}
                 </div>
+                <ScheduledV3Actions />
+
                 {priorityItems.length > 5 && (
                   <div className="px-5 py-3 border-t border-white/[0.06] flex items-center justify-center bg-white/[0.02]">
                     <button
@@ -296,8 +1522,8 @@ export default function SalaDeComandoPremium() {
         title: 'Monitoramento do motor',
         description: 'Visão consolidada de alertas, alterações de bid, rotinas e histórico de execução.',
         stats: [
-          ['Alertas ativos', summary.activeAlerts.length],
-          ['Alertas urgentes', summary.urgentAlerts.length],
+          ['Ação V3s ativos', summary.activeAlerts.length],
+          ['Ação V3s urgentes', summary.urgentAlerts.length],
           ['Alterações de bid', data.bidLogs.length],
         ],
       },
@@ -362,7 +1588,7 @@ export default function SalaDeComandoPremium() {
               <ShieldCheck className="w-3.5 h-3.5" /> Central operacional
             </div>
             <h1 className="text-2xl md:text-3xl font-semibold text-white tracking-[-0.045em] mt-2">Central de Decisões</h1>
-            <p className="text-sm text-slate-400 mt-2">Ações determinísticas, risco operacional e aprovações do motor.</p>
+            <p className="text-sm text-slate-400 mt-2">Decisões do CANONICAL_PROFIT_ENGINE_V3, execução Amazon e proteções operacionais.</p>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
             <div className={`rounded-xl border px-3 py-2 ${summary.healthOk ? 'border-emerald-400/20 bg-emerald-500/10' : 'border-amber-400/20 bg-amber-500/10'}`}>
@@ -382,7 +1608,7 @@ export default function SalaDeComandoPremium() {
         <MetricCard label="Ação imediata" value={summary.urgentAlerts.length + summary.pendingDecisions.length} detail="prioridades e aprovações" tone={summary.urgentAlerts.length > 0 ? 'danger' : 'info'} icon={AlertTriangle} />
         <MetricCard label="Executadas hoje" value={summary.executedToday.length} detail="decisões concluídas" tone="success" icon={CheckCircle2} />
         <MetricCard label="Fila com erro" value={summary.failedQueue.length} detail={`${summary.pendingQueue.length} em processamento/recuperação${summary.safetyBlockedQueue.length ? ` · ${summary.safetyBlockedQueue.length} protegidos` : ''}${summary.historicalQueue.length ? ` · ${summary.historicalQueue.length} histórico(s)` : ''}`} tone={summary.failedQueue.length > 0 ? 'danger' : 'default'} icon={XCircle} />
-        <MetricCard label="Aprovação humana" value={summary.pendingDecisions.length} detail="aguardando decisão" tone={summary.pendingDecisions.length > 0 ? 'warning' : 'default'} icon={Clock3} />
+        <MetricCard label="Protegidas pelo V3" value={summary.protectedDecisions?.length || 0} detail="hard guards / superseded" tone={summary.pendingDecisions.length > 0 ? 'warning' : 'default'} icon={Clock3} />
         <MetricCard label="Saúde do sistema" value={summary.healthOk ? 'Estável' : 'Atenção'} detail={summary.healthOk ? 'sincronização e fila operacionais' : summary.healthReasons.join(' · ')} tone={summary.healthOk ? 'success' : 'warning'} icon={Activity} />
       </div>
 

@@ -18,6 +18,22 @@ function addMetric(map: Map<string, any>, id: string, row: any) {
   map.set(id, a);
 }
 
+
+
+/*
+ * V3_WINNER_PRECHECK_BEFORE_PAUSE
+ *
+ * Qualquer PAUSE gerado por este componente é apenas uma
+ * PROPOSTA interna.
+ *
+ * O V3 deve rejeitar a proposta ANTES da persistência quando
+ * existir venda/rentabilidade vencedora recente, salvo nova
+ * evidência econômica material de prejuízo.
+ *
+ * Zero gasto nunca é waste.
+ */
+const V3_WINNER_PRECHECK_BEFORE_PAUSE = true;
+
 Deno.serve(async (request) => {
   try {
     const base44 = createClientFromRequest(request);
@@ -71,11 +87,116 @@ Deno.serve(async (request) => {
         if (!id) continue;
         const created = new Date(String(campaign.created_at || campaign.created_date || '')).getTime();
         const ageDays = Number.isFinite(created) ? (Date.now() - created) / 86400000 : 999;
-        if (ageDays < minAgeDays) continue;
-        const a = agg.get(id);
-        if (!a || a.spend < minSpend) continue;
+        /*
+         * LEARNING MODE
+         *
+         * Campanhas novas podem operar temporariamente no prejuízo.
+         *
+         * 0–10 dias:
+         *   - nunca pausar por ACoS, falta de venda ou baixa performance;
+         *   - apenas hard guards externos podem interromper.
+         *
+         * A finalidade é comprar dados suficientes para descobrir
+         * CPC, CTR, CVR e termos vencedores.
+         */
+        const learningGraceDays = 10;
 
-        const long = agg30.get(id) || { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0, days: new Set<string>() };
+        if (ageDays < learningGraceDays) {
+          continue;
+        }
+
+        if (ageDays < minAgeDays) continue;
+        const a = agg.get(id) || {
+          spend: 0,
+          sales: 0,
+          orders: 0,
+          clicks: 0,
+          impressions: 0,
+          days: new Set<string>(),
+        };
+
+        const long = agg30.get(id) || {
+          spend: 0,
+          sales: 0,
+          orders: 0,
+          clicks: 0,
+          impressions: 0,
+          days: new Set<string>(),
+        };
+
+        /*
+         * ZERO DELIVERY CLEANUP
+         *
+         * Campanha >=7 dias que nunca gerou impressão, clique,
+         * pedido ou venda em 30 dias não precisa consumir estrutura
+         * indefinidamente.
+         *
+         * Só aplica a campanhas criadas pelo app/IA ou com nomenclatura
+         * operacional conhecida.
+         */
+        const campaignName = String(
+          campaign.name ||
+          campaign.campaign_name ||
+          ''
+        ).toUpperCase();
+
+        const managedCampaign =
+          campaign.created_by_app === true ||
+          campaign.created_by_ai === true ||
+          campaign.amazon_suggested === true ||
+          campaign.ai_generated === true ||
+          /^SP\s*\|/.test(campaignName) ||
+          /^AUTO\s*\|/.test(campaignName);
+
+        const zeroDelivery30d =
+          long.impressions <= 0 &&
+          long.clicks <= 0 &&
+          long.orders <= 0 &&
+          long.sales <= 0 &&
+          long.spend <= 0;
+
+        if (
+          managedCampaign &&
+          ageDays >= Math.max(14, minAgeDays) &&
+          zeroDelivery30d
+        ) {
+          candidates.push({
+            campaign,
+            id,
+            ageDays,
+
+            spend:0,
+            sales:0,
+            orders:0,
+            clicks:0,
+            impressions:0,
+            acos:999,
+
+            long,
+            longAcos:999,
+            longRoas:0,
+
+            priorReductions:2,
+
+            wasteDecision:{
+              action: 'HOLD',
+              reason:'DELEGATE_ZERO_DELIVERY_TO_LIFECYCLE',
+              confidence:0.99,
+              wasteScore:100,
+            },
+
+            wasteKeyword:null,
+            score:100000 + ageDays,
+          });
+
+          continue;
+        }
+
+        /*
+         * Para campanhas que tiveram entrega, permanece a lógica
+         * econômica original: só considerar waste depois do spend mínimo.
+         */
+        if (a.spend < minSpend) continue;
         const acos = a.sales > 0 ? a.spend / a.sales * 100 : 999;
         const longAcos = long.sales > 0 ? long.spend / long.sales * 100 : 999;
         const longRoas = long.spend > 0 ? long.sales / long.spend : 0;
@@ -103,7 +224,55 @@ Deno.serve(async (request) => {
         }
 
         const priorReductions = existingDecisions.filter((d: any) => String(d.campaign_id || d.entity_id || '') === id && /reduce.*bid|decrease.*bid/i.test(String(d.action || '')) && ['executed', 'completed', 'confirming'].includes(String(d.status || '').toLowerCase())).length;
-        const wasteDecision = decideSalesModeWaste({ spend: a.spend, sales: a.sales, orders: a.orders, clicks: a.clicks, ageDays, minAgeDays, minSpend, maxAcos, priorReductions });
+        /*
+         * LEARNING LOSS ENVELOPE
+         *
+         * Entre 10 e 21 dias ainda aceitamos prejuízo controlado.
+         *
+         * Sem pedido:
+         *   tolerar até max(R$15, 1.5 x minSpend).
+         *
+         * Com pedido:
+         *   tolerar ACoS temporário até 2x maximumAcos.
+         *
+         * Isso não remove hard cap da conta nem estoque/listing guards.
+         */
+        const learningLossSpend =
+          Math.max(15, minSpend * 1.5);
+
+        const learningAcosCeiling =
+          Math.max(maxAcos, maxAcos * 2);
+
+        if (ageDays < 21) {
+
+          if (
+            a.orders <= 0 &&
+            a.spend <= learningLossSpend
+          ) {
+            continue;
+          }
+
+          if (
+            a.orders > 0 &&
+            a.sales > 0 &&
+            (a.spend / a.sales * 100) <= learningAcosCeiling
+          ) {
+            continue;
+          }
+        }
+
+        const wasteDecision = decideSalesModeWaste({
+          spend: a.spend,
+          sales: a.sales,
+          orders: a.orders,
+          clicks: a.clicks,
+          ageDays,
+          minAgeDays,
+          minSpend,
+          maxAcos,
+          priorReductions
+        });
+
         if (wasteDecision.action === 'HOLD') continue;
 
         // Pausa exige confirmação também na janela longa. Uma campanha que
@@ -123,8 +292,33 @@ Deno.serve(async (request) => {
       for (const c of selected) {
         const isPause = c.wasteDecision.action === 'PAUSE';
         const key = `SALES_MODE_WASTE_${c.wasteDecision.action}|${aid}|${c.id}|${today}`;
-        if (existingDecisions.some((d: any) => d.idempotency_key === key && !['failed', 'rejected', 'cancelled', 'expired'].includes(String(d.status || '').toLowerCase()))) continue;
+
         const rationale = `${lookbackDays}d: gasto R$${c.spend.toFixed(2)}, ${c.clicks} cliques, ${c.orders} pedidos; 30d: ${c.long.orders} pedidos, ROAS ${Number.isFinite(c.longRoas) ? c.longRoas.toFixed(2) : '0'}; ${c.wasteDecision.reason}.`;
+        if (
+          existingDecisions.some(
+            (d: any) =>
+              d.idempotency_key === key &&
+              ![
+                'failed',
+                'rejected',
+                'cancelled',
+                'expired'
+              ].includes(
+                String(d.status || '').toLowerCase()
+              )
+          )
+        ) {
+          created.push({
+            campaign_id: c.id,
+            campaign_name:
+              c.campaign.name ||
+              c.campaign.campaign_name,
+            idempotency_key: key,
+            reused_existing: true,
+            rationale
+          });
+          continue;
+        }
         if (dryRun) {
           created.push({ campaign_id: c.id, campaign_name: c.campaign.name || c.campaign.campaign_name, rationale, dry_run: true });
           continue;
@@ -142,16 +336,31 @@ Deno.serve(async (request) => {
           canonical_action_type: isPause ? 'CAMPAIGN_STATE_CHANGE' : 'KEYWORD_BID_CHANGE',
           rationale,
           rule_key: `SALES_MODE_${c.wasteDecision.action}`,
-          reason_code: c.wasteDecision.reason.toUpperCase(),
+          reason_code:
+            isPause && String(c.wasteDecision.reason || '').toUpperCase().includes('ZERO_DELIVERY')
+              ? 'HARD_ZERO_DELIVERY_30D'
+              : c.wasteDecision.reason.toUpperCase(),
           value_before: isPause ? 'ENABLED' : n(c.wasteKeyword.current_bid || c.wasteKeyword.bid),
           value_after: isPause ? 'PAUSED' : Number((n(c.wasteKeyword.current_bid || c.wasteKeyword.bid) * (c.wasteDecision.action === 'REDUCE_BID_10' ? 0.9 : 0.95)).toFixed(2)),
           confidence: c.wasteDecision.confidence,
-          risk: 'medium', requires_approval: false,
+
+          rollback_plan:
+            isPause
+              ? 'RESTORE_CAMPAIGN_STATE:enabled'
+              : `RESTORE_PREVIOUS_VALUE:${n(c.wasteKeyword.current_bid || c.wasteKeyword.bid)}`,
+
+          risk: 'medium',
+          requires_approval: false,
           approval_status: 'auto_approved_deterministic', status: 'approved', queue_status: 'pending',
           priority_class: 'P1', execution_mode: 'EXPEDITED_QUEUE',
           confirmation_required: true, confirmation_status: 'pending',
           idempotency_key: key, conflict_group: `${aid}|campaign|${c.id}`,
           source_function: 'runSalesModeWasteRotation',
+
+          policy_version: 'PROFIT_ENGINE_V3',
+          decision_owner: 'CANONICAL_PROFIT_ENGINE_V3',
+          canonical_engine: 'CANONICAL_PROFIT_ENGINE_V3',
+
           model_version: 'sales-mode-v1.2-long-window-winner-protection',
           target_acos: targetAcos,
           current_acos: c.acos >= 999 ? null : c.acos,
@@ -163,6 +372,22 @@ Deno.serve(async (request) => {
             target_acos: targetAcos, growth_acos_ceiling: growthAcosCeiling, maximum_acos: maxAcos,
             prior_reductions: c.priorReductions, waste_score: c.wasteDecision.wasteScore,
             winner_protected: false,
+
+            admission: {
+              verified: true,
+              observed_at:
+                new Date().toISOString(),
+              verified_by:
+                'CANONICAL_PROFIT_ENGINE_V3',
+              source:
+                'runSalesModeWasteRotation'
+            },
+
+            canonical_engine:
+              'CANONICAL_PROFIT_ENGINE_V3',
+
+            policy_version:
+              'PROFIT_ENGINE_V3'
           }),
           created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
         });

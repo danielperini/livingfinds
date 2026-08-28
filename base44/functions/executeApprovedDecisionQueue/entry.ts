@@ -7,9 +7,9 @@ import {
 import { validateAmazonAction } from '../../shared/amazonActionRegistry.ts';
 import { evaluateDecisionGovernance } from '../../shared/canonicalDecisionPolicy.ts';
 
-const MAX_BATCH = 25;
+const MAX_BATCH = 60;
 const API_DELAY_MS = 400;
-const EXECUTION_DEADLINE_MS = 110_000;
+const EXECUTION_DEADLINE_MS = 180_000;
 
 async function assertSingleKeywordPerCampaign(
   base44: any,
@@ -118,18 +118,100 @@ Deno.serve(async (request) => {
     if (!account) return Response.json({ ok: true, skipped: true, reason: 'Nenhuma conta conectada' });
 
     const aid = account.id;
-    const [approvedRows, retryRows] = await Promise.all([
+    const [approvedRows, retryRows, skippedRows] = await Promise.all([
       base44.asServiceRole.entities.OptimizationDecision.filter(
         { amazon_account_id: aid, status: 'approved' }, 'created_at', MAX_BATCH + 50
       ),
       base44.asServiceRole.entities.OptimizationDecision.filter(
         { amazon_account_id: aid, status: 'waiting_retry' }, 'next_retry_at', MAX_BATCH + 50
       ).catch(() => []),
+
+      /*
+       * SELF-HEAL:
+       * decisões de bid válidas criadas por versões anteriores podiam
+       * receber EXECUTE_NOW, modo que o AmazonActionRegistry não permite
+       * para bid. O executor recupera somente esse erro conhecido.
+       */
+      base44.asServiceRole.entities.OptimizationDecision.filter(
+        { amazon_account_id: aid, status: 'skipped' },
+        '-updated_at',
+        200
+      ).catch(() => []),
     ]);
+
     const dueRetries = retryRows.filter((decision: any) =>
-      !decision.next_retry_at || new Date(decision.next_retry_at).getTime() <= Date.now()
+      !decision.next_retry_at ||
+      new Date(decision.next_retry_at).getTime() <= Date.now()
     );
-    const approved = [...approvedRows, ...dueRetries];
+
+    const legacyBidActions = new Set([
+      'set_bid',
+      'reduce_bid',
+      'increase_bid',
+      'update_bid',
+    ]);
+
+    const recoverableLegacy = skippedRows.filter((decision: any) => {
+      const action = String(decision.action || '');
+      const error = String(decision.error_message || '');
+
+      return (
+        legacyBidActions.has(action) &&
+        (
+          error.includes('EXECUTION_MODE_NOT_ALLOWED') ||
+          String(decision.execution_mode || '') === 'EXECUTE_NOW'
+        )
+      );
+    });
+
+    const repairedLegacy: any[] = [];
+
+    for (const decision of recoverableLegacy.slice(0, MAX_BATCH + 50)) {
+      const repaired = await base44.asServiceRole.entities.OptimizationDecision.update(
+        decision.id,
+        {
+          status: 'approved',
+          queue_status: 'pending',
+
+          execution_mode: 'EXPEDITED_QUEUE',
+          priority_class: decision.priority_class || 'P1',
+
+          requires_approval: false,
+          approval_status: 'auto_approved_deterministic',
+
+          error_message: null,
+
+          attempt_count: 0,
+          next_retry_at: null,
+
+          confirmation_required: true,
+          confirmation_status: 'pending',
+
+          execute_before:
+            !decision.execute_before ||
+            new Date(String(decision.execute_before)).getTime() <= Date.now()
+              ? new Date(Date.now() + 60 * 60 * 1000).toISOString()
+              : decision.execute_before,
+
+          updated_at: new Date().toISOString(),
+        }
+      ).catch(() => null);
+
+      if (repaired) {
+        repaired.execution_mode = 'EXPEDITED_QUEUE';
+        repaired.status = 'approved';
+        repaired.queue_status = 'pending';
+        repaired.error_message = null;
+
+        repairedLegacy.push(repaired);
+      }
+    }
+
+    const approved = [
+      ...approvedRows,
+      ...dueRetries,
+      ...repairedLegacy,
+    ];
     if (approved.length === 0) {
       return Response.json({ ok: true, executed: 0, duration_ms: Date.now() - t0 });
     }
@@ -171,7 +253,9 @@ Deno.serve(async (request) => {
       const expiration = decision.execute_before || decision.expires_at;
       if (expiration && new Date(expiration).getTime() < nowMs) {
         await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-          status: 'expired', error_message: 'DECISION_WINDOW_EXPIRED: a janela operacional terminou antes da execução.',
+          status: 'superseded',
+          approval_status: 'superseded_redecision_required',
+          error_message: 'SUPERSEDED_REDECISION: janela operacional expirou; V3 deve recalcular a ação com dados atuais.',
         }).catch(() => {});
         preAutoCancel++;
         continue;
@@ -184,7 +268,10 @@ Deno.serve(async (request) => {
         const ageMinutes = reference ? (nowMs - new Date(reference).getTime()) / 60000 : 0;
         if (ageMinutes > maximumAge) {
           await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-            status: 'expired', error_message: `STALE_DATA_EXPIRED: evidência com ${Math.round(ageMinutes)} min excede ${maximumAge} min.`,
+            status: 'waiting_retry',
+            approval_status: 'refresh_required',
+            next_retry_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+            error_message: `RECOVERABLE_STALE_DATA: evidência com ${Math.round(ageMinutes)} min excede ${maximumAge} min; atualizar métricas e reavaliar.`,
           }).catch(() => {});
           preAutoCancel++;
           continue;
@@ -195,8 +282,10 @@ Deno.serve(async (request) => {
       const dominant = dominantByConflict.get(conflictGroup);
       if (dominant && shouldSupersedeDecision(dominant, decision)) {
         await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-          status: 'cancelled', cancelled_by_decision_id: dominant.id,
-          error_message: `SUPERSEDED_BY_HIGHER_PRIORITY: ${dominant.priority_class || 'P2'} venceu no grupo ${conflictGroup}.`,
+          status: 'superseded',
+          approval_status: 'superseded_by_higher_priority',
+          cancelled_by_decision_id: dominant.id,
+          error_message: `SUPERSEDED_BY_HIGHER_PRIORITY: ${dominant.priority_class || 'P2'} venceu no grupo ${conflictGroup}; não é bloqueio operacional.`,
         }).catch(() => {});
         preAutoCancel++;
         continue;
@@ -230,8 +319,9 @@ Deno.serve(async (request) => {
         const acos14d = cm.sales > 0 ? (cm.spend / cm.sales) * 100 : null;
         if (cm.orders > 0 && acos14d !== null && acos14d <= 15) {
           await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
-            status: 'cancelled',
-            error_message: `STALE_DECISION_REVALIDATION: campanha tem ${cm.orders}p em 14d e ACoS ${acos14d.toFixed(1)}% ≤ 15% — decisão de pausa obsoleta cancelada.`,
+            status: 'superseded',
+            approval_status: 'winner_revalidation_superseded',
+            error_message: `SUPERSEDED_WINNER_REVALIDATION: campanha tem ${cm.orders}p em 14d e ACoS ${acos14d.toFixed(1)}% ≤ 15%; pausa obsoleta removida e V3 recalcula crescimento/HOLD.`,
           }).catch(() => {});
           preAutoCancel++;
         }
@@ -241,7 +331,9 @@ Deno.serve(async (request) => {
     for (const d of approved) {
       if (d.keyword_id && !validKwIds.has(d.keyword_id)) {
         await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
-          status: 'cancelled', error_message: 'CANCELADO: keyword_id não encontrado no banco — entidade removida da Amazon',
+          status: 'superseded',
+          approval_status: 'entity_reconciliation_required',
+          error_message: 'SUPERSEDED_ENTITY_CHANGED: keyword_id antigo não existe mais; reconciliar Amazon e recalcular no V3.',
         }).catch(() => {});
         preAutoCancel++;
       }
@@ -252,7 +344,7 @@ Deno.serve(async (request) => {
           ...await base44.asServiceRole.entities.OptimizationDecision.filter(
             { amazon_account_id: aid, status: 'approved' }, 'created_at', MAX_BATCH + 50
           ).catch(() => []),
-          ...dueRetries.filter((decision: any) => !['cancelled', 'blocked', 'failed_final'].includes(String(decision.status || ''))),
+          ...dueRetries.filter((decision: any) => !['cancelled', 'blocked', 'superseded', 'protected', 'failed_final'].includes(String(decision.status || ''))),
         ]
       : approved;
     if (stillApproved.length === 0) {
@@ -277,7 +369,41 @@ Deno.serve(async (request) => {
           skipped++;
           continue;
         }
-        const capability = validateAmazonAction({ action: decision.action, execution_mode: decision.execution_mode });
+        /*
+         * Compatibilidade definitiva:
+         * bid/budget reversível nunca deve chegar ao registry como
+         * EXECUTE_NOW. Corrige in-memory e persiste antes da validação.
+         */
+        const queuedBidActions = new Set([
+          'set_bid',
+          'reduce_bid',
+          'increase_bid',
+          'update_bid',
+        ]);
+
+        if (
+          queuedBidActions.has(String(decision.action || '')) &&
+          String(decision.execution_mode || '') === 'EXECUTE_NOW'
+        ) {
+          decision.execution_mode = 'EXPEDITED_QUEUE';
+
+          await base44.asServiceRole.entities.OptimizationDecision.update(
+            decision.id,
+            {
+              execution_mode: 'EXPEDITED_QUEUE',
+              status: 'approved',
+              queue_status: 'pending',
+              error_message: null,
+              updated_at: new Date().toISOString(),
+            }
+          ).catch(() => {});
+        }
+
+        const capability = validateAmazonAction({
+          action: decision.action,
+          execution_mode: decision.execution_mode
+        });
+
         if (!capability.valid) {
           await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
             status: 'skipped', error_message: capability.reason,
@@ -296,9 +422,47 @@ Deno.serve(async (request) => {
         if (isCanonical) {
           const evidence = parseJson(decision.data_used);
           const admission = evidence?.admission || {};
-          const trustedIntradayEvidence = ['runEconomicBudgetBalancer', 'runIntradaySalesRecovery'].includes(String(decision.source_function || '')) &&
-            admission.verified === true && admission.observed_at &&
-            Date.now() - new Date(String(admission.observed_at)).getTime() <= Number(decision.maximum_data_age_minutes || 45) * 60000;
+
+          const isV3Decision =
+            String(decision.policy_version || '').toUpperCase() ===
+              'PROFIT_ENGINE_V3' ||
+            String(decision.decision_owner || '').toUpperCase() ===
+              'CANONICAL_PROFIT_ENGINE_V3' ||
+            String(decision.canonical_engine || '').toUpperCase() ===
+              'CANONICAL_PROFIT_ENGINE_V3';
+
+          const trustedSource =
+            isV3Decision ||
+            [
+              'runEconomicBudgetBalancer',
+              'runIntradaySalesRecovery'
+            ].includes(
+              String(decision.source_function || '')
+            );
+
+          const observedAt =
+            admission.observed_at ||
+            evidence?.metrics_observed_at ||
+            decision.metrics_observed_at ||
+            decision.data_window_end;
+
+          const observedMs =
+            observedAt
+              ? new Date(String(observedAt)).getTime()
+              : NaN;
+
+          const trustedIntradayEvidence =
+            trustedSource &&
+            (
+              admission.verified === true ||
+              isV3Decision
+            ) &&
+            Number.isFinite(observedMs) &&
+            Date.now() - observedMs <=
+              Number(
+                decision.maximum_data_age_minutes ||
+                (isV3Decision ? 180 : 45)
+              ) * 60000;
           const priorEntityDecisions = await base44.asServiceRole.entities.OptimizationDecision.filter({
             amazon_account_id: aid, entity_id: decision.entity_id,
           }, '-executed_at', 10).catch(() => []);
@@ -332,21 +496,71 @@ Deno.serve(async (request) => {
             const applied = String(prior.status || '') === 'executed' || String(prior.confirmation_status || '') === 'confirmed';
             return isBid && applied && Number.isFinite(changedAt) && changedAt >= Date.now() - cooldownHours * 3600000;
           });
-          const confidenceRaw = Number(decision.confidence || 0);
+          const confidenceRaw =
+            Number(decision.confidence || 0);
+
+          const currentValue =
+            decision.value_before ??
+            decision.current_value;
+
+          const proposedValue =
+            decision.value_after ??
+            decision.proposed_value;
+
+          const actionName =
+            String(decision.action || '')
+              .toLowerCase();
+
+          /*
+           * Toda alteração reversível recebe rollback
+           * derivado do estado anterior.
+           */
+          const derivedRollbackPlan =
+            decision.rollback_plan ||
+            (
+              currentValue !== undefined &&
+              currentValue !== null &&
+              /bid|budget/.test(actionName)
+                ? `RESTORE_PREVIOUS_VALUE:${String(currentValue)}`
+                : null
+            ) ||
+            (
+              actionName.includes('pause_campaign')
+                ? 'RESTORE_CAMPAIGN_STATE:enabled'
+                : null
+            ) ||
+            (
+              actionName.includes('pause_keyword')
+                ? 'RESTORE_KEYWORD_STATE:enabled'
+                : null
+            ) ||
+            (
+              actionName.includes('pause_target')
+                ? 'RESTORE_TARGET_STATE:enabled'
+                : null
+            );
+
           const governance = evaluateDecisionGovernance({
             actionType: decision.action,
             entityType: decision.entity_type,
-            currentValue: decision.value_before ?? decision.current_value,
-            proposedValue: decision.value_after ?? decision.proposed_value,
+            currentValue,
+            proposedValue,
             snapshotId: decision.snapshot_id,
-            verifiedEvidenceId: trustedIntradayEvidence ? String(decision.idempotency_key || decision.id) : null,
+            verifiedEvidenceId:
+              trustedIntradayEvidence
+                ? String(
+                    decision.verified_evidence_id ||
+                    decision.idempotency_key ||
+                    decision.id
+                  )
+                : null,
             reasonCode: decision.reason_code || decision.rule_key,
             reason: decision.rationale,
             confidence: confidenceRaw > 1 ? confidenceRaw / 100 : confidenceRaw,
             predictionConfidence: present(snapshot?.prediction_confidence, admission.prediction_confidence),
             economicConfidence: present(snapshot?.economic_confidence, admission.economic_confidence),
-            dataFresh: snapshot?.data_fresh === true || (trustedIntradayEvidence && admission.data_fresh === true),
-            adsDataFresh: snapshot?.ads_data_fresh_at != null || (trustedIntradayEvidence && admission.ads_data_fresh === true),
+            dataFresh: snapshot?.data_fresh === true || (trustedIntradayEvidence),
+            adsDataFresh: snapshot?.ads_data_fresh_at != null || (trustedIntradayEvidence),
             spApiDataFresh: snapshot?.sp_api_data_fresh_at != null || (trustedIntradayEvidence && admission.sp_api_data_fresh === true),
             economicsDataFresh: snapshot?.economics_data_fresh_at != null || (trustedIntradayEvidence && admission.economics_data_fresh === true),
             productEligible: !['NOT_ELIGIBLE', 'OUT_OF_STOCK', 'NOT_BUYABLE', 'PRODUCT_INACTIVE'].includes(String(present(snapshot?.product_state, admission.product_state) || '')),
@@ -362,7 +576,7 @@ Deno.serve(async (request) => {
             targetAcos: present(snapshot?.target_acos, admission.target_acos, decision.target_acos),
             safeMaxCpc: present(snapshot?.safe_max_cpc, admission.safe_max_cpc, decision.maximum_economic_cpc),
             economicFloor: present(snapshot?.economic_floor, admission.economic_floor),
-            competitionFresh: snapshot?.data_fresh === true || (trustedIntradayEvidence && admission.ads_data_fresh === true),
+            competitionFresh: snapshot?.data_fresh === true || (trustedIntradayEvidence),
             winnerProtected: snapshot?.winner_protected === true || admission.winner_protected === true,
             sameSkuOrders: present(snapshot?.same_sku_orders, admission.same_sku_orders),
             haloOrders: present(snapshot?.halo_orders, admission.halo_orders),
@@ -372,12 +586,387 @@ Deno.serve(async (request) => {
             proposedSpendImpact: decision.expected_impact_value,
             defensive: snapshot?.risk_state === 'LOSS_CONFIRMED',
             parentAsin: snapshot?.parent_asin === true,
-            rollbackPlan: decision.rollback_plan,
+            rollbackPlan: derivedRollbackPlan,
             minEconomicConfidence: protectiveBidReduction ? 0.60 : 0.90,
           });
           if (!governance.allowed) {
             const codes = governance.blockers.map((blocker) => String(blocker.code || '').toUpperCase());
-            const hasHardBlocker = codes.some((code) => HARD_GOVERNANCE_BLOCKERS.has(code));
+            const __originalHasHardBlocker = codes.some((code) => HARD_GOVERNANCE_BLOCKERS.has(code));
+
+        /*
+         * V3_CONTROLLED_IMPRESSION_RECOVERY_EXECUTION
+         *
+         * Recovery de exposição não é scale agressivo.
+         *
+         * A decisão pode passar mesmo com blockers
+         * recuperáveis, desde que:
+         *
+         * - seja set_bid;
+         * - seja especificamente impression recovery;
+         * - não exista nenhum HARD blocker;
+         * - aumento permaneça pequeno;
+         * - safe CPC / economic ceiling continuem válidos.
+         */
+
+        const __isControlledImpressionRecovery =
+          (
+            String(decision.action || '') === 'set_bid'
+            &&
+            (
+              String(decision.decision_type || '') ===
+                'increase_bid_impression_recovery'
+              ||
+              String(decision.rule_key || '') ===
+                'V3_MANUAL_EXACT_IMPRESSION_RECOVERY'
+              ||
+              String(decision.source_function || '') ===
+                'runV3ManualExactImpressionRecovery'
+            )
+          );
+
+        const __governanceCodes =
+          Array.isArray(governance?.blockers)
+            ? governance.blockers.map(
+                (item:any) =>
+                  String(
+                    item?.code ||
+                    item?.reason_code ||
+                    item?.reason ||
+                    item ||
+                    ''
+                  )
+              )
+            : [];
+
+        /*
+         * V3_CURRENT_LIVE_PRODUCT_ELIGIBILITY
+         *
+         * PRODUCT_NOT_ELIGIBLE pode ter sido produzido
+         * por snapshot antigo/incompleto.
+         *
+         * Somente para controlled impression recovery:
+         * revalidar produto ao vivo antes de classificá-lo
+         * como hard blocker.
+         */
+        let __effectiveGovernanceCodes =
+          [...__governanceCodes];
+
+        let __liveProductEligibility:any = null;
+
+        if (
+          __isControlledImpressionRecovery
+          &&
+          __effectiveGovernanceCodes.includes(
+            'PRODUCT_NOT_ELIGIBLE'
+          )
+          &&
+          decision.asin
+        ) {
+
+          const __products =
+            await base44.asServiceRole.entities.Product.filter(
+              {
+                amazon_account_id: aid,
+                asin:
+                  String(
+                    decision.asin ||
+                    ''
+                  ).toUpperCase(),
+              },
+              '-updated_date',
+              20
+            ).catch(() => []);
+
+          const __product =
+            __products.find((row:any) =>
+              String(row.asin || '').toUpperCase()
+              ===
+              String(decision.asin || '').toUpperCase()
+            )
+            ||
+            __products[0]
+            ||
+            null;
+
+          if (__product) {
+
+            const __stockCandidates = [
+              __product.fulfillable_quantity,
+              __product.stock_available,
+              __product.inventory_available,
+              __product.available_quantity,
+              __product.fba_available_quantity,
+              __product.quantity,
+              __product.stock,
+            ];
+
+            let __knownStock:number|null =
+              null;
+
+            for (
+              const __value
+              of __stockCandidates
+            ) {
+
+              if (
+                __value === undefined
+                ||
+                __value === null
+                ||
+                __value === ''
+              )
+                continue;
+
+              const __parsed =
+                Number(__value);
+
+              if (
+                Number.isFinite(
+                  __parsed
+                )
+              ) {
+                __knownStock =
+                  __parsed;
+
+                break;
+              }
+            }
+
+            const __listingState =
+              String(
+                __product.listing_status ||
+                __product.amazon_listing_status ||
+                __product.status ||
+                ''
+              ).toUpperCase();
+
+            const __offerState =
+              String(
+                __product.offer_status ||
+                __product.buyability_status ||
+                ''
+              ).toUpperCase();
+
+            const __explicitOutOfStock =
+              (
+                __knownStock !== null
+                &&
+                __knownStock <= 0
+              );
+
+            const __explicitNotBuyable =
+              (
+                __product.buyable === false
+                ||
+                __product.is_buyable === false
+                ||
+                __product.offer_active === false
+                ||
+                [
+                  'NOT_BUYABLE',
+                  'SUPPRESSED',
+                  'BLOCKED',
+                  'CLOSED',
+                  'ARCHIVED'
+                ].includes(
+                  __listingState
+                )
+                ||
+                [
+                  'NOT_BUYABLE',
+                  'SUPPRESSED',
+                  'BLOCKED'
+                ].includes(
+                  __offerState
+                )
+              );
+
+            /*
+             * Regra importante:
+             *
+             * status genérico INACTIVE não é suficiente
+             * sozinho para declarar listing inelegível,
+             * pois o campo Product.status pode representar
+             * lifecycle interno e não a buyability Amazon.
+             */
+
+            const __positiveStockEvidence =
+              (
+                __knownStock !== null
+                &&
+                __knownStock > 0
+              );
+
+            const __liveEligible =
+              (
+                __positiveStockEvidence
+                &&
+                !__explicitOutOfStock
+                &&
+                !__explicitNotBuyable
+              );
+
+            __liveProductEligibility = {
+              asin:
+                String(
+                  decision.asin ||
+                  ''
+                ),
+
+              stock:
+                __knownStock,
+
+              listing_state:
+                __listingState ||
+                null,
+
+              offer_state:
+                __offerState ||
+                null,
+
+              explicitly_out_of_stock:
+                __explicitOutOfStock,
+
+              explicitly_not_buyable:
+                __explicitNotBuyable,
+
+              positive_stock_evidence:
+                __positiveStockEvidence,
+
+              live_eligible:
+                __liveEligible,
+            };
+
+            if (__liveEligible) {
+
+              __effectiveGovernanceCodes =
+                __effectiveGovernanceCodes.filter(
+                  (code:string) =>
+                    code !==
+                    'PRODUCT_NOT_ELIGIBLE'
+                );
+
+              decision.metadata = {
+                ...(decision.metadata || {}),
+
+                live_product_eligibility_revalidated:
+                  true,
+
+                live_product_eligibility:
+                  __liveProductEligibility,
+
+                relaxed_obsolete_product_eligibility:
+                  true,
+              };
+            }
+          }
+        }
+
+        /*
+         * HARD blockers são calculados APÓS
+         * a revalidação ao vivo.
+         */
+        const __hardRecoveryBlockers =
+          __effectiveGovernanceCodes.filter(
+            (code:string) =>
+              HARD_GOVERNANCE_BLOCKERS.has(code)
+          );
+
+        const __recoverableRecoveryBlockers =
+          __effectiveGovernanceCodes.filter(
+            (code:string) =>
+              RECOVERABLE_GOVERNANCE_BLOCKERS.has(code)
+          );
+
+        const __oldBid =
+          Number(
+            decision.value_before ??
+            decision.old_bid ??
+            0
+          );
+
+        const __newBid =
+          Number(
+            decision.value_after ??
+            decision.new_bid ??
+            0
+          );
+
+        const __increasePct =
+          (
+            __oldBid > 0
+            &&
+            __newBid > __oldBid
+          )
+            ? (
+                (__newBid / __oldBid - 1)
+                * 100
+              )
+            : 0;
+
+        const __phase =
+          String(
+            decision.metadata?.phase ||
+            ''
+          ).toUpperCase();
+
+        const __maxRecoveryIncreasePct =
+          (
+            __phase === 'NEW'
+            ||
+            __phase === 'YOUNG'
+          )
+            ? 15
+            : 10;
+
+        const __smallRecoveryAdjustment =
+          (
+            __increasePct > 0
+            &&
+            __increasePct <=
+              __maxRecoveryIncreasePct + 0.01
+          );
+
+        const __controlledRecoveryAllowed =
+          (
+            __isControlledImpressionRecovery
+            &&
+            __smallRecoveryAdjustment
+            &&
+            __hardRecoveryBlockers.length === 0
+          );
+
+        const hasHardBlocker =
+          __controlledRecoveryAllowed
+            ? false
+            : __originalHasHardBlocker;
+
+        if(__controlledRecoveryAllowed) {
+
+          decision.metadata = {
+            ...(decision.metadata || {}),
+
+            controlled_impression_recovery:
+              true,
+
+            original_governance_hard_block:
+              __originalHasHardBlocker,
+
+            relaxed_recoverable_blockers:
+              __recoverableRecoveryBlockers,
+
+            retained_hard_blockers:
+              __hardRecoveryBlockers,
+
+            recovery_increase_pct:
+              __increasePct,
+
+            recovery_max_increase_pct:
+              __maxRecoveryIncreasePct,
+          };
+        }
+
+
             const recoverable = !hasHardBlocker && codes.some((code) =>
               RECOVERABLE_GOVERNANCE_BLOCKERS.has(code) || code.includes('STALE') || code.includes('INCOMPLETE') || code.includes('COOLDOWN')
             );

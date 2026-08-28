@@ -58,6 +58,7 @@
       "enum": [
         "resolved_report",
         "resolved_product_ad",
+        "single_advertised_sku",
         "resolved_campaign",
         "resolved_name",
         "ambiguous",

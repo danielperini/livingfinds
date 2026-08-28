@@ -43,17 +43,83 @@ Deno.serve(async (request) => {
       || (currentHour % 3 === 0 && currentMinute < 15);
     // Dayparting is evaluated hourly after the first intraday data window.
     const daypartWindow = dailyClose || body.bootstrap === true || body.force_dayparting === true || currentMinute < 15;
-    // Meta de portfólio: ampliar em 40% a quantidade de campanhas que realmente
-    // entregam (impressões/cliques/gasto), nunca a mera contagem de campanhas criadas.
-    // É uma meta subordinada aos guardrails econômicos, estoque e confirmação Amazon.
+    /*
+     * SINAL OPERACIONAL INTERNO.
+     *
+     * SERVING campaign growth NÃO é uma meta empresarial.
+     *
+     * É somente um instrumento que o motor pode utilizar quando
+     * houver expectativa positiva de lucro e capacidade econômica.
+     *
+     * META PRIMÁRIA ÚNICA:
+     * maximizar lucro esperado sujeito a prejuízo máximo controlado.
+     */
     const servingCampaignGrowthTargetPct = Math.min(Math.max(Number(body.serving_campaign_growth_target_pct ?? 40), 0), 100);
+    const primaryObjective =
+      'MAXIMIZE_EXPECTED_PROFIT_BOUNDED_LOSS';
+
+    const objectiveContract = {
+      primary_goal: 'expected_profit',
+      maximize: 'expected_profit',
+
+      subject_to: [
+        'bounded_learning_loss',
+        'safe_max_cpc',
+        'break_even_economics',
+        'inventory',
+        'listing_and_buyability',
+        'account_budget_envelope',
+        'amazon_confirmation',
+      ],
+
+      secondary_metrics: [
+        'acos',
+        'roas',
+        'tacos',
+        'cpc',
+        'impressions',
+        'serving_campaigns',
+        'campaign_count',
+        'sales_volume',
+      ],
+
+      secondary_metrics_role:
+        'signals_and_guardrails_only',
+    };
+
     const common = {
       amazon_account_id: accountId,
       _service_role: true,
       _canonical_orchestrator: 'runUnifiedDecisionEngine',
       decision_engine_correlation_id: correlationId,
       dry_run: dryRun,
+
+      primary_objective:
+        primaryObjective,
+
+      primary_goal:
+        'expected_profit',
+
+      objective:
+        'profitability',
+
+      objective_mode:
+        'maximize_expected_profit_bounded_loss',
+
+      objective_contract:
+        objectiveContract,
     };
+
+    /*
+     * Persistir/reafirmar a meta única antes de cada ciclo.
+     * A função é idempotente.
+     */
+    const objectiveEnforcement =
+      await invoke(
+        base44,
+        'enforceProfitPrimaryObjective',
+        common
+      );
 
     const reportRequest = dailyClose && !body.skip_sync
       ? await invoke(base44, 'ensureDailyReportsCurrent', common)
@@ -204,6 +270,7 @@ Deno.serve(async (request) => {
     const scopeAfter = await invoke(base44, 'reconcileManualBidCycleScope', { ...common, skip_sync: true });
 
     const stages = {
+      objectiveEnforcement,
       reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit,
       manualStructureAudit, economicCurveAdsGuard, deterministic, decisionV3Shadow,
       salesRecovery, asinDiversification, campaignLifecycle, economicBalancer,
@@ -218,7 +285,36 @@ Deno.serve(async (request) => {
       snapshot_run_id: snapshotRunId,
       daily_close: dailyClose,
       dry_run: dryRun,
-      serving_campaign_growth_goal: {
+
+      primary_goal: {
+        name:
+          'MAXIMIZE_EXPECTED_PROFIT_BOUNDED_LOSS',
+
+        label:
+          'Maximizar lucro esperado',
+
+        objective:
+          'expected_profit',
+
+        constraint:
+          'prejuízo máximo controlado',
+
+        contract:
+          objectiveContract,
+
+        /*
+         * A meta não é considerada cumprida uma única vez:
+         * ela é uma função objetivo contínua.
+         */
+        continuous:true,
+
+        execution_owner:
+          'executeApprovedDecisionQueue',
+
+        amazon_confirmation_required:true,
+      },
+
+      serving_campaign_growth_signal: {
         target_growth_pct: servingCampaignGrowthTargetPct,
         metric: 'SERVING_CAMPAIGNS',
         baseline_serving_campaigns: servingGrowthReport?.baseline_serving_campaigns ?? null,
@@ -295,7 +391,7 @@ Deno.serve(async (request) => {
       asin_portfolio: {
         automatic: true,
         ui_required: false,
-        policy: 'exploration floor for economically eligible ASINs + concentration cap; economic curve guard and sales recovery have precedence over exploration',
+        policy: 'instrumento subordinado ao lucro esperado; share do ASIN é informativo e cada campaign budget depende da própria economia/performance',
         serving_campaign_growth_target_pct: servingCampaignGrowthTargetPct,
       },
       dayparting: {

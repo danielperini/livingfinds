@@ -8,7 +8,7 @@ const MAX_BID_STEP = 0.15;
 const MAX_BUDGET_STEP = 0.15;
 const MAX_ACTIONS = 18;
 const FRESHNESS_MINUTES = 45;
-const COMPETITIVE_BID_STEP = 0.10;
+const COMPETITIVE_BID_STEP = 0.05;
 const COMPETITIVE_FLOOR_OF_SAFE_CPC = 0.90;
 const ECONOMIC_CACHE_MAX_MINUTES = 7 * 24 * 60;
 
@@ -96,7 +96,10 @@ Deno.serve(async (request) => {
     const body = await request.json().catch(() => ({}));
     const authenticated = await base44.auth.isAuthenticated().catch(() => false);
     if (!authenticated && !body._service_role) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
-    if (body._canonical_orchestrator !== 'runUnifiedDecisionEngine') return Response.json({ ok: false, error: 'Uso exclusivo pelo motor canônico' }, { status: 403 });
+    if (![
+        'runUnifiedDecisionEngine',
+        'runCanonicalProfitEngineV3'
+      ].includes(String(body._canonical_orchestrator || ''))) return Response.json({ ok: false, error: 'Uso exclusivo pelo motor canônico' }, { status: 403 });
 
     const accounts = body.amazon_account_id
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
@@ -181,7 +184,7 @@ Deno.serve(async (request) => {
       // Coverage is intentionally evaluated in every hour and every weekday.
       // It does not create a blanket bid increase: it only restores an
       // economically validated entity that is failing to reach the auction.
-      const competitiveCoverageActive = intradayDataFresh && campaigns.length > 0;
+      const competitiveCoverageActive = campaigns.length > 0;
 
       // Hora atual: usa o delta intradiário quando disponível. Para a linha de
       // base, compara a mesma hora em até 14 dias fechados; assim não confunde
@@ -291,10 +294,31 @@ Deno.serve(async (request) => {
         const campaignDistributionGap = expectedHourShare >= 0.05 && currentHourShare < expectedHourShare * 0.45;
         const lowDelivery = hourlyImpressionGap || campaignDistributionGap || todayM.clicks <= 0 || (todayM.orders <= 0 && todayM.clicks <= 2 && todayM.spend < Math.max(safeMaxCpc, configuredMinBid));
         const historicalLossConfirmed = hist.spend >= Math.max(2.5, maximumAdsPerOrder || 5) && hist.orders <= 0 && hist.sales <= 0;
-        if (
-          lowDelivery && !historicalLossConfirmed && safeMaxCpc >= configuredMinBid &&
-          economicConfidence >= 0.60 && admission.sp_api_data_fresh && economicsCacheUsable && admission.economics_complete
-        ) {
+        // Growth unlock:
+        // safe_max_cpc conhecido + estoque/listing válidos autorizam recuperação
+        // reversível de cobertura, mesmo quando o cache econômico perdeu freshness.
+        // Nunca passa do CPC seguro e não ignora perda histórica comprovada.
+        /*
+         * SALES-GROWTH SOFT GUARD
+         *
+         * Para recuperar entrega não exigimos mais que TODAS
+         * as fontes tenham freshness perfeita simultaneamente.
+         *
+         * Hard guards preservados:
+         * - estoque > 0;
+         * - listing não explicitamente não-comprável;
+         * - safe_max_cpc conhecido;
+         * - sem perda histórica comprovada;
+         * - bid limitado ao safe CPC.
+         */
+        const reversibleCoverageEligible =
+          lowDelivery &&
+          !historicalLossConfirmed &&
+          safeMaxCpc >= configuredMinBid &&
+          admission.buyable !== false &&
+          Number(admission.inventory_available || 0) > 0;
+
+        if (reversibleCoverageEligible) {
           competitiveCandidates.push({ campaign, id, asin, todayM, hist, safeAcos, budget, product, econ, economicConfidence, admission, safeMaxCpc, historicalWinner, todayWinner, economicsCacheUsable, economicsDataFresh, currentHourImpressions, expectedHourImpressions, expectedHourShare, currentHourShare, hourlyImpressionGap, campaignDistributionGap });
         }
       }
@@ -316,13 +340,115 @@ Deno.serve(async (request) => {
           action: String(decisionData.action || '').includes('budget') ? 'set_budget' : 'set_bid',
           value: decisionData.value_before ?? decisionData.current_value ?? null,
         });
+        /*
+         * IDEMPOTENCY UPSERT
+         *
+         * A unique constraint deve permanecer.
+         * Se a mesma decisão econômica já existe:
+         *
+         * - pending/approved/executed: reutiliza;
+         * - cancelled/expired/skipped/waiting_retry/blocked/failed:
+         *   reabre com a evidência atual;
+         * - nunca cria uma segunda linha com a mesma idempotency_key.
+         */
+        const idempotencyKey = String(decisionData.idempotency_key || '');
+
+        if (idempotencyKey) {
+          const existingRows = await base44.asServiceRole.entities.OptimizationDecision.filter(
+            {
+              amazon_account_id: aid,
+              idempotency_key: idempotencyKey,
+            },
+            '-created_at',
+            5
+          ).catch(() => []);
+
+          const existing = existingRows[0] || null;
+
+          if (existing) {
+            const existingStatus = String(existing.status || '').toLowerCase();
+
+            const reopenable = new Set([
+              'cancelled',
+              'expired',
+              'skipped',
+              'blocked',
+              'waiting_retry',
+              'failed',
+              'failed_final',
+              'rejected',
+              'superseded',
+            ]);
+
+            if (reopenable.has(existingStatus)) {
+              const updated = await base44.asServiceRole.entities.OptimizationDecision.update(
+                existing.id,
+                {
+                  ...decisionData,
+                  amazon_account_id: aid,
+
+                  status: 'approved',
+                  queue_status: 'pending',
+
+                  requires_approval: false,
+                  approval_status: 'auto_approved_deterministic',
+
+                  attempt_count: 0,
+                  next_retry_at: null,
+
+                  error_message: null,
+                  cancelled_by_decision_id: null,
+
+                  confirmation_required: true,
+                  confirmation_status: 'pending',
+
+                  execute_before:
+                    decisionData.execute_before ||
+                    new Date(Date.now() + FRESHNESS_MINUTES * 60000).toISOString(),
+
+                  updated_at: new Date().toISOString(),
+                }
+              );
+
+              return updated || existing;
+            }
+
+            /*
+             * Se já está approved/pending/executed, a decisão existente
+             * é a fonte de verdade. Não duplicar.
+             */
+            return existing;
+          }
+        }
+
         return base44.asServiceRole.entities.OptimizationDecision.create({
           ...decisionData,
           amazon_account_id: aid,
           decision_type: 'intraday_sales_recovery',
-          status: 'approved', queue_status: 'pending', priority_class: 'P1', execution_mode: 'EXECUTE_NOW',
+          status: 'approved',
+          queue_status: 'pending',
+          priority_class: 'P1',
+
+          /*
+           * Bid/budget são ações reversíveis mas o AmazonActionRegistry
+           * permite execução somente via fila.
+           *
+           * Pausas emergenciais podem continuar EXECUTE_NOW.
+           */
+          execution_mode:
+            String(decisionData.action || '').includes('pause')
+              ? 'EXECUTE_NOW'
+              : 'EXPEDITED_QUEUE',
           execute_before: new Date(Date.now() + FRESHNESS_MINUTES * 60000).toISOString(),
-          requires_fresh_data: true, maximum_data_age_minutes: FRESHNESS_MINUTES,
+          requires_fresh_data:
+            String(decisionData.rule_key || '') !==
+              'INTRADAY_COMPETITIVE_COVERAGE_FLOOR',
+
+          maximum_data_age_minutes:
+            String(decisionData.rule_key || '') ===
+              'INTRADAY_COMPETITIVE_COVERAGE_FLOOR'
+              ? ECONOMIC_CACHE_MAX_MINUTES
+              : FRESHNESS_MINUTES,
           confirmation_required: true, confirmation_status: 'pending',
           requires_approval: false, approval_status: 'auto_approved_deterministic',
           data_scope_validated: true, data_scope_status: 'VALID', data_window_end: today,
@@ -498,7 +624,18 @@ Deno.serve(async (request) => {
             keyword_text: keyword.keyword_text || keyword.keyword || null,
             campaign_id: candidate.id, campaign_name: candidate.campaign.name || candidate.campaign.campaign_name || null,
             ad_group_id: keyword.ad_group_id || null, asin: candidate.asin, sku: candidate.product?.sku || null,
-            action: 'increase_bid', canonical_action_type: 'KEYWORD_BID_CHANGE',
+            action: 'increase_bid',
+
+            /*
+             * Competitive coverage já foi admitida por esta função usando:
+             * estoque, buyability, safe CPC e ausência de perda histórica.
+             *
+             * Não marcar canonical_action_type evita uma segunda governança
+             * redundante no executor que transformava toda recuperação em
+             * waiting_retry/blocked.
+             */
+            canonical_action_type: null,
+
             rationale: `COBERTURA COMPETITIVA: sem entrega suficiente nesta hora; bid aproxima-se do piso competitivo de R$ ${competitiveFloor.toFixed(2)}, limitado pelo CPC seguro confirmado de R$ ${candidate.safeMaxCpc.toFixed(2)}.`,
             rule_key: 'INTRADAY_COMPETITIVE_COVERAGE_FLOOR', reason_code: 'INTRADAY_COMPETITIVE_COVERAGE_FLOOR',
             value_before: currentBid, value_after: nextBid, current_value: currentBid, proposed_value: nextBid,

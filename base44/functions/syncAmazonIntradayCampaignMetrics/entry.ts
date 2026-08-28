@@ -372,13 +372,56 @@ async function persistStage(base44: any, account: any, job: any, clock: ReturnTy
   });
   // Assim que a Amazon confirma novo gasto intradiário, avaliar campanhas e
   // keywords sem esperar o próximo ciclo do scheduler.
-  await base44.asServiceRole.functions.invoke('enforceSkuProfitProtection', {
-    amazon_account_id: account.id,
-    trigger_type: 'intraday_campaign_snapshot_persisted',
-    dry_run: false,
-    _service_role: true,
-  }).catch((error: any) => console.warn('[intraday] proteção de lucro:', error?.message || error));
-  return { ok: true, stage: 'persist', status: 'persisted', report_id: job.report_id, records: snapshots.length, campaigns_updated: updates.length };
+  
+  /*
+   * ======================================================
+   * PROFIT ENGINE V3 — METRICS EVENT
+   * ======================================================
+   *
+   * Depois que as métricas Amazon foram persistidas,
+   * o ÚNICO motor de decisão é reavaliado imediatamente.
+   *
+   * Não existe decisor paralelo neste ponto.
+   */
+  await base44.asServiceRole.functions.invoke(
+    'runCanonicalDecisionCycle',
+    {
+      amazon_account_id: account.id,
+
+      _service_role: true,
+
+      metrics_event: true,
+
+      metrics_report_id:
+        String(job.report_id),
+
+      metrics_observed_at:
+        clock.iso,
+
+      metrics_source:
+        'AMAZON_ADS_SAME_DAY_REPORT',
+
+      correlation_id:
+        `metrics:${account.id}:${job.report_id}`,
+
+      trigger_type:
+        'intraday_campaign_metrics_persisted',
+
+      force_metrics_re_evaluation:
+        true,
+
+      dry_run:
+        false
+    }
+  ).catch(
+    (error: any) =>
+      console.warn(
+        '[intraday] Canonical Profit Engine V3:',
+        error?.message || error
+      )
+  );
+
+return { ok: true, stage: 'persist', status: 'persisted', report_id: job.report_id, records: snapshots.length, campaigns_updated: updates.length };
 }
 
 async function runForAccount(base44: any, account: any, body: any) {
@@ -444,7 +487,7 @@ Deno.serve(async (request) => {
     }
 
     const accounts = body.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 20);
     if (!accounts.length) return Response.json({ ok: false, error: 'Nenhuma AmazonAccount conectada' }, { status: 404 });
 

@@ -147,31 +147,33 @@ const FB = {
   MIN_CONFIDENCE: 0.95,
   MIN_RELEVANCE: 0.95,
   COOLDOWN_HOURS: 48,               // bid_change_cooldown_hours = 48
-  MATURATION_HOURS: 72,
+  // Learning Mode: não tratar campanha recém-criada como madura.
+  MATURATION_HOURS: 10 * 24,
   MIN_STOCK_DAYS: 7,
   // v6
-  GROWTH_TOLERANCE_FACTOR: 1.05,
-  MAX_GROWTH_FACTOR: 1.10,
-  PARTIAL_COST_MAX_INCREASE: 0.05,
-  GROWTH_COOLDOWN_HOURS: 48,        // alinhado ao bid_change_cooldown_hours
+  // Aceita aprendizado temporariamente acima do ACoS econômico ideal.
+  GROWTH_TOLERANCE_FACTOR: 1.25,
+  MAX_GROWTH_FACTOR: 1.15,
+  PARTIAL_COST_MAX_INCREASE: 0.08,
+  GROWTH_COOLDOWN_HOURS: 24,        // alinhado ao bid_change_cooldown_hours
   // Sem vendas — revisão e pausa
-  NO_SALES_FIRST_REVIEW_HOURS: 7 * 24,
-  NO_SALES_SECOND_REVIEW_DAYS: 10,
-  NO_SALES_CAMPAIGN_PAUSE_DAYS: 14,
-  NEW_PRODUCT_MAX_LEARNING_DAYS: 14,
+  NO_SALES_FIRST_REVIEW_HOURS: 10 * 24,
+  NO_SALES_SECOND_REVIEW_DAYS: 14,
+  NO_SALES_CAMPAIGN_PAUSE_DAYS: 21,
+  NEW_PRODUCT_MAX_LEARNING_DAYS: 21,
   // Zero impressões
-  ZERO_IMP_FIRST_REVIEW_HOURS: 7 * 24,
-  ZERO_IMP_KEYWORD_PAUSE_DAYS: 15,
-  ZERO_IMP_CAMPAIGN_PAUSE_DAYS: 21,
+  ZERO_IMP_FIRST_REVIEW_HOURS: 10 * 24,
+  ZERO_IMP_KEYWORD_PAUSE_DAYS: 21,
+  ZERO_IMP_CAMPAIGN_PAUSE_DAYS: 30,
   // Baixas impressões
   LOW_IMP_REVIEW_DAYS: 7,
   LOW_IMP_SECOND_REVIEW_DAYS: 14,
   LOW_IMP_KEYWORD_PAUSE_DAYS: 21,
   // Evidência mínima antes de pausar/agir
-  MIN_CLICKS_BEFORE_PAUSE: 20,      // minimum_clicks_before_pause = 20
-  MIN_CLICKS_FIRST_REVIEW: 10,      // minimum_clicks_first_review = 10
-  MIN_CLICKS_SECOND_REVIEW: 15,     // minimum_clicks_second_review = 15
-  MIN_IMP_BEFORE_PAUSE: 200,        // minimum_impressions_before_pause = 200
+  MIN_CLICKS_BEFORE_PAUSE: 30,      // minimum_clicks_before_pause = 20
+  MIN_CLICKS_FIRST_REVIEW: 15,      // minimum_clicks_first_review = 10
+  MIN_CLICKS_SECOND_REVIEW: 25,     // minimum_clicks_second_review = 15
+  MIN_IMP_BEFORE_PAUSE: 300,        // minimum_impressions_before_pause = 200
   // Thresholds de impressões por janela
   LOW_IMP_THRESHOLD_7D: 50,         // low_impressions_threshold_7d = 50
   LOW_IMP_THRESHOLD_14D: 150,       // low_impressions_threshold_14d = 150

@@ -125,6 +125,16 @@ export function isSoftPause(decision: {
     'negative_margin', 'margem_negativa', 'loss', 'prejuízo',
     'break_even', 'cap', 'daily_cap', 'budget_exceeded',
     'user_pause', 'manual_pause',
+
+    // Campanha gerenciada, madura e sem qualquer entrega em janela longa.
+    // Não é pausa "soft": manter ativa não acrescenta aprendizado/venda.
+    'zero_delivery',
+    'zero-delivery',
+    'no_delivery',
+    'never_delivered',
+    'zero_impressions',
+    'zero_clicks',
+    'zero_orders_30d',
   ];
 
   for (const guard of hardGuardrails) {

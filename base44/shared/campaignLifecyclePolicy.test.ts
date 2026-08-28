@@ -1,47 +1,258 @@
-import { strict as assert } from 'node:assert';
+import { assertEquals } from 'jsr:@std/assert';
 import {
-  allocateProjectedBudget,
-  inheritedPromotionBid,
-  nextManualBid,
-  shouldPromoteTerm,
-  shouldRetireAutoCampaign,
+  classifyCampaignLifecycle
 } from './campaignLifecyclePolicy.ts';
 
-Deno.test('promove termo com 2 vendas e ACoS dentro da meta herdando bid', () => {
-  const input = { orders: 2, sales: 100, spend: 15, targetAcos: 20, sourceBid: 0.7, alreadyPromoted: false };
-  assert.equal(shouldPromoteTerm(input), true);
-  assert.equal(inheritedPromotionBid(input), 0.7);
-});
+const base={
+  kind:'UNKNOWN' as const,
 
-Deno.test('não promove termo sem confirmação econômica', () => {
-  assert.equal(shouldPromoteTerm({ orders: 2, sales: 100, spend: 30, targetAcos: 20, sourceBid: 0.7, alreadyPromoted: false }), false);
-  assert.equal(shouldPromoteTerm({ orders: 1, sales: 100, spend: 10, targetAcos: 20, sourceBid: 0.7, alreadyPromoted: false }), false);
-});
+  ageHours:10,
 
-Deno.test('pausa automática somente após 30 dias e 3 dias sem vendas', () => {
-  assert.equal(shouldRetireAutoCampaign({ ageDays: 30, consecutiveDaysWithoutSales: 3, protectedWinner: false, inStock: true, structurallyComplete: true }), true);
-  assert.equal(shouldRetireAutoCampaign({ ageDays: 29, consecutiveDaysWithoutSales: 3, protectedWinner: false, inStock: true, structurallyComplete: true }), false);
-  assert.equal(shouldRetireAutoCampaign({ ageDays: 60, consecutiveDaysWithoutSales: 3, protectedWinner: true, inStock: true, structurallyComplete: true }), false);
-});
+  impressions7d:0,
+  clicks7d:0,
+  spend7d:0,
+  orders7d:0,
+  sales7d:0,
 
-Deno.test('manual reduz bid quando há gasto sem vendas', () => {
-  const result = nextManualBid({ currentBid: 0.6, minBid: 0.2, maxBid: 3, impressions: 1000, clicks: 30, orders: 0, sales: 0, spend: 20, targetAcos: 15, maxSpendWithoutSale: 15, increment: 0.1, maxIncreasePct: 20, maxReductionPct: 15 });
-  assert.equal(result.action, 'reduce');
-  assert.equal(result.bid, 0.51);
-});
+  impressions30d:0,
+  clicks30d:0,
+  spend30d:0,
+  orders30d:0,
+  sales30d:0,
 
-Deno.test('manual vencedora sobe sem ultrapassar incremento e percentual', () => {
-  const result = nextManualBid({ currentBid: 0.6, minBid: 0.2, maxBid: 3, impressions: 1000, clicks: 30, orders: 3, sales: 200, spend: 20, targetAcos: 15, maxSpendWithoutSale: 15, increment: 0.1, maxIncreasePct: 20, maxReductionPct: 15 });
-  assert.equal(result.action, 'increase');
-  assert.equal(result.bid, 0.7);
-});
+  harvestableTerms:0,
+  derivedExactCampaigns:0,
 
-Deno.test('projeções nunca ultrapassam budget global', () => {
-  const result = allocateProjectedBudget([
-    { campaignId: 'winner', projectedSpend: 80, currentBudget: 80, orders: 4, sales: 200, spend: 20, targetAcos: 15, protectedWinner: true },
-    { campaignId: 'weak', projectedSpend: 60, currentBudget: 60, orders: 0, sales: 0, spend: 20, targetAcos: 15 },
-  ], 100);
-  assert.equal(result.allocated, 100);
-  assert.equal(result.allocations.winner, 80);
-  assert.equal(result.allocations.weak, 20);
-});
+  priorZeroDeliveryEscalations:0,
+  priorWasteBidReductions:0,
+
+  targetAcos:25,
+  maxAcos:40,
+
+  inStock:true,
+  buyable:true,
+  listingActive:true,
+  offerActive:true,
+
+  protectedWinner:false,
+  accountHardStop:false,
+};
+
+Deno.test(
+ 'nova campanha espera',
+ ()=>{
+   const r=
+     classifyCampaignLifecycle({
+       ...base,
+       ageHours:12
+     });
+
+   assertEquals(
+     r.phase,
+     'NEW'
+   );
+ }
+);
+
+Deno.test(
+ '72h zero delivery recupera',
+ ()=>{
+   const r=
+     classifyCampaignLifecycle({
+       ...base,
+       ageHours:80
+     });
+
+   assertEquals(
+     r.phase,
+     'ZERO_DELIVERY_RECOVERY'
+   );
+ }
+);
+
+Deno.test(
+ '3 escaladas vira replace',
+ ()=>{
+   const r=
+     classifyCampaignLifecycle({
+       ...base,
+       ageHours:300,
+       priorZeroDeliveryEscalations:3
+     });
+
+   assertEquals(
+     r.phase,
+     'REPLACE_REBUILD'
+   );
+ }
+);
+
+Deno.test(
+ 'AUTO começa em discovery',
+ ()=>{
+   const r=
+     classifyCampaignLifecycle({
+       ...base,
+
+       kind:'AUTO',
+
+       ageHours:100,
+
+       clicks7d:4,
+       spend7d:3,
+
+       clicks30d:4,
+       spend30d:3
+     });
+
+   assertEquals(
+     r.phase,
+     'AUTO_DISCOVERY'
+   );
+ }
+);
+
+Deno.test(
+ 'AUTO com comprador vai para harvest',
+ ()=>{
+   const r=
+     classifyCampaignLifecycle({
+       ...base,
+
+       kind:'AUTO',
+
+       ageHours:150,
+
+       clicks7d:10,
+       spend7d:8,
+       orders7d:1,
+       sales7d:60,
+
+       clicks30d:10,
+       spend30d:8,
+       orders30d:1,
+       sales30d:60,
+
+       harvestableTerms:1
+     });
+
+   assertEquals(
+     r.phase,
+     'AUTO_HARVEST_READY'
+   );
+
+   assertEquals(
+     r.behavior,
+     'HARVEST_TO_MANUAL_EXACT'
+   );
+ }
+);
+
+Deno.test(
+ 'manual exact recém harvestada aprende',
+ ()=>{
+   const r=
+     classifyCampaignLifecycle({
+       ...base,
+
+       kind:'MANUAL_EXACT',
+
+       ageHours:24,
+
+       clicks7d:2,
+       spend7d:1,
+
+       clicks30d:2,
+       spend30d:1
+     });
+
+   assertEquals(
+     r.phase,
+     'MANUAL_EXACT_NEW'
+   );
+ }
+);
+
+Deno.test(
+ 'manual exact winner cresce',
+ ()=>{
+   const r=
+     classifyCampaignLifecycle({
+       ...base,
+
+       kind:'MANUAL_EXACT',
+
+       ageHours:300,
+
+       clicks7d:20,
+       spend7d:10,
+       orders7d:3,
+       sales7d:100,
+
+       clicks30d:40,
+       spend30d:20,
+       orders30d:5,
+       sales30d:200
+     });
+
+   assertEquals(
+     r.phase,
+     'WINNER'
+   );
+ }
+);
+
+Deno.test(
+ 'waste reduz antes de pausar',
+ ()=>{
+   const r=
+     classifyCampaignLifecycle({
+       ...base,
+
+       kind:'MANUAL_EXACT',
+
+       ageHours:300,
+
+       clicks7d:12,
+       spend7d:8,
+
+       clicks30d:18,
+       spend30d:12
+     });
+
+   assertEquals(
+     r.phase,
+     'WASTE_CONTROL'
+   );
+
+   assertEquals(
+     r.behavior,
+     'REDUCE_BID'
+   );
+ }
+);
+
+Deno.test(
+ 'waste persistente após duas reduções pausa',
+ ()=>{
+   const r=
+     classifyCampaignLifecycle({
+       ...base,
+
+       ageHours:500,
+
+       clicks7d:20,
+       spend7d:15,
+
+       clicks30d:30,
+       spend30d:25,
+
+       priorWasteBidReductions:2
+     });
+
+   assertEquals(
+     r.phase,
+     'PAUSE_CANDIDATE'
+   );
+ }
+);

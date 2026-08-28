@@ -175,7 +175,7 @@ Deno.serve(async (request) => {
     }
 
     const accounts = body.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 20);
     const dryRun = body.dry_run === true;
     const day = todayBrt();
@@ -185,7 +185,7 @@ Deno.serve(async (request) => {
       const aid = account.id;
       const cutoff = cutoffDate(LOOKBACK_DAYS);
       const [products, economics, assessments, campaigns, adGroups, keywords, searchTerms, metricsRows, hourlyRows, settingsRows, autopilotRows, priorExecutions] = await Promise.all([
-        base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 2000).catch(() => []),
+        base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, undefined, 2000).catch(() => []),
         base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, '-updated_at', 2000).catch(() => []),
         base44.asServiceRole.entities.DailyProductAdsAssessment.filter({ amazon_account_id: aid }, '-assessment_date', 3000).catch(() => []),
         base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, '-updated_at', 5000).catch(() => []),

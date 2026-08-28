@@ -1,12 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { base44 } from '@/api/base44Client';
 import { RefreshCw, Loader2, AlertTriangle, CheckCircle2, ShieldAlert } from 'lucide-react';
-import MetricCard from '@/components/ui/MetricCard';
 import DataFreshnessBadge from '@/components/ui/DataFreshnessBadge';
 import MotorDecisionFeed from '@/components/dashboard/MotorDecisionFeed';
 
 const fmtBRL = (v) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2 }).format(Number(v) || 0);
-const fmtPct = (v) => `${(Number(v) || 0).toFixed(1)}%`;
 
 function lastXDaysRange(days) {
   const end = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
@@ -255,34 +253,70 @@ export default function DecisionalOverview({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-5">
-          <MetricCard
-            label="Faturamento Real"
-            value={fmtBRL(snapshot30.revenue)}
-            trendPct={snapshot30.revenueTrend}
-            freshness={timestamps.spApi}
-            tone={snapshot30.revenue > 0 ? 'success' : 'default'}
-          />
-          <MetricCard
-            label="Gasto Ads"
-            value={fmtBRL(snapshot30.spend)}
-            trendPct={snapshot30.spendTrend}
-            freshness={timestamps.ads}
-            tone="default"
-          />
-          <MetricCard
-            label="ACoS médio"
-            value={snapshot30.sales > 0 ? fmtPct(snapshot30.acos) : '—'}
-            freshness={timestamps.ads}
-            tone={snapshot30.acos === 0 ? 'default' : snapshot30.acos <= 15 ? 'success' : snapshot30.acos <= 25 ? 'warning' : 'danger'}
-          />
-          <MetricCard
-            label="Lucro estimado"
-            value={fmtBRL(snapshot30.profit)}
-            trendPct={snapshot30.profitTrend}
-            freshness={timestamps.spApi}
-            tone={snapshot30.profit > 0 ? 'success' : snapshot30.profit < 0 ? 'danger' : 'default'}
-          />
+        <div className="mt-5">
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50/80 p-5">
+            <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
+                  Meta única do Motor
+                </p>
+
+                <h2 className="mt-1 text-lg font-bold text-theme-primary">
+                  Maximizar lucro esperado
+                </h2>
+
+                <p className="mt-1 text-xs text-theme-secondary">
+                  Sujeito a prejuízo máximo controlado. ACoS, ROAS, TACoS,
+                  CPC, impressões, vendas e quantidade de campanhas são
+                  apenas sinais internos e guardrails.
+                </p>
+              </div>
+
+              <div className="md:text-right">
+                <p className="text-[10px] text-theme-muted">
+                  Lucro pós-Ads estimado · últimos 30 dias
+                </p>
+
+                <p className={`text-2xl font-bold ${
+                  snapshot30.profit >= 0
+                    ? 'text-emerald-700'
+                    : 'text-red-600'
+                }`}>
+                  {fmtBRL(snapshot30.profit)}
+                </p>
+
+                {snapshot30.profitTrend != null ? (
+                  <p className={`mt-0.5 text-[10px] ${
+                    snapshot30.profitTrend >= 0
+                      ? 'text-emerald-600'
+                      : 'text-red-500'
+                  }`}>
+                    {snapshot30.profitTrend >= 0 ? '+' : ''}
+                    {snapshot30.profitTrend.toFixed(1)}% vs. período anterior
+                  </p>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2 text-[10px]">
+              {[
+                'Safe CPC',
+                'Break-even',
+                'Estoque',
+                'Buyability',
+                'Limite global',
+                'Loss budget',
+                'Confirmação Amazon',
+              ].map(label => (
+                <span
+                  key={label}
+                  className="rounded-full border border-emerald-200 bg-white/70 px-2 py-1 text-emerald-700"
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 

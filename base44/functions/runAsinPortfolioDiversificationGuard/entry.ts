@@ -38,12 +38,15 @@ Deno.serve(async (request) => {
     const body = await request.json().catch(() => ({}));
     const authenticated = await base44.auth.isAuthenticated().catch(() => false);
     if (!authenticated && !body._service_role) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
-    if (body._canonical_orchestrator !== 'runUnifiedDecisionEngine') {
+    if (![
+        'runUnifiedDecisionEngine',
+        'runCanonicalProfitEngineV3'
+      ].includes(String(body._canonical_orchestrator || ''))) {
       return Response.json({ ok: false, error: 'Uso exclusivo pelo motor canônico' }, { status: 403 });
     }
 
     const accounts = body.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 50);
     const results: any[] = [];
     const today = brtDate();
@@ -76,6 +79,124 @@ Deno.serve(async (request) => {
       const snapshotFor = (product: any, asin: string) => canonicalSnapshots.find((snapshot: any) =>
         (product?.sku && upper(snapshot.sku) === upper(product.sku)) || upper(snapshot.asin) === asin
       ) || null;
+      /*
+       * PRODUCT ELIGIBILITY V3
+       *
+       * Separamos três dimensões:
+       *
+       * 1. estoque;
+       * 2. listing/offer ativo;
+       * 3. buyability.
+       *
+       * Snapshot Amazon recente prevalece sobre status local antigo.
+       * Portanto um produto com estoque 72 não será automaticamente
+       * tratado como PRODUCT_INACTIVE se Amazon comprovar listing/offer
+       * ativos e buyable.
+       */
+      const effectiveEligibility = (product: any, asin: string) => {
+        const local = productAdsEligibility(product);
+        const snapshot = snapshotFor(product, asin);
+
+        const localStock = Math.max(
+          0,
+          finite(local.stock),
+          finite(product?.fulfillable_quantity),
+          finite(product?.available_quantity),
+          finite(product?.inventory_quantity),
+          finite(product?.stock),
+          finite(product?.fba_inventory)
+        );
+
+        const snapshotStock = Math.max(
+          0,
+          finite(snapshot?.inventory_available)
+        );
+
+        const effectiveStock = Math.max(
+          localStock,
+          snapshotStock
+        );
+
+        const snapshotHasStatus =
+          Boolean(snapshot?.listing_status) ||
+          Boolean(snapshot?.offer_status);
+
+        const snapshotListingActive =
+          snapshotHasStatus
+            ? snapshotIsActive(snapshot?.listing_status)
+            : null;
+
+        const snapshotOfferActive =
+          snapshotHasStatus
+            ? snapshotIsActive(snapshot?.offer_status)
+            : null;
+
+        const snapshotActive =
+          snapshotHasStatus
+            ? snapshotListingActive === true &&
+              snapshotOfferActive === true
+            : null;
+
+        const buyable =
+          typeof snapshot?.buyable === 'boolean'
+            ? snapshot.buyable
+            : product?.listing_buyable !== false;
+
+        const suppressed =
+          product?.listing_suppressed === true ||
+          lower(snapshot?.listing_status) === 'suppressed';
+
+        /*
+         * Snapshot remoto válido tem precedência.
+         * Caso contrário usamos a classificação local.
+         */
+        const effectiveActive =
+          snapshotActive !== null
+            ? snapshotActive
+            : local.active;
+
+        const inStock =
+          effectiveStock > 0;
+
+        let reason = 'ELIGIBLE';
+
+        if (!effectiveActive) {
+          reason = 'PRODUCT_INACTIVE';
+        } else if (!inStock) {
+          reason = 'PRODUCT_OUT_OF_STOCK';
+        } else if (suppressed) {
+          reason = 'LISTING_SUPPRESSED';
+        } else if (!buyable) {
+          reason = 'LISTING_NOT_BUYABLE';
+        }
+
+        return {
+          eligible:
+            effectiveActive &&
+            inStock &&
+            !suppressed &&
+            buyable,
+
+          active: effectiveActive,
+          inStock,
+          buyable,
+          suppressed,
+
+          stock: effectiveStock,
+
+          reason,
+
+          local_reason: local.reason,
+
+          source:
+            snapshotHasStatus
+              ? 'CANONICAL_AMAZON_SNAPSHOT'
+              : 'LOCAL_PRODUCT',
+
+          snapshot,
+        };
+      };
+
       const snapshotBlockers = (snapshot: any, increase: boolean): string[] => {
         if (!snapshot?.id) return ['SNAPSHOT_REQUIRED'];
         const blockers: string[] = [];
@@ -94,9 +215,32 @@ Deno.serve(async (request) => {
         const asin = asinOf(campaign, productAds);
         if (!asin) continue;
         const product = productByAsin.get(asin);
-        const eligibility = productAdsEligibility(product);
+
+        const eligibility =
+          effectiveEligibility(
+            product,
+            asin
+          );
+
         if (!eligibility.eligible) {
-          excludedProducts.push({ asin, campaign_id: campaignIdOf(campaign), reason: eligibility.reason, stock: eligibility.stock });
+          excludedProducts.push({
+            asin,
+            campaign_id: campaignIdOf(campaign),
+
+            reason: eligibility.reason,
+
+            stock: eligibility.stock,
+
+            active: eligibility.active,
+            buyable: eligibility.buyable,
+
+            local_reason:
+              eligibility.local_reason,
+
+            eligibility_source:
+              eligibility.source,
+          });
+
           continue;
         }
         const id = campaignIdOf(campaign);
@@ -112,145 +256,758 @@ Deno.serve(async (request) => {
 
       const rows = [...portfolio.values()];
       const totalSpend = rows.reduce((sum, row) => sum + row.spend, 0);
+      /*
+       * O pool agora significa:
+       * produto realmente elegível para Ads.
+       *
+       * NÃO significa que o budget deva ser distribuído
+       * igualmente entre ASINs.
+       */
       const eligibleForExploration = rows.filter((row) => {
-        const eligibility = productAdsEligibility(row.product);
-        if (!eligibility.eligible) return false;
-        const profitAfterAds = finite(row.product.profit_after_ads, 0);
-        const breakEvenAcos = finite(row.product.break_even_acos_pct, 0);
-        const observedAcos = row.sales > 0 ? row.spend / row.sales * 100 : null;
-        const lossWithoutSale = row.sales <= 0 && row.spend >= Math.max(5, finite(row.product.maximum_ad_spend_per_order, 0));
-        const economicallyUnsafe = row.product.cost_confirmed === false || lossWithoutSale || (observedAcos !== null && breakEvenAcos > 0 && observedAcos >= breakEvenAcos);
-        return !economicallyUnsafe && (profitAfterAds >= 0 || row.spend <= 2 || row.orders > 0);
+        const eligibility =
+          effectiveEligibility(
+            row.product,
+            row.asin
+          );
+
+        return eligibility.eligible;
       });
-      const floorShare = eligibleForExploration.length > 0
-        ? Math.min(0.05, explorationPoolShare / eligibleForExploration.length)
-        : 0;
+
+      // Mantido somente no payload legado.
+      const floorShare = 0;
 
       const decisions: any[] = [];
       const observations: any[] = [];
       for (const row of rows) {
-        const currentShare = totalSpend > 0 ? row.spend / totalSpend : 0;
-        const acos = row.sales > 0 ? row.spend / row.sales * 100 : null;
-        const profitableWinner = row.orders >= 2 && row.sales > 0 && finite(row.product.profit_after_ads, 0) > 0 && acos !== null && acos <= targetAcos;
-        const shareCap = profitableWinner ? maxWinnerShare : maxAsinShare;
-        const underExposed = eligibleForExploration.includes(row) && currentShare < floorShare && row.orders === 0;
-        const overConcentrated = currentShare > shareCap && (!profitableWinner || (acos !== null && acos > targetAcos));
 
-        observations.push({ asin: row.asin, spend: roundMoney(row.spend), sales: roundMoney(row.sales), orders: row.orders, acos, current_share: currentShare, floor_share: floorShare, cap_share: shareCap, under_exposed: underExposed, over_concentrated: overConcentrated });
+        const currentShare =
+          totalSpend > 0
+            ? row.spend / totalSpend
+            : 0;
 
-        if (!underExposed && !overConcentrated) continue;
-        const candidateCampaigns = [...row.campaigns].sort((a, b) => finite(a.daily_budget || a.budget) - finite(b.daily_budget || b.budget));
-        const campaign = underExposed ? candidateCampaigns[0] : candidateCampaigns[candidateCampaigns.length - 1];
-        if (!campaign) continue;
-        const campaignId = campaignIdOf(campaign);
-        const currentBudget = finite(campaign.daily_budget || campaign.budget);
-        if (currentBudget <= 0) continue;
-        const snapshot = snapshotFor(row.product, row.asin);
+        const asinAcos =
+          row.sales > 0
+            ? row.spend / row.sales * 100
+            : null;
 
-        let targetBudget = currentBudget;
-        let action = '';
-        let reasonCode = '';
-        if (underExposed) {
-          const desiredAsinBudget = Math.max(minCampaignBudget, accountBudget * floorShare);
-          const maxStep = currentBudget * 1.10;
-          targetBudget = roundMoney(Math.min(maxCampaignBudget, maxStep, Math.max(currentBudget, desiredAsinBudget)));
-          if (targetBudget <= currentBudget + 0.01) continue;
-          action = 'increase_budget';
-          reasonCode = 'ASIN_EXPLORATION_FLOOR';
-        } else {
-          const reduction = currentShare >= shareCap * 1.5 ? 0.20 : 0.10;
-          targetBudget = roundMoney(Math.max(minCampaignBudget, currentBudget * (1 - reduction)));
-          if (targetBudget >= currentBudget - 0.01) continue;
-          action = 'reduce_budget';
-          reasonCode = 'ASIN_PORTFOLIO_CONCENTRATION';
+        const eligibility =
+          effectiveEligibility(
+            row.product,
+            row.asin
+          );
+
+        observations.push({
+          asin: row.asin,
+
+          spend:
+            roundMoney(row.spend),
+
+          sales:
+            roundMoney(row.sales),
+
+          orders:
+            row.orders,
+
+          acos:
+            asinAcos,
+
+          current_share:
+            currentShare,
+
+          reference_share:
+            maxAsinShare,
+
+          over_concentrated:
+            false,
+
+          stock:
+            eligibility.stock,
+
+          active:
+            eligibility.active,
+
+          buyable:
+            eligibility.buyable,
+
+          eligibility_source:
+            eligibility.source,
+
+          note:
+            'ASIN share is informational only; campaign growth is based on campaign performance.',
+        });
+
+        if (!eligibility.eligible) {
+          continue;
         }
 
-        const key = `ASIN_DIVERSIFY|${accountId}|${row.asin}|${campaignId}|${action}|${today}|${targetBudget.toFixed(2)}`;
-        if (priorDecisions.some((decision: any) => decision.idempotency_key === key && !['failed', 'cancelled', 'rejected', 'skipped'].includes(String(decision.status || '')))) continue;
-        const blockers = snapshotBlockers(snapshot, action === 'increase_budget');
-        if (blockers.length > 0) {
+        /*
+         * =====================================================
+         * CAMPANHA POR CAMPANHA
+         * =====================================================
+         *
+         * Cada campanha é avaliada pela SUA performance.
+         */
+        const campaignCandidates:any[] = [];
+
+        for (const campaign of row.campaigns) {
+
+          const campaignId =
+            campaignIdOf(campaign);
+
+          if (!campaignId)
+            continue;
+
+          const metrics =
+            latest.get(campaignId) ||
+            campaign;
+
+          const spend =
+            finite(
+              metrics.spend ??
+              campaign.current_spend ??
+              campaign.spend
+            );
+
+          const sales =
+            finite(
+              metrics.sales ??
+              campaign.sales
+            );
+
+          const orders =
+            finite(
+              metrics.orders ??
+              campaign.orders
+            );
+
+          const clicks =
+            finite(
+              metrics.clicks ??
+              campaign.clicks
+            );
+
+          const impressions =
+            finite(
+              metrics.impressions ??
+              campaign.impressions
+            );
+
+          const acos =
+            sales > 0
+              ? spend / sales * 100
+              : null;
+
+          const roas =
+            spend > 0
+              ? sales / spend
+              : 0;
+
+          const cvr =
+            clicks > 0
+              ? orders / clicks
+              : 0;
+
+          const currentBudget =
+            finite(
+              campaign.daily_budget ||
+              campaign.budget
+            );
+
+          if (currentBudget <= 0)
+            continue;
+
+          const snapshot =
+            snapshotFor(
+              row.product,
+              row.asin
+            );
+
+          if (!snapshot?.id) {
+            observations.push({
+              asin: row.asin,
+              campaign_id: campaignId,
+              status:
+                'DEFERRED_UNTIL_CANONICAL_SNAPSHOT',
+              reason:
+                'SNAPSHOT_REQUIRED_FOR_PORTFOLIO_BUDGET',
+            });
+
+            continue;
+          }
+
+          const blockers =
+            snapshotBlockers(
+              snapshot,
+              true
+            );
+
+          if (blockers.length > 0) {
+            observations.push({
+              asin: row.asin,
+              campaign_id: campaignId,
+              action: 'HOLD',
+              blockers,
+            });
+
+            continue;
+          }
+
+          const breakEvenAcos =
+            finite(
+              row.product?.break_even_acos_pct,
+              0
+            );
+
+          /*
+           * ECONOMIC CEILING
+           *
+           * Se temos break-even confirmado, ele é o teto principal.
+           * Caso contrário usamos uma tolerância de aprendizado
+           * sobre target ACoS.
+           */
+          const economicAcosCeiling =
+            breakEvenAcos > 0
+              ? breakEvenAcos * 0.90
+              : Math.max(
+                  targetAcos * 1.50,
+                  targetAcos + 8
+                );
+
+          /*
+           * Só cresce campanha que já mostrou capacidade de venda.
+           *
+           * Uma venda já é suficiente para entrar no estágio de
+           * crescimento leve.
+           */
+          const hasSalesProof =
+            orders >= 1 &&
+            sales > 0;
+
+          if (!hasSalesProof) {
+            observations.push({
+              asin: row.asin,
+              campaign_id: campaignId,
+              action: 'HOLD',
+              reason:
+                'NO_CAMPAIGN_SALES_PROOF_YET',
+              spend:
+                roundMoney(spend),
+              orders,
+            });
+
+            continue;
+          }
+
+          const economicallyAcceptable =
+            (
+              acos !== null &&
+              acos <= economicAcosCeiling
+            )
+            ||
+            roas >= 2.5;
+
+          if (!economicallyAcceptable) {
+            observations.push({
+              asin: row.asin,
+              campaign_id: campaignId,
+              action: 'HOLD',
+              reason:
+                'CAMPAIGN_ECONOMICS_NOT_READY_FOR_GROWTH',
+              acos,
+              roas,
+              economic_acos_ceiling:
+                economicAcosCeiling,
+            });
+
+            continue;
+          }
+
+          /*
+           * =================================================
+           * STEP DE CRESCIMENTO
+           * =================================================
+           *
+           * forte       +10%
+           * saudável     +8%
+           * aprendizado  +5%
+           */
+          let growthPct = 0.05;
+          let reasonCode =
+            'CAMPAIGN_PROFITABLE_GROWTH_5';
+
+          const strongWinner =
+            (
+              acos !== null &&
+              acos <= targetAcos * 0.80
+            )
+            ||
+            roas >= 4;
+
+          const healthyWinner =
+            (
+              acos !== null &&
+              acos <= targetAcos * 1.25
+            )
+            ||
+            roas >= 3;
+
+          if (strongWinner) {
+            growthPct = 0.10;
+            reasonCode =
+              'CAMPAIGN_STRONG_WINNER_GROWTH_10';
+          } else if (healthyWinner) {
+            growthPct = 0.08;
+            reasonCode =
+              'CAMPAIGN_HEALTHY_WINNER_GROWTH_8';
+          }
+
+          /*
+           * Score para escolher a melhor campanha do ASIN
+           * nesta passagem.
+           */
+          const score =
+            orders * 100 +
+            sales +
+            roas * 20 +
+            cvr * 100 -
+            (acos || 0);
+
+          campaignCandidates.push({
+            campaign,
+            campaignId,
+            snapshot,
+
+            spend,
+            sales,
+            orders,
+            clicks,
+            impressions,
+
+            acos,
+            roas,
+            cvr,
+
+            currentBudget,
+
+            growthPct,
+            reasonCode,
+
+            score,
+          });
+        }
+
+        /*
+         * Uma campanha por ASIN por passagem.
+         *
+         * Evita multiplicar simultaneamente todo o compromisso
+         * daquele produto.
+         */
+        campaignCandidates.sort(
+          (a,b)=>b.score-a.score
+        );
+
+        const best =
+          campaignCandidates[0];
+
+        if (!best)
+          continue;
+
+        const accountHeadroom =
+          roundMoney(
+            Math.max(
+              0,
+              accountBudget - totalSpend
+            )
+          );
+
+        if (accountHeadroom <= 0.01) {
           observations.push({
             asin: row.asin,
-            campaign_id: campaignId,
-            action,
-            status: 'DEFERRED_UNTIL_CANONICAL_SNAPSHOT',
-            blockers,
+            campaign_id: best.campaignId,
+            action: 'HOLD',
+            reason:
+              'ACCOUNT_BUDGET_HEADROOM_EXHAUSTED',
           });
-          continue;
-        }
-        if (body.dry_run === true) {
-          decisions.push({ asin: row.asin, campaign_id: campaignId, action, current_budget: currentBudget, target_budget: targetBudget, snapshot_id: snapshot.id, dry_run: true });
+
           continue;
         }
 
-        const decision = await base44.asServiceRole.entities.OptimizationDecision.create({
-          amazon_account_id: accountId,
-          decision_type: 'budget_optimization',
-          entity_type: 'campaign',
-          entity_id: campaignId,
-          campaign_id: campaignId,
-          campaign_name: campaign.name || campaign.campaign_name || null,
-          asin: row.asin,
-          sku: row.product?.sku || snapshot.sku || null,
-          action,
-          canonical_action_type: 'BUDGET_CHANGE',
-          snapshot_id: snapshot.id,
-          snapshot_key: snapshot.snapshot_key || null,
-          marketplace_id: account.marketplace_id || null,
-          profile_id: account.ads_profile_id || null,
-          rationale: underExposed
-            ? `ASIN ${row.asin} ativo e com estoque recebeu ${(currentShare * 100).toFixed(1)}% do gasto, abaixo do piso exploratório ${(floorShare * 100).toFixed(1)}%. Aumento limitado a 10% para gerar oportunidade de aprendizado sem romper ACoS/MER.`
-            : `ASIN ${row.asin} concentrou ${(currentShare * 100).toFixed(1)}% do gasto, acima do teto ${(shareCap * 100).toFixed(1)}%, sem proteção econômica suficiente. Redução libera capital para outros ASINs ativos com estoque.`,
-          rule_key: reasonCode,
-          reason_code: reasonCode,
-          value_before: currentBudget,
-          value_after: targetBudget,
-          current_value: currentBudget,
-          proposed_value: targetBudget,
-          change_pct: roundMoney(((targetBudget - currentBudget) / currentBudget) * 100),
-          account_daily_budget_limit: accountBudget,
-          account_daily_spend: roundMoney(totalSpend),
-          remaining_account_budget: roundMoney(Math.max(0, accountBudget - totalSpend)),
-          expected_impact_value: roundMoney(Math.max(0, targetBudget - currentBudget)),
-          confidence: underExposed ? 0.82 : 0.94,
-          risk: underExposed ? 'low' : 'medium',
-          requires_approval: false,
-          approval_status: 'auto_approved_deterministic',
-          status: 'approved',
-          queue_status: 'pending',
-          priority_class: overConcentrated ? 'P1' : 'P2',
-          execution_mode: 'STANDARD_QUEUE',
-          confirmation_required: true,
-          confirmation_status: 'pending',
-          data_scope_validated: true,
-          data_scope_status: 'VALID',
-          requires_fresh_data: true,
-          maximum_data_age_minutes: 45,
-          metric_window: today,
-          decision_window: String(snapshot.decision_window || `portfolio_${today}`),
-          data_window_start: today,
-          data_window_end: today,
-          precondition_snapshot: JSON.stringify({
-            snapshot_id: snapshot.id,
-            snapshot_key: snapshot.snapshot_key,
-            data_fresh: snapshot.data_fresh,
-            listing_status: snapshot.listing_status,
-            offer_status: snapshot.offer_status,
-            buyable: snapshot.buyable,
-            inventory_available: snapshot.inventory_available,
-            economic_confidence: snapshot.economic_confidence,
-          }),
-          rollback_plan: JSON.stringify({ action: 'set_budget', campaign_id: campaignId, value: currentBudget, reason: 'portfolio_budget_rollback' }),
-          lock_key: `portfolio_budget|${accountId}|${campaignId}|${today}`,
-          max_attempts: 3,
-          idempotency_key: key,
-          conflict_group: `${accountId}|campaign|${campaignId}`,
-          source_function: SOURCE,
-          data_used: JSON.stringify({ asin: row.asin, total_spend: totalSpend, asin_spend: row.spend, asin_sales: row.sales, asin_orders: row.orders, asin_acos: acos, current_share: currentShare, floor_share: floorShare, cap_share: shareCap, exploration_pool_share: explorationPoolShare, target_acos: targetAcos, product_eligibility: 'active_and_in_stock', snapshot_id: snapshot.id, snapshot_key: snapshot.snapshot_key }),
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+        const action =
+          'increase_budget';
+
+        const targetByPerformance =
+          roundMoney(
+            best.currentBudget *
+            (1 + best.growthPct)
+          );
+
+        const targetBudget =
+          roundMoney(
+            Math.min(
+              maxCampaignBudget,
+              targetByPerformance,
+              best.currentBudget +
+              accountHeadroom
+            )
+          );
+
+        if (
+          targetBudget <=
+          best.currentBudget + 0.01
+        ) {
+          continue;
+        }
+
+        const key =
+          `PERFORMANCE_BUDGET|${accountId}|${row.asin}|${best.campaignId}|${today}|${targetBudget.toFixed(2)}`;
+
+        if (
+          priorDecisions.some(
+            (decision:any)=>
+              decision.idempotency_key === key &&
+              ![
+                'failed',
+                'cancelled',
+                'rejected',
+                'skipped'
+              ].includes(
+                String(
+                  decision.status || ''
+                )
+              )
+          )
+        ) {
+          continue;
+        }
+
+        if (body.dry_run === true) {
+          decisions.push({
+            asin: row.asin,
+            campaign_id:
+              best.campaignId,
+
+            action,
+
+            current_budget:
+              best.currentBudget,
+
+            target_budget:
+              targetBudget,
+
+            growth_pct:
+              Math.round(
+                best.growthPct * 100
+              ),
+
+            orders:
+              best.orders,
+
+            sales:
+              roundMoney(best.sales),
+
+            spend:
+              roundMoney(best.spend),
+
+            acos:
+              best.acos,
+
+            roas:
+              best.roas,
+
+            stock:
+              eligibility.stock,
+
+            reason_code:
+              best.reasonCode,
+
+            snapshot_id:
+              best.snapshot.id,
+
+            dry_run:true,
+          });
+
+          continue;
+        }
+
+        const decision =
+          await base44.asServiceRole.entities.OptimizationDecision.create({
+
+            amazon_account_id:
+              accountId,
+
+            decision_type:
+              'budget_optimization',
+
+            entity_type:
+              'campaign',
+
+            entity_id:
+              best.campaignId,
+
+            campaign_id:
+              best.campaignId,
+
+            campaign_name:
+              best.campaign.name ||
+              best.campaign.campaign_name ||
+              null,
+
+            asin:
+              row.asin,
+
+            sku:
+              row.product?.sku ||
+              best.snapshot.sku ||
+              null,
+
+            action:
+              'increase_budget',
+
+            canonical_action_type:
+              'BUDGET_CHANGE',
+
+            snapshot_id:
+              best.snapshot.id,
+
+            snapshot_key:
+              best.snapshot.snapshot_key ||
+              null,
+
+            marketplace_id:
+              account.marketplace_id ||
+              null,
+
+            profile_id:
+              account.ads_profile_id ||
+              null,
+
+            rationale:
+              `Campanha ${best.campaignId} do ASIN ${row.asin} cresce pela própria performance: ` +
+              `${best.orders} pedido(s), vendas R$ ${roundMoney(best.sales)}, gasto R$ ${roundMoney(best.spend)}, ` +
+              `ACoS ${best.acos === null ? 'n/a' : best.acos.toFixed(1) + '%'}, ROAS ${best.roas.toFixed(2)}. ` +
+              `Budget +${Math.round(best.growthPct * 100)}%. ` +
+              `Participação do ASIN no gasto total (${(currentShare * 100).toFixed(1)}%) é apenas informativa.`,
+
+            rule_key:
+              best.reasonCode,
+
+            reason_code:
+              best.reasonCode,
+
+            value_before:
+              best.currentBudget,
+
+            value_after:
+              targetBudget,
+
+            current_value:
+              best.currentBudget,
+
+            proposed_value:
+              targetBudget,
+
+            change_pct:
+              roundMoney(
+                best.growthPct * 100
+              ),
+
+            account_daily_budget_limit:
+              accountBudget,
+
+            account_daily_spend:
+              roundMoney(totalSpend),
+
+            remaining_account_budget:
+              accountHeadroom,
+
+            expected_impact_value:
+              roundMoney(
+                targetBudget -
+                best.currentBudget
+              ),
+
+            confidence:
+              best.orders >= 2
+                ? 0.92
+                : 0.82,
+
+            risk:
+              best.growthPct >= 0.10
+                ? 'medium'
+                : 'low',
+
+            requires_approval:false,
+
+            approval_status:
+              'auto_approved_performance_growth',
+
+            status:'approved',
+            queue_status:'pending',
+
+            priority_class:
+              best.orders >= 2
+                ? 'P1'
+                : 'P2',
+
+            execution_mode:
+              'EXPEDITED_QUEUE',
+
+            confirmation_required:true,
+            confirmation_status:'pending',
+
+            data_scope_validated:true,
+            data_scope_status:'VALID',
+
+            requires_fresh_data:true,
+            maximum_data_age_minutes:45,
+
+            metric_window:today,
+
+            decision_window:
+              String(
+                best.snapshot.decision_window ||
+                `performance_budget_${today}`
+              ),
+
+            data_window_start:today,
+            data_window_end:today,
+
+            precondition_snapshot:
+              JSON.stringify({
+                snapshot_id:
+                  best.snapshot.id,
+
+                snapshot_key:
+                  best.snapshot.snapshot_key,
+
+                data_fresh:
+                  best.snapshot.data_fresh,
+
+                listing_status:
+                  best.snapshot.listing_status,
+
+                offer_status:
+                  best.snapshot.offer_status,
+
+                buyable:
+                  best.snapshot.buyable,
+
+                inventory_available:
+                  best.snapshot.inventory_available,
+
+                economic_confidence:
+                  best.snapshot.economic_confidence,
+              }),
+
+            rollback_plan:
+              JSON.stringify({
+                action:'set_budget',
+                campaign_id:
+                  best.campaignId,
+
+                value:
+                  best.currentBudget,
+
+                reason:
+                  'performance_budget_rollback',
+              }),
+
+            lock_key:
+              `performance_budget|${accountId}|${best.campaignId}|${today}`,
+
+            max_attempts:3,
+
+            idempotency_key:key,
+
+            conflict_group:
+              `${accountId}|campaign|${best.campaignId}`,
+
+            source_function:
+              SOURCE,
+
+            data_used:
+              JSON.stringify({
+                asin:row.asin,
+
+                campaign_id:
+                  best.campaignId,
+
+                orders:
+                  best.orders,
+
+                sales:
+                  best.sales,
+
+                spend:
+                  best.spend,
+
+                acos:
+                  best.acos,
+
+                roas:
+                  best.roas,
+
+                cvr:
+                  best.cvr,
+
+                stock:
+                  eligibility.stock,
+
+                eligibility_source:
+                  eligibility.source,
+
+                current_share:
+                  currentShare,
+
+                share_policy:
+                  'INFORMATIONAL_ONLY',
+
+                target_acos:
+                  targetAcos,
+
+                growth_pct:
+                  best.growthPct,
+
+                snapshot_id:
+                  best.snapshot.id,
+
+                snapshot_key:
+                  best.snapshot.snapshot_key,
+              }),
+
+            created_at:
+              new Date().toISOString(),
+
+            updated_at:
+              new Date().toISOString(),
+          });
+
+        decisions.push({
+          asin:row.asin,
+
+          campaign_id:
+            best.campaignId,
+
+          action:
+            'increase_budget',
+
+          current_budget:
+            best.currentBudget,
+
+          target_budget:
+            targetBudget,
+
+          growth_pct:
+            Math.round(
+              best.growthPct * 100
+            ),
+
+          reason_code:
+            best.reasonCode,
+
+          decision_id:
+            decision.id,
         });
-        decisions.push({ asin: row.asin, campaign_id: campaignId, action, current_budget: currentBudget, target_budget: targetBudget, decision_id: decision.id });
       }
 
       await base44.asServiceRole.entities.SyncExecutionLog.create({
@@ -268,8 +1025,8 @@ Deno.serve(async (request) => {
       results.push({ amazon_account_id: accountId, total_spend: roundMoney(totalSpend), eligible_asins: eligibleForExploration.length, excluded_campaigns: excludedProducts, exploration_pool_share: explorationPoolShare, floor_share_per_asin: floorShare, max_asin_share: maxAsinShare, max_winner_share: maxWinnerShare, observations, decisions });
     }
 
-    return Response.json({ ok: true, engine: 'ASIN_PORTFOLIO_DIVERSIFICATION_V2_ACTIVE_STOCK_ONLY', automatic: true, ui_required: false, product_eligibility_policy: 'active_and_in_stock_only', results });
+    return Response.json({ ok: true, engine: 'CAMPAIGN_PERFORMANCE_BUDGET_GROWTH_V3', automatic: true, ui_required: false, product_eligibility_policy: 'active_and_in_stock_only', results });
   } catch (error: any) {
-    return Response.json({ ok: false, engine: 'ASIN_PORTFOLIO_DIVERSIFICATION_V2_ACTIVE_STOCK_ONLY', error: error?.message || String(error) }, { status: 500 });
+    return Response.json({ ok: false, engine: 'CAMPAIGN_PERFORMANCE_BUDGET_GROWTH_V3', error: error?.message || String(error) }, { status: 500 });
   }
 });

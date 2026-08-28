@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * createAutoCampaignForAsin — Cria campanha Sponsored Products AUTO para um ASIN.
  * Com reconciliação, idempotência, tratamento de HTTP 207 e parser tolerante.
@@ -188,14 +189,77 @@ Deno.serve(async (req) => {
       : proportionalActivationBid(goalSettings, economicRows[0], assessmentRows[0]);
 
     const existingCampaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id, asin });
-    const autoCampaign = existingCampaigns.find((c: any) => {
-      const targeting = String(c.targeting_type || '').toUpperCase();
-      const name = String(c.name || c.campaign_name || '').toUpperCase();
-      const state = String(c.state || c.status || '').toUpperCase();
-      return c.archived !== true && state !== 'ARCHIVED'
-        && !name.includes('MANUAL')
-        && (name.includes('AUTO') || (targeting === 'AUTO' && !name.includes('EXACT')));
-    });
+
+    /*
+     * V3_PREFERRED_AUTO_RECOVERY
+     *
+     * Quando o portfolio allocator já escolheu a melhor AUTO,
+     * recuperar exatamente essa campanha.
+     */
+    const preferredCampaignId =
+      String(
+        body.preferred_campaign_id ||
+        ''
+      );
+
+    const isAutoCampaign = (c: any) => {
+      const targeting =
+        String(c.targeting_type || '').toUpperCase();
+
+      const name =
+        String(c.name || c.campaign_name || '').toUpperCase();
+
+      const state =
+        String(c.state || c.status || '').toUpperCase();
+
+      return (
+        c.archived !== true &&
+        state !== 'ARCHIVED' &&
+        !name.includes('MANUAL') &&
+        (
+          name.includes('AUTO') ||
+          (
+            targeting === 'AUTO' &&
+            !name.includes('EXACT')
+          )
+        )
+      );
+    };
+
+    const existingAutos =
+      existingCampaigns.filter(
+        isAutoCampaign
+      );
+
+    const autoCampaign =
+      (
+        preferredCampaignId
+          ? existingAutos.find(
+              (c: any) =>
+                String(
+                  c.campaign_id ||
+                  c.amazon_campaign_id ||
+                  c.id ||
+                  ''
+                )
+                ===
+                preferredCampaignId
+            )
+          : null
+      )
+      ||
+      existingAutos.find(
+        (c: any) =>
+          String(
+            c.state ||
+            c.status ||
+            ''
+          ).toUpperCase()
+          ===
+          'ENABLED'
+      )
+      ||
+      existingAutos[0];
     if (autoCampaign) {
       // O estado confirmado pela sincronização atual tem precedência. Um
       // amazon_status legado nunca pode bloquear a cobertura AUTO do SKU.

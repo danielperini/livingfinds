@@ -223,8 +223,31 @@ Deno.serve(async (req) => {
         const adCandidates = adsByAdGroup.get(adGroupId) || adsByCampaign.get(campaignId) || [];
         const distinctAsins = [...new Set(adCandidates.map((ad: any) => String(ad.asin || '').toUpperCase()).filter(Boolean))];
         if (distinctAsins.length === 1) {
-          const ad = adCandidates.find((candidate: any) => String(candidate.asin || '').toUpperCase() === distinctAsins[0]) || {};
-          return { asin: distinctAsins[0], sku: String(ad.sku || ''), status: 'resolved_product_ad' };
+          const ad =
+            adCandidates.find(
+              (candidate: any) =>
+                String(
+                  candidate.asin || ''
+                ).toUpperCase() ===
+                distinctAsins[0]
+            ) || {};
+
+          /*
+           * V3:
+           *
+           * O ad group/campaign anuncia inequivocamente
+           * um único ASIN.
+           *
+           * searchTermHarvestPolicy usa exatamente este
+           * sinal para o fallback determinístico quando
+           * a Amazon não devolve as colunas promoted/
+           * same-SKU separadamente.
+           */
+          return {
+            asin: distinctAsins[0],
+            sku: String(ad.sku || ''),
+            status: 'single_advertised_sku'
+          };
         }
         if (distinctAsins.length > 1) return { asin: '', sku: '', status: 'ambiguous' };
 

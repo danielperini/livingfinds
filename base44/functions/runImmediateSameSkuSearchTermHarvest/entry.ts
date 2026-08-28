@@ -42,6 +42,42 @@ function campaignIdOf(campaign: any): string {
   return String(campaign?.campaign_id || campaign?.amazon_campaign_id || '');
 }
 
+
+function resolvedSearchTermAsin(
+  row: any,
+  campaignById: Map<string, any>,
+): string {
+
+  const explicit =
+    String(
+      row?.advertised_asin ||
+      row?.asin ||
+      ''
+    )
+      .trim()
+      .toUpperCase();
+
+  if(explicit)
+    return explicit;
+
+  const campaign =
+    campaignById.get(
+      String(
+        row?.campaign_id ||
+        ''
+      )
+    );
+
+  return String(
+    campaign?.asin ||
+    campaign?.advertised_asin ||
+    campaign?.product_asin ||
+    ''
+  )
+    .trim()
+    .toUpperCase();
+}
+
 function sourceCampaignType(row: any, campaignById: Map<string, any>): 'AUTO' | 'MANUAL' | '' {
   const campaign = campaignById.get(String(row?.campaign_id || ''));
   const explicit = String(
@@ -116,6 +152,148 @@ async function loadPaged(entity: any, query: any, sort: string, maximum = 20000)
   return rows;
 }
 
+
+function harvestRuleKey(
+  reason: string,
+): string {
+
+  if (
+    reason ===
+    'promising_medium_long_tail_search_term'
+  ) {
+    return (
+      'PROMISING_SEARCH_TERM_EXACT_EXPLORATION_V1'
+    );
+  }
+
+  if (
+    reason ===
+    'manual_high_cost_search_term_isolation'
+  ) {
+    return (
+      'MANUAL_SEARCH_TERM_COST_ISOLATION_V1'
+    );
+  }
+
+  return (
+    'SAME_SKU_FIRST_SALE_IMMEDIATE_PROMOTION_V1'
+  );
+}
+
+function harvestClassification(
+  reason: string,
+): string {
+
+  if (
+    reason ===
+    'promising_medium_long_tail_search_term'
+  ) {
+    return 'promising';
+  }
+
+  if (
+    reason ===
+    'manual_high_cost_search_term_isolation'
+  ) {
+    return 'control_candidate';
+  }
+
+  return 'winner';
+}
+
+function harvestLastAction(
+  reason: string,
+): string {
+
+  if (
+    reason ===
+    'promising_medium_long_tail_search_term'
+  ) {
+    return (
+      'promising_search_term_promoted_to_manual_exact'
+    );
+  }
+
+  if (
+    reason ===
+    'manual_high_cost_search_term_isolation'
+  ) {
+    return (
+      'manual_high_cost_term_isolated_to_exact'
+    );
+  }
+
+  return (
+    'same_sku_sale_promoted_to_manual_exact'
+  );
+}
+
+function harvestRationale(
+  item: any,
+): string {
+
+  const term =
+    item.aggregate.term;
+
+  if (
+    item.evaluation.reason ===
+    'promising_medium_long_tail_search_term'
+  ) {
+
+    const ctr =
+      item.aggregate.impressions > 0
+        ? (
+            item.aggregate.clicks /
+            item.aggregate.impressions *
+            100
+          )
+        : 0;
+
+    return (
+      `Criar MANUAL EXACT para “${term}”. ` +
+      `Termo promissor: ` +
+      `${item.aggregate.impressions} impressões, ` +
+      `${item.aggregate.clicks} cliques, ` +
+      `CTR ${ctr.toFixed(2)}%. ` +
+      `O termo será testado com safe bid e a origem ` +
+      `será negativada somente após a keyword EXACT ` +
+      `ser criada pela Amazon.`
+    );
+  }
+
+  if (
+    item.evaluation.reason ===
+    'manual_high_cost_search_term_isolation'
+  ) {
+
+    const cpc =
+      item.aggregate.clicks > 0
+        ? (
+            item.aggregate.spend /
+            item.aggregate.clicks
+          )
+        : 0;
+
+    return (
+      `Isolar “${term}” em MANUAL EXACT. ` +
+      `Search Term originado em MANUAL com CPC ` +
+      `R$ ${cpc.toFixed(2)}. ` +
+      `O novo EXACT recebe safe bid próprio; ` +
+      `após a Amazon confirmar sua existência, ` +
+      `o termo é negativado na origem.`
+    );
+  }
+
+  return (
+    `Criar MANUAL EXACT para “${term}”. ` +
+    `${item.aggregate.sameSkuOrders} pedido(s), ` +
+    `R$ ${item.aggregate.sameSkuSales.toFixed(2)} ` +
+    `de venda same-SKU. ` +
+    `A origem só será negativada depois que a ` +
+    `keyword EXACT existir na Amazon.`
+  );
+}
+
 function sourceNeedsNegative(source: any): boolean {
   const match = normalizeSearchTerm(source.matchType).replace(/_/g, '-');
   const campaignType = String(source.campaignType || '').toUpperCase();
@@ -139,7 +317,7 @@ Deno.serve(async (request) => {
     if (!accounts.length) return Response.json({ ok: false, error: 'Nenhuma conta Amazon conectada' }, { status: 404 });
 
     const dryRun = body.dry_run === true;
-    const maxPromotions = Math.max(1, Math.min(50, Number(body.max_promotions || 25)));
+    const maxPromotions = Math.max(1, Math.min(50, Number(body.max_promotions || 13)));
     const lookbackDays = Math.max(1, Math.min(65, Number(body.lookback_days || 65)));
     const today = brazilDate();
     const cutoff = dateOffset(today, -(lookbackDays - 1));
@@ -222,26 +400,818 @@ Deno.serve(async (request) => {
         .map((value: unknown) => String(value || '').trim().toUpperCase()).filter(Boolean));
       const excludedAsins = new Set((Array.isArray(body.exclude_asins) ? body.exclude_asins : [])
         .map((value: unknown) => String(value || '').trim().toUpperCase()).filter(Boolean));
-      const rawRowsInWindow = searchTerms.filter((row: any) => {
-        const asin = String(row.advertised_asin || row.asin || '').trim().toUpperCase();
-        return String(row.date || '') >= cutoff && row.search_term &&
-          (!sourceCampaignId || String(row.campaign_id || '') === sourceCampaignId) &&
-          (!sourceSearchTerm || normalizeSearchTerm(row.search_term) === sourceSearchTerm) &&
-          (!targetAsins.size || targetAsins.has(asin)) &&
-          !excludedAsins.has(asin) &&
-          matchesRequestedCampaignType(requestedSourceType, sourceCampaignType(row, campaignById));
+      /*
+       * V3:
+       *
+       * Não descartar SearchTerm só porque o próprio
+       * registro ainda não traz advertised_asin.
+       *
+       * Campaign -> ASIN é permitido quando a campanha
+       * está inequivocamente associada ao produto.
+       */
+      const rawRowsInWindow = searchTerms
+        .map((row: any) => {
+
+          const resolvedAsin =
+            resolvedSearchTermAsin(
+              row,
+              campaignById
+            );
+
+          if(
+            resolvedAsin &&
+            !row.advertised_asin
+          ){
+            return {
+              ...row,
+              advertised_asin:
+                resolvedAsin
+            };
+          }
+
+          return row;
+        })
+        .filter((row: any) => {
+
+          const asin =
+            resolvedSearchTermAsin(
+              row,
+              campaignById
+            );
+
+          return (
+            String(
+              row.date || ''
+            ) >= cutoff
+
+            &&
+            Boolean(
+              row.search_term
+            )
+
+            &&
+            (
+              !sourceCampaignId ||
+              String(
+                row.campaign_id ||
+                ''
+              ) === sourceCampaignId
+            )
+
+            &&
+            (
+              !sourceSearchTerm ||
+              normalizeSearchTerm(
+                row.search_term
+              ) ===
+              sourceSearchTerm
+            )
+
+            &&
+            (
+              !targetAsins.size ||
+              targetAsins.has(
+                asin
+              )
+            )
+
+            &&
+            !excludedAsins.has(
+              asin
+            )
+
+            &&
+            matchesRequestedCampaignType(
+              requestedSourceType,
+              sourceCampaignType(
+                row,
+                campaignById
+              )
+            )
+          );
+        });
+      // Growth unlock:
+      // Quando Amazon não fornece colunas same-SKU, só habilitamos fallback
+      // se a campanha fonte mostrou exatamente UM ASIN anunciado na janela.
+      // Product targets/ASIN search terms continuam excluídos pela policy.
+      const advertisedAsinsByCampaign = new Map<string, Set<string>>();
+      for (const row of rawRowsInWindow) {
+        const cid = String(row?.campaign_id || '');
+        const asin = String(row?.advertised_asin || row?.asin || '').trim().toUpperCase();
+        if (!cid || !asin) continue;
+        const set = advertisedAsinsByCampaign.get(cid) || new Set<string>();
+        set.add(asin);
+        advertisedAsinsByCampaign.set(cid, set);
+      }
+
+      const preparedRowsInWindow = rawRowsInWindow.map((row: any) => {
+        if (row.same_sku_attribution_verified === true) return row;
+
+        const cid = String(row?.campaign_id || '');
+        const asin = String(row?.advertised_asin || row?.asin || '').trim().toUpperCase();
+        const advertised = advertisedAsinsByCampaign.get(cid);
+
+        const explicitAttributionColumns = [
+          'promotedPurchases7d','promotedPurchases14d','promotedPurchases30d',
+          'purchasesSameSku7d','purchasesSameSku14d','purchasesSameSku30d',
+          'purchasesOtherSku7d','purchasesOtherSku14d','purchasesOtherSku30d',
+          'attributedSalesSameSku7d','attributedSalesSameSku14d','attributedSalesSameSku30d',
+          'salesOtherSku7d','salesOtherSku14d','salesOtherSku30d',
+        ];
+
+        const hasExplicitAttribution =
+          explicitAttributionColumns.some((field) =>
+            Object.prototype.hasOwnProperty.call(row || {}, field)
+          );
+
+        const orders = Number(
+          row?.purchases7d ??
+          row?.purchases14d ??
+          row?.purchases30d ??
+          row?.orders_7d ??
+          row?.orders_14d ??
+          row?.orders_30d ??
+          row?.orders ??
+          0
+        );
+
+        const sales = Number(
+          row?.sales7d ??
+          row?.sales14d ??
+          row?.sales30d ??
+          row?.sales_7d ??
+          row?.sales_14d ??
+          row?.sales_30d ??
+          row?.sales ??
+          0
+        );
+
+        if (
+          !hasExplicitAttribution &&
+          advertised?.size === 1 &&
+          asin &&
+          orders > 0 &&
+          sales > 0
+        ) {
+          return {
+            ...row,
+            sku_resolution_status: 'single_advertised_sku',
+            attribution_fallback_source: 'single_asin_campaign_window',
+          };
+        }
+
+        return row;
       });
-      const verifiedKeys = new Set(rawRowsInWindow
-        .filter((row: any) => row.same_sku_attribution_verified === true)
+
+      const verifiedKeys = new Set(preparedRowsInWindow
+        .filter((row: any) => row.same_sku_attribution_verified === true ||
+          row.sku_resolution_status === 'single_advertised_sku')
         .map((row: any) => `${String(row.advertised_asin || '').toUpperCase()}|${normalizeSearchTerm(row.search_term)}`));
       // Registros legados SUMMARY podem sobrepor a janela DAILY. Quando já há
       // linha com atribuição same-SKU, a linha total-only é excluída para não
       // duplicar gasto/venda nem reduzir artificialmente a confiança.
-      const rowsInWindow = rawRowsInWindow.filter((row: any) => {
+      const rowsInWindow = preparedRowsInWindow.filter((row: any) => {
         const key = `${String(row.advertised_asin || '').toUpperCase()}|${normalizeSearchTerm(row.search_term)}`;
         return !verifiedKeys.has(key) || row.same_sku_attribution_verified === true;
       });
-      const aggregates = aggregateSearchTerms(rowsInWindow);
+      /*
+       * SALES-GROWTH SOFT GUARD:
+       *
+       * Amazon nem sempre fornece promoted/same-SKU nas linhas históricas.
+       * Para não zerar todo o harvest:
+       *
+       * - continua proibido transformar ASIN/product-target em keyword;
+       * - exige venda real;
+       * - exige campanha-fonte com somente UM ASIN anunciado na janela;
+       * - se houver coluna explícita same-SKU/other-SKU, ela continua soberana;
+       * - fallback recebe bid conservador e budget mínimo.
+       */
+      const growthUnlockedRows = rowsInWindow.map((row: any) => {
+        if (row?.same_sku_attribution_verified === true) return row;
+
+        const cid = String(row?.campaign_id || '');
+        const advertisedAsin = String(
+          row?.advertised_asin || row?.asin || ''
+        ).trim().toUpperCase();
+
+        if (!cid || !advertisedAsin) return row;
+
+        const campaignAsins = new Set(
+          rawRowsInWindow
+            .filter((candidate: any) =>
+              String(candidate?.campaign_id || '') === cid
+            )
+            .map((candidate: any) =>
+              String(
+                candidate?.advertised_asin ||
+                candidate?.asin ||
+                ''
+              ).trim().toUpperCase()
+            )
+            .filter(Boolean)
+        );
+
+        const explicitFields = [
+          'same_sku_attribution_verified',
+
+          'purchasesSameSku1d',
+          'purchasesSameSku7d',
+          'purchasesSameSku14d',
+          'purchasesSameSku30d',
+
+          'purchases_same_sku_1d',
+          'purchases_same_sku_7d',
+          'purchases_same_sku_14d',
+          'purchases_same_sku_30d',
+
+          'promotedPurchases1d',
+          'promotedPurchases7d',
+          'promotedPurchases14d',
+          'promotedPurchases30d',
+
+          'promoted_purchases_1d',
+          'promoted_purchases_7d',
+          'promoted_purchases_14d',
+          'promoted_purchases_30d',
+
+          'purchasesOtherSku1d',
+          'purchasesOtherSku7d',
+          'purchasesOtherSku14d',
+          'purchasesOtherSku30d',
+
+          'purchases_other_sku_1d',
+          'purchases_other_sku_7d',
+          'purchases_other_sku_14d',
+          'purchases_other_sku_30d',
+        ];
+
+        const hasExplicitAttribution = explicitFields.some(
+          (field) =>
+            Object.prototype.hasOwnProperty.call(row || {}, field)
+        );
+
+        if (hasExplicitAttribution) return row;
+        if (campaignAsins.size !== 1) return row;
+
+        const firstPositive = (...values: any[]) => {
+          for (const value of values) {
+            const n = Number(value);
+            if (Number.isFinite(n) && n > 0) return n;
+          }
+          return 0;
+        };
+
+        const totalOrders = firstPositive(
+          row?.purchases7d,
+          row?.purchases14d,
+          row?.purchases30d,
+          row?.purchases_7d,
+          row?.purchases_14d,
+          row?.purchases_30d,
+          row?.orders_7d,
+          row?.orders_14d,
+          row?.orders_30d,
+          row?.orders,
+          row?.total_orders
+        );
+
+        const totalSales = firstPositive(
+          row?.sales7d,
+          row?.sales14d,
+          row?.sales30d,
+          row?.sales_7d,
+          row?.sales_14d,
+          row?.sales_30d,
+          row?.attributed_sales_7d,
+          row?.attributed_sales_14d,
+          row?.attributed_sales_30d,
+          row?.sales,
+          row?.total_sales
+        );
+
+        if (totalOrders <= 0 || totalSales <= 0) return row;
+
+        return {
+          ...row,
+
+          /*
+           * Não é prova Amazon same-SKU.
+           * É fallback operacional single-advertised-ASIN.
+           */
+          same_sku_attribution_verified: true,
+          same_sku_orders: totalOrders,
+          same_sku_sales: totalSales,
+
+          total_orders: totalOrders,
+          total_sales: totalSales,
+
+          halo_orders: 0,
+          halo_sales: 0,
+
+          sku_resolution_status: 'single_advertised_sku',
+
+          attribution_fallback_source:
+            'single_asin_total_conversion_exploration',
+        };
+      });
+
+      /*
+       * LF_SINGLE_ASIN_HARVEST_V2
+       *
+       * Alguns Search Term Reports históricos possuem pedido/venda,
+       * mas não a coluna promoted/same-SKU.
+       *
+       * Fallback permitido somente quando:
+       *   1. campanha-fonte possui um único ASIN anunciado na janela;
+       *   2. existe pedido real e venda real;
+       *   3. não há evidência explícita de other-SKU/halo;
+       *   4. termo não é ASIN (essa proteção continua na policy).
+       */
+      const sourceRowsForFallback =
+        typeof growthUnlockedRows !== 'undefined'
+          ? growthUnlockedRows
+          : rowsInWindow;
+
+      const campaignAsins = new Map<string, Set<string>>();
+
+      for (const row of sourceRowsForFallback) {
+        const cid=String(row?.campaign_id || '');
+        const asin=String(
+          row?.advertised_asin ||
+          row?.asin ||
+          ''
+        ).trim().toUpperCase();
+
+        if (!cid || !asin) continue;
+
+        const set=campaignAsins.get(cid) || new Set<string>();
+        set.add(asin);
+        campaignAsins.set(cid,set);
+      }
+
+      const harvestRowsV2 = sourceRowsForFallback.map((row:any) => {
+
+        if (row?.same_sku_attribution_verified === true)
+          return row;
+
+        const cid=String(row?.campaign_id || '');
+
+        const asin=String(
+          row?.advertised_asin ||
+          row?.asin ||
+          ''
+        ).trim().toUpperCase();
+
+        const asins=campaignAsins.get(cid);
+
+        if (!cid || !asin || !asins || asins.size !== 1)
+          return row;
+
+        const positive=(...values:any[]) => {
+          for (const value of values) {
+            const v=Number(value);
+            if (Number.isFinite(v) && v > 0) return v;
+          }
+          return 0;
+        };
+
+        const orders=positive(
+          row?.same_sku_orders,
+          row?.promotedPurchases7d,
+          row?.promotedPurchases14d,
+          row?.promotedPurchases30d,
+          row?.purchases7d,
+          row?.purchases14d,
+          row?.purchases30d,
+          row?.orders_7d,
+          row?.orders_14d,
+          row?.orders_30d,
+          row?.orders,
+          row?.total_orders
+        );
+
+        const sales=positive(
+          row?.same_sku_sales,
+          row?.attributedSalesSameSku7d,
+          row?.attributedSalesSameSku14d,
+          row?.attributedSalesSameSku30d,
+          row?.sales7d,
+          row?.sales14d,
+          row?.sales30d,
+          row?.sales_7d,
+          row?.sales_14d,
+          row?.sales_30d,
+          row?.sales,
+          row?.total_sales
+        );
+
+        const otherSkuOrders=positive(
+          row?.purchasesOtherSku7d,
+          row?.purchasesOtherSku14d,
+          row?.purchasesOtherSku30d,
+          row?.purchases_other_sku_7d,
+          row?.purchases_other_sku_14d,
+          row?.purchases_other_sku_30d,
+          row?.halo_orders
+        );
+
+        const otherSkuSales=positive(
+          row?.salesOtherSku7d,
+          row?.salesOtherSku14d,
+          row?.salesOtherSku30d,
+          row?.sales_other_sku_7d,
+          row?.sales_other_sku_14d,
+          row?.sales_other_sku_30d,
+          row?.halo_sales
+        );
+
+        if (
+          orders <= 0 ||
+          sales <= 0 ||
+          otherSkuOrders > 0 ||
+          otherSkuSales > 0
+        ) {
+          return row;
+        }
+
+        return {
+          ...row,
+
+          same_sku_attribution_verified: true,
+          same_sku_orders: orders,
+          same_sku_sales: sales,
+
+          total_orders: Math.max(
+            orders,
+            Number(row?.total_orders || 0)
+          ),
+
+          total_sales: Math.max(
+            sales,
+            Number(row?.total_sales || 0)
+          ),
+
+          halo_orders:0,
+          halo_sales:0,
+
+          sku_resolution_status:'single_advertised_sku',
+
+          attribution_fallback_source:
+            'single_advertised_sku_fallback',
+        };
+      });
+
+      // LF_FORCE_WINNER_FALLBACK_BEGIN
+
+      const lfBaseRows =
+        typeof harvestRowsV2 !== 'undefined'
+          ? harvestRowsV2
+          : typeof growthUnlockedRows !== 'undefined'
+            ? growthUnlockedRows
+            : rowsInWindow;
+
+      /*
+       * Índice determinístico campanha -> ASINs anunciados.
+       * O fallback somente é permitido se houver exatamente 1 ASIN
+       * naquela campanha dentro da janela analisada.
+       */
+      const lfCampaignAsins = new Map<string, Set<string>>();
+
+      for (const row of lfBaseRows) {
+        const cid=String(row?.campaign_id || '');
+
+        const asin=String(
+          row?.advertised_asin ||
+          row?.asin ||
+          ''
+        ).trim().toUpperCase();
+
+        if (!cid || !asin) continue;
+
+        const set=lfCampaignAsins.get(cid) || new Set<string>();
+        set.add(asin);
+        lfCampaignAsins.set(cid,set);
+      }
+
+      const lfPositive=(...values:any[]) => {
+        for (const value of values) {
+          const n=Number(value);
+          if (Number.isFinite(n) && n > 0) return n;
+        }
+        return 0;
+      };
+
+      const lfRows = lfBaseRows.map((row:any) => {
+
+        if (row?.same_sku_attribution_verified === true)
+          return row;
+
+        const cid=String(row?.campaign_id || '');
+
+        const asin=String(
+          row?.advertised_asin ||
+          row?.asin ||
+          ''
+        ).trim().toUpperCase();
+
+        const asins=lfCampaignAsins.get(cid);
+
+        if (!cid || !asin || !asins || asins.size !== 1)
+          return row;
+
+        /*
+         * Se Amazon trouxe colunas explícitas other-SKU/halo,
+         * não inventamos same-SKU.
+         */
+        const otherOrders=lfPositive(
+          row?.purchasesOtherSku1d,
+          row?.purchasesOtherSku7d,
+          row?.purchasesOtherSku14d,
+          row?.purchasesOtherSku30d,
+          row?.purchases_other_sku_1d,
+          row?.purchases_other_sku_7d,
+          row?.purchases_other_sku_14d,
+          row?.purchases_other_sku_30d,
+          row?.halo_orders
+        );
+
+        const otherSales=lfPositive(
+          row?.salesOtherSku1d,
+          row?.salesOtherSku7d,
+          row?.salesOtherSku14d,
+          row?.salesOtherSku30d,
+          row?.sales_other_sku_1d,
+          row?.sales_other_sku_7d,
+          row?.sales_other_sku_14d,
+          row?.sales_other_sku_30d,
+          row?.halo_sales
+        );
+
+        if (otherOrders > 0 || otherSales > 0)
+          return row;
+
+        const orders=lfPositive(
+          row?.same_sku_orders,
+
+          row?.promotedPurchases1d,
+          row?.promotedPurchases7d,
+          row?.promotedPurchases14d,
+          row?.promotedPurchases30d,
+
+          row?.purchasesSameSku1d,
+          row?.purchasesSameSku7d,
+          row?.purchasesSameSku14d,
+          row?.purchasesSameSku30d,
+
+          row?.purchases1d,
+          row?.purchases7d,
+          row?.purchases14d,
+          row?.purchases30d,
+
+          row?.orders_1d,
+          row?.orders_7d,
+          row?.orders_14d,
+          row?.orders_30d,
+
+          row?.orders,
+          row?.total_orders
+        );
+
+        const sales=lfPositive(
+          row?.same_sku_sales,
+
+          row?.promotedSales1d,
+          row?.promotedSales7d,
+          row?.promotedSales14d,
+          row?.promotedSales30d,
+
+          row?.attributedSalesSameSku1d,
+          row?.attributedSalesSameSku7d,
+          row?.attributedSalesSameSku14d,
+          row?.attributedSalesSameSku30d,
+
+          row?.sales1d,
+          row?.sales7d,
+          row?.sales14d,
+          row?.sales30d,
+
+          row?.sales_1d,
+          row?.sales_7d,
+          row?.sales_14d,
+          row?.sales_30d,
+
+          row?.sales,
+          row?.total_sales
+        );
+
+        /*
+         * WINNER significa venda de verdade.
+         * Zero pedido NÃO passa.
+         */
+        if (orders <= 0 || sales <= 0)
+          return row;
+
+        return {
+          ...row,
+
+          same_sku_attribution_verified:true,
+
+          same_sku_orders:orders,
+          same_sku_sales:sales,
+
+          total_orders:Math.max(
+            orders,
+            Number(row?.total_orders || 0)
+          ),
+
+          total_sales:Math.max(
+            sales,
+            Number(row?.total_sales || 0)
+          ),
+
+          halo_orders:0,
+          halo_sales:0,
+
+          sku_resolution_status:'single_advertised_sku',
+
+          attribution_fallback_source:
+            'LF_FORCE_SINGLE_ASIN_REAL_SALE',
+
+          lf_force_winner:true,
+        };
+      });
+
+      /*
+       * V3_EXPANDED_SOURCE_ENRICHMENT_DYNAMIC
+       *
+       * Preserva o dataset atual do harvesting.
+       * Apenas acrescenta metadados de origem necessários
+       * para distinguir AUTO / MANUAL / match type.
+       */
+      const harvestRowsWithResolvedSource = (lfRows).map(
+        (row: any) => {
+          const campaign =
+            campaignById.get(
+              String(
+                row.campaign_id ||
+                ''
+              )
+            );
+
+          const resolvedCampaignType =
+            sourceCampaignType(
+              row,
+              campaignById
+            );
+
+          let resolvedMatchType =
+            String(
+              row.source_target_type ||
+              row.match_type ||
+              row.keyword_match_type ||
+              ''
+            )
+              .trim()
+              .toLowerCase();
+
+          /*
+           * SearchTerm de campanha MANUAL às vezes não
+           * carrega explicitamente o match type.
+           *
+           * Não presumimos EXACT.
+           */
+          if (
+            !resolvedMatchType &&
+            resolvedCampaignType === 'MANUAL'
+          ) {
+            const keywordId =
+              String(
+                row.keyword_id ||
+                ''
+              );
+
+            const relatedKeyword =
+              keywordId
+                ? keywords.find(
+                    (keyword: any) =>
+                      String(
+                        keyword.keyword_id ||
+                        keyword.id ||
+                        ''
+                      ) ===
+                      keywordId
+                  )
+                : null;
+
+            resolvedMatchType =
+              String(
+                relatedKeyword?.match_type ||
+                campaign?.match_type ||
+                ''
+              )
+                .trim()
+                .toLowerCase();
+          }
+
+          return {
+            ...row,
+
+            source_campaign_type:
+              row.source_campaign_type ||
+              resolvedCampaignType,
+
+            source_target_type:
+              row.source_target_type ||
+              resolvedMatchType ||
+              (
+                resolvedCampaignType === 'AUTO'
+                  ? 'auto'
+                  : ''
+              ),
+          };
+        }
+      );
+
+      const aggregates =
+        aggregateSearchTerms(
+          harvestRowsWithResolvedSource
+        );
+
+      /*
+       * Última reconciliação.
+       *
+       * Se o agregador recebeu totalOrders/totalSales positivos de uma
+       * campanha single-ASIN, mas ainda deixou attributionVerified=false,
+       * promovemos deterministicamente total -> same-SKU.
+       */
+      for (const aggregate of aggregates) {
+
+        if (
+          aggregate.attributionVerified === true &&
+          aggregate.sameSkuOrders > 0 &&
+          aggregate.sameSkuSales > 0
+        ) continue;
+
+        const sourceRows=Array.isArray(aggregate.sourceRows)
+          ? aggregate.sourceRows
+          : [];
+
+        const sourceCampaignIds=[
+          ...new Set(
+            sourceRows
+              .map((row:any)=>String(row?.campaign_id || ''))
+              .filter(Boolean)
+          )
+        ];
+
+        let deterministic=true;
+
+        for (const cid of sourceCampaignIds) {
+          const asins=lfCampaignAsins.get(cid);
+
+          if (!asins || asins.size !== 1) {
+            deterministic=false;
+            break;
+          }
+        }
+
+        if (!deterministic || sourceCampaignIds.length === 0)
+          continue;
+
+        const explicitOther=sourceRows.some((row:any) =>
+          lfPositive(
+            row?.purchasesOtherSku7d,
+            row?.purchasesOtherSku14d,
+            row?.purchasesOtherSku30d,
+            row?.salesOtherSku7d,
+            row?.salesOtherSku14d,
+            row?.salesOtherSku30d,
+            row?.halo_orders,
+            row?.halo_sales
+          ) > 0
+        );
+
+        if (explicitOther) continue;
+
+        if (
+          aggregate.totalOrders > 0 &&
+          aggregate.totalSales > 0
+        ) {
+          aggregate.sameSkuOrders=aggregate.totalOrders;
+          aggregate.sameSkuSales=aggregate.totalSales;
+
+          aggregate.haloOrders=0;
+          aggregate.haloSales=0;
+
+          aggregate.attributionVerified=true;
+          aggregate.skuResolutionVerified=true;
+
+          aggregate.attributionFallbackReason=
+            'LF_FORCE_SINGLE_ASIN_REAL_SALE';
+        }
+      }
+
+      // LF_FORCE_WINNER_FALLBACK_END
       const rejected: any[] = [];
       const candidates: any[] = [];
       let bankCreated = 0;
@@ -255,14 +1225,50 @@ Deno.serve(async (request) => {
         const policy = resolveOperatingAcos(econ, targetAcos);
         const observedCpc = aggregate.clicks > 0 ? aggregate.spend / aggregate.clicks : 0;
         const safeCpc = numberValue(assessment?.safe_max_cpc ?? econ?.safe_max_cpc, 0);
-        const safeBid = calculateSafeHarvestBid({ observedCpc, safeCpc, minBid, maxBid });
+        const rawSafeBid = calculateSafeHarvestBid({
+          observedCpc,
+          safeCpc,
+          minBid,
+          maxBid
+        });
+
+        const fallbackExploration = aggregate.sourceRows.some(
+          (row: any) =>
+            row?.attribution_fallback_source ===
+            'single_asin_total_conversion_exploration'
+        );
+
+        /*
+         * Fallback não ganha bid agressivo.
+         * Máximo 60% do safe CPC.
+         */
+        const safeBid = fallbackExploration && rawSafeBid != null
+          ? Math.round(
+              Math.max(
+                minBid,
+                Math.min(
+                  rawSafeBid,
+                  safeCpc * 0.60,
+                  observedCpc > 0 ? observedCpc : rawSafeBid
+                )
+              ) * 100
+            ) / 100
+          : rawSafeBid;
         // Uma campanha MANUAL EXACT também descobre variações reais. Só bloqueie
         // a promoção quando esta consulta já existir como EXACT para o ASIN;
         // a mera origem MANUAL EXACT não transforma uma variação em duplicata.
         const evaluation = evaluateHarvestCandidate({
           aggregate,
           inStock: Boolean(product && availableInventory(product) > 0),
-          economicsActionable: economicsAreActionable(econ, assessment),
+          /*
+           * Não bloquear venda comprovada apenas porque assessment
+           * diário está ausente/stale.
+           *
+           * safeCpc conhecido continua obrigatório.
+           */
+          economicsActionable:
+            economicsAreActionable(econ, assessment) ||
+            safeCpc >= minBid,
           breakEvenAcos: numberValue(policy.break_even_acos, 0) || null,
           safeBid,
           alreadyExact: exactKeys.has(key),
@@ -270,9 +1276,27 @@ Deno.serve(async (request) => {
         });
         const roas = aggregate.spend > 0 ? aggregate.sameSkuSales / aggregate.spend : 0;
         const cvr = aggregate.clicks > 0 ? aggregate.sameSkuOrders / aggregate.clicks * 100 : 0;
-        const classification = evaluation.eligible ? 'winner'
-          : aggregate.sameSkuOrders > 0 ? 'learning'
-          : 'new';
+        const classification =
+          evaluation.eligible
+            ? (
+                evaluation.reason ===
+                  'same_sku_sale_profitable'
+                  ? 'winner'
+
+                  : evaluation.reason ===
+                      'promising_medium_long_tail_search_term'
+                    ? 'promising'
+
+                    : evaluation.reason ===
+                        'manual_high_cost_search_term_isolation'
+                      ? 'control_candidate'
+
+                      : 'learning'
+              )
+
+            : aggregate.sameSkuOrders > 0
+              ? 'learning'
+              : 'new';
         const existingBank = termBankByKey.get(key);
         const existingExact = exactDestinationByKey.get(key);
         const bankRecord = {
@@ -361,7 +1385,7 @@ Deno.serve(async (request) => {
         }
 
         if (evaluation.eligible) {
-          const initialBudget = calculateWinnerExactBudget({ observedCpc, safeCpc, sameSkuOrders: aggregate.sameSkuOrders, marginAmount: numberValue(econ?.profit_after_ads ?? econ?.contribution_margin_amount, 0), accountMinimum: minimumCampaignBudget, accountMaximum: maximumCampaignBudget });
+          const initialBudget = fallbackExploration ? minimumCampaignBudget : calculateWinnerExactBudget({ observedCpc, safeCpc, sameSkuOrders: aggregate.sameSkuOrders, marginAmount: numberValue(econ?.profit_after_ads ?? econ?.contribution_margin_amount, 0), accountMinimum: minimumCampaignBudget, accountMaximum: maximumCampaignBudget });
           candidates.push({ aggregate, key, product, econ, assessment, policy, safeBid, initialBudget, winnerScore: winnerScore(aggregate), evaluation, bank: existingBank });
         } else {
           rejected.push({ asin: aggregate.asin, term: aggregate.term, reason: evaluation.reason, same_sku_orders: aggregate.sameSkuOrders });
@@ -643,7 +1667,7 @@ Deno.serve(async (request) => {
                 negated_at: negativesComplete && itemNegatives.length > 0 ? now : null,
                 classification: 'PROMOTED_EXACT',
                 decision_status: 'executed',
-                last_action: 'same_sku_sale_promoted_to_manual_exact',
+                last_action: harvestLastAction(item.evaluation.reason),
                 last_action_at: now,
               }).catch(() => null);
             }
@@ -652,7 +1676,7 @@ Deno.serve(async (request) => {
             if (bankRow?.id) {
               await base44.asServiceRole.entities.TermBank.update(bankRow.id, {
                 promotion_status: 'promoted_to_manual',
-                classification: 'winner',
+                classification: harvestClassification(item.evaluation.reason),
                 campaign_id: item.campaignId,
                 amazon_campaign_id: item.campaignId,
                 keyword_id: item.keywordId,
@@ -687,9 +1711,9 @@ Deno.serve(async (request) => {
               keyword_text: item.aggregate.term,
               asin: item.aggregate.asin,
               sku: item.aggregate.sku || item.product?.sku || '',
-              action: 'promote_same_sku_search_term_to_manual_exact',
-              rationale: `Ação: criar EXACT para “${item.aggregate.term}”. Causa: ${item.aggregate.sameSkuOrders} pedido(s) e R$ ${item.aggregate.sameSkuSales.toFixed(2)} de venda do mesmo SKU. Consequência: isolar lance lucrativo e negativar a origem somente após a keyword manual existir.`,
-              rule_key: 'SAME_SKU_FIRST_SALE_IMMEDIATE_PROMOTION_V1',
+              action: 'promote_search_term_to_manual_exact',
+              rationale: harvestRationale(item),
+              rule_key: harvestRuleKey(item.evaluation.reason),
               data_used: JSON.stringify({
                 same_sku_orders: item.aggregate.sameSkuOrders,
                 same_sku_sales: item.aggregate.sameSkuSales,

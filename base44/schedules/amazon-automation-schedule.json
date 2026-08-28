@@ -5,157 +5,349 @@
       "name": "Amazon Ads report polling - every 10 minutes",
       "function": "pollAmazonAdsReportJobs",
       "cron": "*/10 * * * *",
-      "payload": { "_service_role": true, "max_jobs": 10 }
+      "payload": {
+        "_service_role": true,
+        "max_jobs": 10
+      }
     },
     {
       "name": "Amazon intraday campaign metrics - every 15 minutes",
       "function": "syncAmazonIntradayCampaignMetrics",
       "cron": "2,17,32,47 * * * *",
       "run_on_startup": true,
-      "payload": { "_service_role": true, "action": "auto", "trigger_type": "scheduler_intraday_startup" }
+      "payload": {
+        "_service_role": true,
+        "action": "auto",
+        "trigger_type": "scheduler_intraday_startup"
+      }
     },
     {
       "name": "Amazon campaign state reconciliation - every 15 minutes",
       "function": "syncAdsCampaignStatesV2",
       "cron": "1,16,31,46 * * * *",
-      "payload": { "_service_role": true, "trigger_type": "scheduler_intraday_state" }
+      "payload": {
+        "_service_role": true,
+        "trigger_type": "scheduler_intraday_state"
+      }
     },
     {
-      "name": "Amazon offer and buyability verification - every 10 minutes",
+      "name": "Amazon offer and buyability verification - hourly",
       "function": "syncAmazonOfferAvailability",
-      "cron": "1,11,21,31,41,51 * * * *",
-      "payload": { "_service_role": true }
+      "cron": "1 * * * *",
+      "payload": {
+        "_service_role": true
+      }
     },
     {
       "name": "AUTO campaign repair queue - one safe item every 5 minutes",
       "function": "processAutoCampaignRepairQueueV2",
       "cron": "*/5 * * * *",
-      "payload": { "_service_role": true }
+      "payload": {
+        "_service_role": true
+      }
     },
     {
       "name": "Operational queue reconciliation - every 2 hours",
       "function": "reconcileOperationalQueues",
       "cron": "17 */2 * * *",
-      "payload": { "_service_role": true, "trigger_type": "scheduler_queue_reconciliation" }
+      "payload": {
+        "_service_role": true,
+        "trigger_type": "scheduler_queue_reconciliation"
+      }
     },
     {
       "name": "Closed-day Amazon reports self-heal - hourly + startup",
       "function": "ensureDailyReportsCurrent",
       "cron": "7 * * * *",
       "run_on_startup": true,
-      "payload": { "_service_role": true, "trigger_type": "scheduler_reports_self_heal" }
+      "payload": {
+        "_service_role": true,
+        "trigger_type": "scheduler_reports_self_heal"
+      }
     },
     {
       "name": "Motor history cleanup - daily + startup",
       "function": "pruneMotorDecisionHistory",
       "cron": "37 3 * * *",
       "run_on_startup": true,
-      "payload": { "_service_role": true, "dry_run": false, "max_delete": 5000, "trigger_type": "scheduler_motor_history_cleanup" }
-    },
-    {
-      "name": "Sales Mode - winner harvesting and aggressive sales recovery - every 15 minutes",
-      "function": "runSalesMode",
-      "cron": "4,19,34,49 * * * *",
-      "run_on_startup": true,
-      "payload": { "_service_role": true, "dry_run": false, "trigger_type": "scheduler_sales_mode_v1", "max_new_exact_today": 20, "tomorrow_new_exact_target": 10, "max_actions": 180, "max_bid_step_pct": 15, "competitive_bid_step_pct": 10, "max_budget_step_pct": 15, "lookback_days": 65, "waste_lookback_days": 7, "waste_min_age_days": 7 }
-    },
-    {
-      "name": "Weekly AI Decision Manager - Sunday 07:15 BRT",
-      "function": "runWeeklyAIDecisionManager",
-      "cron": "15 7 * * 0",
-      "payload": { "_service_role": true, "dry_run": true, "trigger_type": "scheduler_weekly_ai_engine_review" }
-    },
-    {
-      "name": "Canonical daily close, bootstrap-aware audit and repricing - 01:25 BRT",
-      "function": "runCanonicalDecisionCycle",
-      "cron": "25 1 * * *",
-      "payload": { "_service_role": true, "dry_run": false, "daily_close": true, "full_repricing_evaluation": true, "trigger_type": "scheduler_daily_close", "sales_engine_version": "vendas-v1" }
+      "payload": {
+        "_service_role": true,
+        "dry_run": false,
+        "max_delete": 5000,
+        "trigger_type": "scheduler_motor_history_cleanup"
+      }
     },
     {
       "name": "Canonical decision executor - every 15 minutes",
       "function": "executeApprovedDecisionQueue",
       "cron": "6,21,36,51 * * * *",
       "run_on_startup": true,
-      "payload": { "_service_role": true, "max_decisions": 25 }
+      "payload": {
+        "_service_role": true,
+        "max_decisions": 25
+      }
     },
     {
       "name": "Canonical Amazon decision confirmation - every 15 minutes",
       "function": "confirmExecutedDecisions",
       "cron": "9,24,39,54 * * * *",
       "run_on_startup": true,
-      "payload": { "_service_role": true }
+      "payload": {
+        "_service_role": true
+      }
     },
     {
       "name": "Manual bid parity reconciliation - daily 04:10 BRT",
       "function": "reconcileManualBidParity",
       "cron": "10 4 * * *",
-      "payload": { "_service_role": true }
+      "payload": {
+        "_service_role": true
+      }
     },
     {
       "name": "Ads automation E2E health audit - every 15 minutes",
       "function": "auditAdsAutomationE2E",
       "cron": "13,28,43,58 * * * *",
-      "payload": { "_service_role": true, "trigger_type": "scheduler_e2e_audit" }
+      "payload": {
+        "_service_role": true,
+        "trigger_type": "scheduler_e2e_audit"
+      }
     },
     {
       "name": "Repricing transport queue - every 5 minutes",
       "function": "runAutomaticRepricing",
       "cron": "*/5 * * * *",
-      "payload": { "_service_role": true, "operation": "process_queue", "max_actions": 20, "transport_only": true }
+      "payload": {
+        "_service_role": true,
+        "operation": "process_queue",
+        "max_actions": 20,
+        "transport_only": true
+      }
     },
     {
       "name": "Repricing transport reconciliation - 04:43 BRT",
       "function": "runAutomaticRepricing",
       "cron": "43 4 * * *",
-      "payload": { "_service_role": true, "operation": "reconcile", "max_actions": 100, "transport_only": true }
+      "payload": {
+        "_service_role": true,
+        "operation": "reconcile",
+        "max_actions": 100,
+        "transport_only": true
+      }
     },
     {
       "name": "Finance events freshness - 05:50 BRT",
       "function": "syncFinanceEventsFromSpApi",
       "cron": "50 5 * * *",
-      "payload": { "_service_role": true }
+      "payload": {
+        "_service_role": true
+      }
     },
     {
       "name": "Weekend/holiday daypart learning - daily 06:10 BRT",
       "function": "runWeekendHolidayDaypartLearning",
       "cron": "10 6 * * *",
-      "payload": { "_service_role": true, "dry_run": false, "trigger_type": "scheduler_weekend_holiday_learning" }
+      "payload": {
+        "_service_role": true,
+        "dry_run": false,
+        "trigger_type": "scheduler_weekend_holiday_learning"
+      }
     },
     {
       "name": "Amazon data consistency reconciliation - daily after close",
       "function": "auditAmazonDataConsistency",
       "cron": "10 2 * * *",
-      "payload": { "_service_role": true, "trigger_type": "scheduler_daily_reconciliation" }
+      "payload": {
+        "_service_role": true,
+        "trigger_type": "scheduler_daily_reconciliation"
+      }
     },
     {
       "name": "Finance events refresh - 13:20 and 20:20 BRT",
       "function": "syncFinanceEventsFromSpApi",
       "cron": "20 13,20 * * *",
-      "payload": { "_service_role": true }
+      "payload": {
+        "_service_role": true
+      }
     },
     {
       "name": "Daily decision outcome monitor - 03:30 BRT",
       "function": "monitorRulePerformance",
       "cron": "30 3 * * *",
-      "payload": { "_service_role": true }
+      "payload": {
+        "_service_role": true
+      }
     },
     {
-      "name": "Intraday GPT sales and risk supervisor - every 2 hours 08-22 BRT",
-      "function": "runCanonicalWeeklyDecisionReview",
-      "cron": "15 8-22/2 * * *",
-      "payload": { "_service_role": true, "trigger_type": "scheduler_intraday_gpt_sales_supervisor", "sales_engine_version": "vendas-v1", "growth_mode": true }
+      "name": "Profit paused campaign recovery - every 15 minutes",
+      "function": "runProfitPausedCampaignRecovery",
+      "cron": "7,22,37,52 * * * *",
+      "payload": {
+        "_service_role": true,
+        "dry_run": false,
+        "max_reactivations": 8,
+        "trigger_type": "scheduler_profit_paused_recovery"
+      }
     },
     {
-      "name": "Canonical weekly GPT supervisor - Sunday 21:00 BRT",
-      "function": "runCanonicalWeeklyDecisionReview",
+      "name": "Profit blocked decision reconciliation - every 15 minutes",
+      "function": "reconcileProfitBlockedDecisions",
+      "cron": "9,24,39,54 * * * *",
+      "payload": {
+        "_service_role": true,
+        "trigger_type": "scheduler_profit_block_reconcile"
+      }
+    },
+    {
+      "name": "Zero delivery 72h recovery - every 3 hours",
+      "function": "runRetroactiveZeroDelivery72h",
+      "cron": "17 */3 * * *",
+      "payload": {
+        "_service_role": true,
+        "dry_run": false,
+        "trigger_type": "scheduler_zero_delivery_72h_10cent"
+      }
+    },
+    {
+      "name": "Canonical Profit Engine V3 - every 15 minutes",
+      "function": "runCanonicalDecisionCycle",
+      "cron": "7,22,37,52 * * * *",
+      "payload": {
+        "_service_role": true,
+        "dry_run": false,
+        "trigger_type": "canonical_profit_engine_v3_scheduler",
+        "sku_by_sku_review": true,
+        "product_level_objective": "generate_profitable_sales_for_every_eligible_sku",
+        "portfolio_objective": "maximize_expected_profit_with_sku_sales_coverage",
+        "require_sku_context": true
+      }
+    },
+    {
+      "name": "Canonical Profit Engine V3 - Weekly AI Review - Sunday 21:00 BRT",
+      "function": "runCanonicalDecisionCycle",
       "cron": "0 21 * * 0",
-      "payload": { "_service_role": true, "trigger_type": "scheduler_weekly_gpt_supervisor", "sales_engine_version": "vendas-v1" }
+      "payload": {
+        "_service_role": true,
+        "dry_run": false,
+        "weekly_ai_review": true,
+        "autonomous_adjustments": true,
+        "objective": "maximize_expected_profit",
+        "secondary_objective": "sales_growth_with_positive_incremental_expected_profit",
+        "review_window_days": 7,
+        "comparison_window_days": 30,
+        "review_existing_campaigns": true,
+        "retroactive": true,
+        "force_full_scan": true,
+        "preserve_hard_guards": true,
+        "trigger_type": "weekly_ai_review",
+        "sku_by_sku_review": true,
+        "product_level_objective": "generate_profitable_sales_for_every_eligible_sku",
+        "portfolio_objective": "maximize_expected_profit_with_sku_sales_coverage",
+        "require_sku_context": true
+      }
     },
     {
-      "name": "Weekly GPT campaign prelection and discovery - Sunday 22:00 BRT",
-      "function": "runWeeklyMotorPrelection",
-      "cron": "0 22 * * 0",
-      "payload": { "_service_role": true, "dry_run": false }
+      "name": "Canonical Profit Engine V3 - Daily Metrics Refresh - 22:45 BRT",
+      "function": "syncAmazonIntradayCampaignMetrics",
+      "cron": "45 22 * * *",
+      "payload": {
+        "_service_role": true,
+        "action": "auto",
+        "trigger_type": "v3_daily_pre_review_metrics"
+      }
+    },
+    {
+      "name": "Canonical Profit Engine V3 - Daily AI Review - 23:00 BRT",
+      "function": "runCanonicalDecisionCycle",
+      "cron": "0 23 * * *",
+      "payload": {
+        "_service_role": true,
+        "dry_run": false,
+        "daily_ai_review": true,
+        "weekly_ai_review": true,
+        "autonomous_adjustments": true,
+        "objective": "maximize_expected_profit",
+        "secondary_objective": "sales_growth_with_positive_incremental_expected_profit",
+        "product_level_objective": "generate_profitable_sales_for_every_eligible_sku",
+        "portfolio_objective": "maximize_expected_profit_with_sku_sales_coverage",
+        "review_window_days": 7,
+        "comparison_window_days": 30,
+        "force": true,
+        "force_full_scan": true,
+        "review_existing_campaigns": true,
+        "retroactive": true,
+        "sku_by_sku_review": true,
+        "require_sku_context": true,
+        "winner_harvest": true,
+        "include_paused_campaign_history": true,
+        "max_terms_per_asin": 13,
+        "same_sku_harvest_required": true,
+        "auto_spend_control": true,
+        "zero_delivery_recovery": true,
+        "campaign_rebuild": true,
+        "campaign_replacement": true,
+        "kickoff_review": true,
+        "restock_recovery": true,
+        "bid_optimization": true,
+        "budget_optimization": true,
+        "contradiction_recovery": true,
+        "resolve_blocked_with_alternative": true,
+        "blocked_decision_visibility": "internal",
+        "no_decision_when_no_safe_alternative": true,
+        "preserve_hard_guards": true,
+        "confirmation_required": true,
+        "trigger_type": "v3_daily_ai_review"
+      }
+    },
+    {
+      "name": "Canonical Profit Engine V3 - Daily Queue Execution - 23:20 BRT",
+      "function": "executeApprovedDecisionQueue",
+      "cron": "20 23 * * *",
+      "payload": {
+        "_service_role": true,
+        "max_decisions": 100,
+        "expedited": true,
+        "trigger_type": "v3_daily_post_review_execution"
+      }
+    },
+    {
+      "name": "Canonical Profit Engine V3 - Daily Amazon Confirmation - 23:35 BRT",
+      "function": "confirmExecutedDecisions",
+      "cron": "35 23 * * *",
+      "payload": {
+        "_service_role": true,
+        "trigger_type": "v3_daily_amazon_confirmation"
+      }
+    },
+    {
+      "name": "Canonical Profit Engine V3 - Daily Remote Truth - 23:50 BRT",
+      "function": "syncAdsCampaignStatesV2",
+      "cron": "50 23 * * *",
+      "payload": {
+        "_service_role": true,
+        "trigger_type": "v3_daily_remote_truth"
+      }
+    },
+    {
+      "name": "Canonical Profit Engine V3 - Operational Queue Reconciliation - Hourly",
+      "function": "reconcileOperationalQueues",
+      "cron": "10 * * * *",
+      "payload": {
+        "_service_role": true,
+        "dry_run": false,
+        "skip_history_prune": false,
+        "trigger_type": "v3_hourly_queue_reconciliation"
+      }
+    },
+    {
+      "name": "Canonical Profit Engine V3 - Decision Outcome Reconciliation",
+      "function": "reconcileV3DecisionOutcomes",
+      "cron": "5 * * * *",
+      "payload": {
+        "_service_role": true,
+        "trigger_type": "scheduled_v3_decision_reconciliation"
+      },
+      "enabled": true
     }
   ]
 }

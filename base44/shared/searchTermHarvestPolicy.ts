@@ -333,23 +333,259 @@ export function evaluateHarvestCandidate(input: {
   safeBid: number | null;
   alreadyExact: boolean;
   alreadyPromoted: boolean;
-}): { eligible: boolean; reason: string; sameSkuAcos: number | null } {
-  const { aggregate } = input;
-  const sameSkuAcos = aggregate.sameSkuSales > 0 ? aggregate.spend / aggregate.sameSkuSales * 100 : null;
-  if (isAsinSearchTerm(aggregate.term)) return { eligible: false, reason: 'product_target_not_keyword', sameSkuAcos };
-  if (!aggregate.skuResolutionVerified || !aggregate.asin) return { eligible: false, reason: 'sku_unresolved', sameSkuAcos };
+}): {
+  eligible: boolean;
+  reason: string;
+  sameSkuAcos: number | null;
+} {
+  const aggregate = input.aggregate;
 
-  // NEW: Allow fallback single_advertised_sku as verified attribution
-  const hasValidAttribution = aggregate.attributionVerified || aggregate.attributionFallbackReason?.includes('single_advertised_sku_fallback');
-  if (!hasValidAttribution) return { eligible: false, reason: 'same_sku_attribution_unavailable', sameSkuAcos };
+  const sameSkuAcos =
+    aggregate.sameSkuSales > 0
+      ? aggregate.spend /
+        aggregate.sameSkuSales *
+        100
+      : null;
 
-  if (aggregate.sameSkuOrders < 1 || aggregate.sameSkuSales <= 0) return { eligible: false, reason: 'no_same_sku_sale', sameSkuAcos };
-  if (!input.inStock) return { eligible: false, reason: 'out_of_stock', sameSkuAcos };
-  if (!input.economicsActionable || input.safeBid == null) return { eligible: false, reason: 'unsafe_or_missing_economics', sameSkuAcos };
-  if (input.breakEvenAcos && sameSkuAcos != null && sameSkuAcos >= input.breakEvenAcos) return { eligible: false, reason: 'same_sku_acos_above_break_even', sameSkuAcos };
-  if (input.alreadyExact) return { eligible: false, reason: 'exact_keyword_already_active', sameSkuAcos };
-  if (input.alreadyPromoted) return { eligible: false, reason: 'promotion_already_registered', sameSkuAcos };
-  return { eligible: true, reason: 'same_sku_sale_profitable', sameSkuAcos };
+  /*
+   * HARD GUARDS
+   */
+  if (
+    isAsinSearchTerm(
+      aggregate.term
+    )
+  ) {
+    return {
+      eligible:false,
+      reason:'product_target_not_keyword',
+      sameSkuAcos,
+    };
+  }
+
+  if (
+    !aggregate.skuResolutionVerified ||
+    !aggregate.asin
+  ) {
+    return {
+      eligible:false,
+      reason:'sku_unresolved',
+      sameSkuAcos,
+    };
+  }
+
+  if (!input.inStock) {
+    return {
+      eligible:false,
+      reason:'out_of_stock',
+      sameSkuAcos,
+    };
+  }
+
+  if (input.alreadyExact) {
+    return {
+      eligible:false,
+      reason:'exact_keyword_already_active',
+      sameSkuAcos,
+    };
+  }
+
+  if (input.alreadyPromoted) {
+    return {
+      eligible:false,
+      reason:'promotion_already_registered',
+      sameSkuAcos,
+    };
+  }
+
+  /*
+   * ORIGEM
+   */
+  const autoSource =
+    aggregate.sources.some(
+      source =>
+        String(
+          source.campaignType || ''
+        )
+          .toUpperCase()
+          .includes('AUTO')
+    );
+
+  const manualNonExactSource =
+    aggregate.sources.some(
+      source => {
+        const type =
+          String(
+            source.campaignType || ''
+          ).toUpperCase();
+
+        const match =
+          canonicalMatchType(
+            source.matchType,
+            source.campaignType
+          );
+
+        return (
+          type.includes('MANUAL')
+          &&
+          match !== 'exact'
+        );
+      }
+    );
+
+  /*
+   * VENDA SAME-SKU
+   *
+   * Venda comprovada tem precedência absoluta sobre
+   * os thresholds de descoberta.
+   */
+  const sameSkuWinner =
+    (
+      aggregate.sameSkuOrders >= 1
+      ||
+      aggregate.sameSkuSales > 0
+    )
+    &&
+    (
+      aggregate.attributionVerified
+      ||
+      String(
+        aggregate.attributionFallbackReason || ''
+      ).includes(
+        'single_advertised_sku_fallback'
+      )
+    );
+
+  if (sameSkuWinner) {
+
+    /*
+     * Mesmo winner precisa de bid seguro para criação.
+     * Não é rejeição por falta de evidência.
+     */
+    if (
+      input.safeBid == null ||
+      numberValue(input.safeBid) <= 0
+    ) {
+      return {
+        eligible:false,
+        reason:'winner_requires_safe_bid_repair',
+        sameSkuAcos,
+      };
+    }
+
+    if (autoSource) {
+      return {
+        eligible:true,
+        reason:'auto_same_sku_sale_force_exact',
+        sameSkuAcos,
+      };
+    }
+
+    if (manualNonExactSource) {
+      return {
+        eligible:true,
+        reason:'manual_same_sku_sale_force_exact',
+        sameSkuAcos,
+      };
+    }
+
+    return {
+      eligible:true,
+      reason:'same_sku_sale_force_exact',
+      sameSkuAcos,
+    };
+  }
+
+  /*
+   * SEM VENDA:
+   * economics continuam obrigatórios.
+   */
+  if (
+    !input.economicsActionable ||
+    input.safeBid == null ||
+    numberValue(input.safeBid) <= 0
+  ) {
+    return {
+      eligible:false,
+      reason:'unsafe_or_missing_economics',
+      sameSkuAcos,
+    };
+  }
+
+  const words =
+    normalizeSearchTerm(
+      aggregate.term
+    )
+      .split(' ')
+      .filter(Boolean)
+      .length;
+
+  const ctr =
+    aggregate.impressions > 0
+      ? aggregate.clicks /
+        aggregate.impressions
+      : 0;
+
+  const observedCpc =
+    aggregate.clicks > 0
+      ? aggregate.spend /
+        aggregate.clicks
+      : 0;
+
+  const safeBid =
+    numberValue(
+      input.safeBid
+    );
+
+  /*
+   * PROMISSOR SEM VENDA
+   */
+  const promising =
+    words >= 3 &&
+    words <= 9 &&
+    aggregate.impressions >= 200 &&
+    aggregate.clicks >= 2 &&
+    ctr >= 0.004 &&
+    (
+      observedCpc <= 0
+      ||
+      observedCpc <=
+        safeBid * 1.25
+    );
+
+  if (promising) {
+    return {
+      eligible:true,
+      reason:
+        'promising_medium_long_tail_search_term',
+      sameSkuAcos,
+    };
+  }
+
+  /*
+   * MANUAL BROAD/PHRASE CARA
+   */
+  const manualHighCost =
+    manualNonExactSource &&
+    words >= 2 &&
+    aggregate.impressions >= 150 &&
+    aggregate.clicks >= 5 &&
+    observedCpc >
+      safeBid * 1.10;
+
+  if (manualHighCost) {
+    return {
+      eligible:true,
+      reason:
+        'manual_high_cost_search_term_isolation',
+      sameSkuAcos,
+    };
+  }
+
+  return {
+    eligible:false,
+    reason:'insufficient_harvest_evidence',
+    sameSkuAcos,
+  };
 }
 
 export function matchesRequestedCampaignType(requested: unknown, actual: unknown): boolean {

@@ -1,5 +1,69 @@
 import { estimateBayesianConversion, probabilityAtLeastOneSale } from './marketplaceDecisionMath.ts';
 
+
+/*
+ * V3_STOCK_COVERAGE_SALES_PRESERVATION
+ *
+ * Estoque é guardrail, não objetivo de redução de vendas.
+ *
+ * >10 dias cobertura:
+ *   NÃO reduzir bid por estoque.
+ *
+ * 7-10 dias:
+ *   monitorar; decisão continua econômica.
+ *
+ * 4-6 dias:
+ *   redução somente se houver risco concreto de ruptura.
+ *
+ * 1-3 dias:
+ *   desaceleração defensiva permitida.
+ *
+ * 0:
+ *   hard guard / pause.
+ */
+
+/*
+ * V3_MIN_SAMPLE_SALES_PRESERVATION
+ *
+ * Não reduzir winner ou campanha promissora por amostra curta.
+ *
+ * Exemplos:
+ * - 1 venda / 1 clique:
+ *   winner early signal -> HOLD / possível scale posterior.
+ *
+ * - CPC alto isolado:
+ *   não reduzir sem contexto de conversão e lucro.
+ *
+ * - ACoS ruim em amostra mínima:
+ *   aguardar evidência suficiente salvo gasto destrutivo.
+ */
+
+/*
+ * V3_BID_BIDIRECTIONAL_CONTRACT
+ *
+ * O motor NÃO é um motor de redução.
+ *
+ * Deve haver decisões nos dois sentidos:
+ *
+ * AUMENTAR BID:
+ * - winner com lucro esperado positivo;
+ * - ACoS confortavelmente abaixo do teto;
+ * - ROAS/CVR saudáveis;
+ * - baixa exposição;
+ * - estoque suficiente;
+ * - safe CPC permite.
+ *
+ * REDUZIR BID:
+ * - waste comprovado;
+ * - ACoS/CPC economicamente destrutivo;
+ * - gasto alto sem conversão;
+ * - risco real de ruptura 1-3 dias.
+ *
+ * HOLD:
+ * - amostra insuficiente;
+ * - estoque >10 dias sem outro problema econômico;
+ * - early winner ainda sem amostra de scale.
+ */
 export type CanonicalBidAction =
   | 'HOLD'
   | 'INCREASE'
@@ -134,7 +198,39 @@ function bidResult(
   let proposedBid: number | null = null;
   if (bounded !== 0) {
     const raw = input.currentBid * (1 + bounded);
-    proposedBid = roundMoney(bounded > 0 ? Math.min(raw, input.safeMaxCpc) : Math.max(0.02, raw));
+
+    /*
+     * V3_SAFE_CPC_NO_ROUNDING_OVERSHOOT
+     *
+     * Exemplo:
+     * safeMaxCpc real = 0.805
+     *
+     * roundMoney(0.805) poderia produzir 0.81.
+     *
+     * Para aumento, o teto monetário precisa ser truncado
+     * para baixo em centavos. O motor nunca pode ultrapassar
+     * o safe CPC devido apenas a arredondamento.
+     */
+    const safeMoneyCeiling =
+      Math.floor(
+        (
+          Number(input.safeMaxCpc) +
+          1e-9
+        ) *
+        100
+      ) /
+      100;
+
+    proposedBid =
+      bounded > 0
+        ? Math.min(
+            roundMoney(raw),
+            safeMoneyCeiling
+          )
+        : Math.max(
+            0.02,
+            roundMoney(raw)
+          );
     const actual = input.currentBid > 0 ? (proposedBid - input.currentBid) / input.currentBid : 0;
     if (bounded > 0 && actual > 0.15) proposedBid = Math.floor(input.currentBid * 1.15 * 100) / 100;
     if (bounded < 0 && -actual > 0.20) proposedBid = Math.ceil(input.currentBid * 0.80 * 100) / 100;
@@ -155,155 +251,986 @@ function bidResult(
   };
 }
 
-export function buildCanonicalBidDecision(input: CanonicalBidInput): CanonicalBidDecision {
-  const posterior = estimateBayesianConversion({
-    clicks: input.clicks,
-    orders: input.sameSkuOrders,
-    priorAlpha: input.priorAlpha ?? 1,
-    priorBeta: input.priorBeta ?? 19,
-    sustainableThreshold: 0.05,
-  });
-  const block = (code: string, reason: string) => bidResult(input, posterior, 'BLOCK', 0, code, reason, 99, 12);
-  if (input.currentBid <= 0) return block('CURRENT_BID_MISSING', 'Bid atual não confirmado; nenhuma escrita é segura.');
-  if (input.pendingInsertion) return block('PENDING_INSERTION', 'Entidade ainda está em inserção na Amazon.');
-  if (!input.dataFresh) return block('STALE_DATA', 'Métricas vencidas bloqueiam alteração de bid.');
-  if (!input.structurallyComplete || !input.adGroupConfirmed || !input.productAdConfirmed) return block('STRUCTURE_INCOMPLETE', 'Campanha, Ad Group e Product Ad precisam estar confirmados.');
-  if (!input.inStock) return block('OUT_OF_STOCK', 'Produto sem estoque vendável confirmado.');
-  if (!input.economicsComplete || input.safeMaxCpc <= 0) return block('ECONOMICS_INCOMPLETE', 'Economia ou CPC seguro indisponível.');
-  if (input.cooldownActive) return block('COOLDOWN_ACTIVE', 'Já houve alteração na janela de cooldown.');
+export function buildCanonicalBidDecision(
+  input: CanonicalBidInput
+): CanonicalBidDecision {
 
-  const winnerWithinEconomicGuardrail = input.winnerProtected && input.profitAfterAds >= 0 &&
-    (input.acos === null || input.targetAcos === null || input.acos <= input.targetAcos);
-  if (winnerWithinEconomicGuardrail) {
-    if (input.currentBid >= input.safeMaxCpc) {
-      return bidResult(input, posterior, 'HOLD', 0, 'WINNER_AT_SAFE_CPC', 'Vencedor protegido, mas o bid ja atingiu o CPC economico seguro.', 99, 6);
-    }
-    const target = Number(input.targetAcos || 0);
-    const acos = Number(input.acos || 0);
-    const veryStrongWinner = input.sameSkuOrders >= 3 && target > 0 && acos > 0 && acos <= target * 0.75 && input.profitAfterAds > 0;
-    const strongWinner = input.sameSkuOrders >= 2 && input.profitAfterAds > 0;
-    const pct = veryStrongWinner ? 0.15 : strongWinner ? 0.10 : 0.05;
+  const posterior =
+    estimateBayesianConversion({
+      clicks: input.clicks,
+      orders: input.sameSkuOrders,
+      priorAlpha: input.priorAlpha ?? 1,
+      priorBeta: input.priorBeta ?? 19,
+      sustainableThreshold: 0.05,
+    });
+
+  const expectedClicks =
+    posterior.mean > 0
+      ? Math.max(
+          1,
+          Math.ceil(1 / posterior.mean)
+        )
+      : 20;
+
+  const probability =
+    probabilityAtLeastOneSale(
+      posterior.lower,
+      expectedClicks
+    );
+
+  const result = (
+    action: CanonicalBidAction,
+    proposedBid: number | null,
+    reasonCode: string,
+    reason: string,
+    confidence: number,
+    nextEvaluationHours: number,
+  ): CanonicalBidDecision => {
+
+    const normalized =
+      proposedBid === null
+        ? null
+        : roundMoney(
+            Math.max(
+              0.02,
+              proposedBid
+            )
+          );
+
+    const actualChange =
+      normalized !== null &&
+      input.currentBid > 0
+        ? (
+            normalized -
+            input.currentBid
+          ) / input.currentBid
+        : 0;
+
+    return {
+      action:
+        normalized !== null &&
+        Math.abs(
+          normalized-input.currentBid
+        ) < 0.005
+          ? 'HOLD'
+          : action,
+
+      proposedBid:
+        normalized !== null &&
+        Math.abs(
+          normalized-input.currentBid
+        ) < 0.005
+          ? null
+          : normalized,
+
+      changePct:
+        normalized !== null
+          ? actualChange
+          : 0,
+
+      reasonCode,
+
+      reason,
+
+      confidence,
+
+      nextEvaluationHours,
+
+      requiresPairedAdGroup:
+        input.isManualExact &&
+        [
+          'INCREASE',
+          'DECREASE_SOFT',
+          'DECREASE_STRONG'
+        ].includes(action),
+
+      posterior,
+
+      probabilityOfSaleNextExpectedWindow:
+        probability,
+    };
+  };
+
+  const hold = (
+    code:string,
+    reason:string,
+    confidence=95,
+    hours=12,
+  ) =>
+    result(
+      'HOLD',
+      null,
+      code,
+      reason,
+      confidence,
+      hours
+    );
+
+  const block = (
+    code:string,
+    reason:string
+  ) =>
+    result(
+      'BLOCK',
+      null,
+      code,
+      reason,
+      99,
+      12
+    );
+
+  const pctBid = (
+    pct:number
+  ) =>
+    roundMoney(
+      Math.max(
+        0.02,
+        input.currentBid *
+        (1+pct)
+      )
+    );
+
+  const boundedIncrease = (
+    pct:number
+  ) =>
+    roundMoney(
+      Math.min(
+        input.safeMaxCpc,
+        pctBid(pct)
+      )
+    );
+
+  /*
+   * =================================================
+   * IDENTIDADE / ESTRUTURA
+   * =================================================
+   */
+
+  if(input.currentBid<=0)
+    return block(
+      'CURRENT_BID_MISSING',
+      'Bid atual não confirmado.'
+    );
+
+  if(input.pendingInsertion)
+    return block(
+      'PENDING_INSERTION',
+      'Entidade ainda está em inserção na Amazon.'
+    );
+
+  if(!input.dataFresh)
+    return block(
+      'STALE_DATA',
+      'Métricas Ads atuais são necessárias para decidir.'
+    );
+
+  if(
+    !input.structurallyComplete ||
+    !input.adGroupConfirmed ||
+    !input.productAdConfirmed
+  )
+    return block(
+      'STRUCTURE_INCOMPLETE',
+      'Estrutura Amazon incompleta.'
+    );
+
+  /*
+   * ====================================================
+   * V3_YOUNG_SPEND_GUARD_ROBUST
+   * ====================================================
+   *
+   * Campanha jovem pode buscar mais impressões.
+   * Porém aprendizado não significa gasto sem limite.
+   *
+   * REGRA A
+   * zero venda same-SKU
+   * >=2 cliques
+   * gasto >=100% maxSpendWithoutSale
+   * => BID -15%
+   *
+   * REGRA B
+   * zero venda same-SKU
+   * >=2 cliques
+   * spendShare >=45%
+   * gasto >=75% maxSpendWithoutSale
+   * => BID -20%
+   *
+   * Não pausa.
+   */
+  const v3YoungSpendLimit =
+    input.sameSkuOrders <= 0 &&
+    input.clicks >= 2 &&
+    input.maxSpendWithoutSale > 0 &&
+    input.spend >=
+      input.maxSpendWithoutSale;
+
+  const v3YoungSpendConcentration =
+    input.sameSkuOrders <= 0 &&
+    input.clicks >= 2 &&
+    input.maxSpendWithoutSale > 0 &&
+    input.spendShare >= 0.45 &&
+    input.spend >=
+      input.maxSpendWithoutSale * 0.75;
+
+  if (
+    v3YoungSpendLimit ||
+    v3YoungSpendConcentration
+  ) {
     return bidResult(
-      input, posterior, 'INCREASE', pct,
-      veryStrongWinner ? 'FAST_TRACK_VERY_STRONG_WINNER' : strongWinner ? 'FAST_TRACK_STRONG_WINNER' : 'FAST_TRACK_WINNER',
-      `Vencedor same-SKU lucrativo: crescimento controlado de ${Math.round(pct * 100)}% limitado pelo CPC economico.`,
-      veryStrongWinner ? 97 : strongWinner ? 95 : 92,
-      veryStrongWinner ? 3 : strongWinner ? 4 : 6
+      input,
+      posterior,
+      'DECREASE_STRONG',
+      v3YoungSpendConcentration
+        ? -0.20
+        : -0.15,
+      'YOUNG_SPEND_VELOCITY_REDUCTION',
+      v3YoungSpendConcentration
+        ? 'Gasto concentrado sem venda same-SKU: reduzir bid imediatamente em 20%.'
+        : 'Gasto atingiu o limite econômico sem venda same-SKU: reduzir bid imediatamente em 15%.',
+      97,
+      3
     );
   }
 
-  const exceededNoSaleTest = input.sameSkuOrders <= 0 && input.clicks >= 3 &&
-    input.maxSpendWithoutSale > 0 && input.spend >= input.maxSpendWithoutSale;
-  if (exceededNoSaleTest) {
-    return bidResult(input, posterior, 'DECREASE_STRONG', -0.20,
-      'EARLY_ECONOMIC_LOSS_GUARD',
-      'Gasto sem venda já excedeu o orçamento econômico de teste; reduzir bid imediatamente sem pausar a campanha.',
-      97, 6);
+
+
+  /*
+   * =================================================
+   * ZERO DELIVERY
+   * =================================================
+   *
+   * OWNER EXCLUSIVO:
+   * Campaign Lifecycle Engine.
+   *
+   * Este policy econômico NÃO cria um segundo
+   * recovery concorrente.
+   */
+
+  if(
+    input.impressions<=0 &&
+    input.clicks<=0 &&
+    input.spend<=0 &&
+    input.sameSkuOrders<=0
+  ){
+    return hold(
+      'DELEGATE_ZERO_DELIVERY_TO_LIFECYCLE',
+      'Zero delivery é responsabilidade exclusiva do lifecycle: 72h -> +R$0,10 x3 -> rebuild.',
+      99,
+      Math.max(
+        1,
+        input.ageHours < 72
+          ? 72-input.ageHours
+          : 1
+      )
+    );
   }
 
-  if (input.ageHours < 48 && input.impressions <= 0 && input.clicks <= 0 && input.structurallyComplete && input.adGroupConfirmed && input.productAdConfirmed && input.inStock && input.economicsComplete && input.safeMaxCpc > input.currentBid && !input.cooldownActive && !input.pendingInsertion) {
-    const pct = input.ageHours >= 12 ? 0.10 : 0.05;
-    return bidResult(input, posterior, 'RECOVER_ZERO_DELIVERY', pct, 'FAST_TRACK_NEW_ZERO_DELIVERY', `Campanha nova estruturalmente valida e sem impressoes: recuperacao controlada de ${Math.round(pct * 100)}%.`, 94, input.ageHours >= 12 ? 4 : 6);
-  }
-  if (input.ageHours < 48) return bidResult(input, posterior, 'HOLD', 0, 'INITIAL_OBSERVATION_48H', 'Primeiras 48 horas preservam observacao quando ja existe entrega ou falta evidencia para fast track.', 98, 12);
+  /*
+   * =================================================
+   * WASTE FINANCEIRO
+   * =================================================
+   *
+   * Waste tem precedência sobre ACoS quando
+   * não há pedidos.
+   *
+   * Nunca usa spendShare/concentração.
+   */
 
-  if (input.impressions <= 0 && input.clicks <= 0) {
-    if (input.currentBid >= input.safeMaxCpc) return block('SAFE_CPC_CEILING', 'Sem impressões, mas o bid já alcançou o CPC seguro.');
-    const pct = input.ageHours >= 24 && !input.lowVolumeGuarded ? 0.05 : 0.03;
-    return bidResult(input, posterior, 'RECOVER_ZERO_DELIVERY', pct, 'ZERO_IMPRESSIONS_SAFE_RECOVERY', `Zero impressão com estrutura, estoque e economia válidos: teste controlado de ${Math.round(pct * 100)}%.`, 91, input.lowVolumeGuarded ? 24 : 12);
-  }
+  const provenWaste =
+    input.sameSkuOrders<=0 &&
+    input.clicks>=12 &&
+    input.spend>=5;
 
-  if (input.impressions > 0 && input.clicks <= 0) {
-    if (input.impressions >= 500) return bidResult(input, posterior, 'DECREASE_SOFT', -0.05, 'MATURE_IMPRESSIONS_NO_CLICK', 'Amostra madura de impressões sem clique; reduzir exposição, nunca aumentar.', 88, 24);
-    return bidResult(input, posterior, 'HOLD', 0, 'IMPRESSIONS_NO_CLICK_HOLD', 'Há entrega sem clique, mas a amostra ainda não permite intervenção.', 82, 12);
-  }
+  if(provenWaste){
 
-  if (input.sameSkuOrders <= 0) {
-    const spentLimit = input.maxSpendWithoutSale > 0 && input.spend >= input.maxSpendWithoutSale;
-    const sustainableProbabilityLow = posterior.probabilityAboveThreshold < 0.20;
-    const mature = input.clicks >= 8 && input.attributionComplete;
-    if (!mature || (!spentLimit && !sustainableProbabilityLow)) return bidResult(input, posterior, 'HOLD', 0, 'NO_SALE_WAIT_ATTRIBUTION', 'Cliques sem venda ainda preservados pela atribuição ou probabilidade posterior.', 86, 12);
-    if (input.priorReductionCount >= 3 && input.clicks >= 30) {
-      return bidResult(input, posterior, 'PAUSE_CANDIDATE', 0, 'TERM_REPLACEMENT_REVIEW', 'Após reduções graduais e nova evidência, o termo pode ser substituído ou revisado; a campanha não é pausada.', 92, 24);
+    if(
+      input.priorReductionCount>=2 &&
+      input.clicks>=20 &&
+      input.spend>=15
+    ){
+      return result(
+        'PAUSE_CANDIDATE',
+        null,
+        'PERSISTENT_WASTE_AFTER_TWO_REDUCTIONS',
+        'Desperdício persistente após duas reduções e amostra suficiente.',
+        96,
+        24
+      );
     }
-    const concentrationPct = input.spendShare >= 0.45 ? 0.15 : input.spendShare >= 0.35 ? 0.10 : input.spendShare >= 0.25 ? 0.05 : 0;
-    const progressionPct = input.priorReductionCount >= 2 ? 0.20 : input.priorReductionCount >= 1 ? 0.10 : 0.05;
-    const pct = Math.max(concentrationPct, progressionPct);
-    return bidResult(input, posterior, pct >= 0.10 ? 'DECREASE_STRONG' : 'DECREASE_SOFT', -pct,
-      'CLICKS_NO_SAME_SKU_SALE', `Posterior Bayesiano e gasto de teste indicam redução gradual de ${Math.round(pct * 100)}%; halo não conta como venda do SKU.`,
-      pct >= 0.10 ? 94 : 88, input.lowVolumeGuarded ? 48 : 24);
+
+    const reduction =
+      input.priorReductionCount>=1
+        ? -0.10
+        : -0.05;
+
+    return result(
+      reduction<=-0.10
+        ? 'DECREASE_STRONG'
+        : 'DECREASE_SOFT',
+
+      pctBid(reduction),
+
+      input.priorReductionCount>=1
+        ? 'ZERO_ORDER_WASTE_SECOND_REDUCTION'
+        : 'ZERO_ORDER_WASTE_FIRST_REDUCTION',
+
+      input.priorReductionCount>=1
+        ? 'Gasto e cliques persistem sem pedido: segunda redução controlada.'
+        : 'Gasto e cliques sem pedido atingiram evidência mínima: primeira redução controlada.',
+
+      input.priorReductionCount>=1
+        ? 95
+        : 91,
+
+      24
+    );
   }
 
-  if (input.profitAfterAds < 0 || (input.acos !== null && input.breakEvenAcos !== null && input.acos > input.breakEvenAcos)) {
-    return bidResult(input, posterior, 'DECREASE_STRONG', -0.20, 'CONFIRMED_ECONOMIC_LOSS', 'Venda same-SKU existe, mas ACoS acima do break-even ou lucro pós-Ads negativo exige defesa.', 97, 24);
+  /*
+   * =================================================
+   * LEARNING
+   * =================================================
+   */
+
+  if(
+    input.ageHours<72 &&
+    input.sameSkuOrders<=0
+  ){
+    return hold(
+      'INITIAL_LEARNING_72H',
+      'Campanha ainda está na janela inicial de aprendizado.',
+      97,
+      Math.max(
+        1,
+        72-input.ageHours
+      )
+    );
   }
-  if (input.acos !== null && input.targetAcos !== null && input.acos > input.targetAcos) {
-    return bidResult(input, posterior, 'DECREASE_SOFT', -0.05, 'ABOVE_TARGET_BELOW_BREAK_EVEN', 'Resultado acima da meta e abaixo do break-even: redução suave.', 92, 24);
+
+  /*
+   * =================================================
+   * IMPRESSÕES SEM CLIQUE
+   * =================================================
+   */
+
+  if(
+    input.impressions>0 &&
+    input.clicks<=0
+  ){
+
+    if(input.impressions>=500){
+      return result(
+        'DECREASE_SOFT',
+        pctBid(-0.05),
+        'MATURE_IMPRESSIONS_NO_CLICK',
+        'Amostra madura de impressões sem clique: reduzir 5%.',
+        88,
+        24
+      );
+    }
+
+    return hold(
+      'IMPRESSIONS_NO_CLICK_LEARNING',
+      'Há entrega, mas CTR ainda não tem amostra suficiente.',
+      85,
+      12
+    );
   }
-  if (input.defensive) return bidResult(input, posterior, 'HOLD', 0, 'DEFENSIVE_HOLD', 'Estado defensivo bloqueia crescimento.', 98, 24);
-  if (input.currentBid >= input.safeMaxCpc) return bidResult(input, posterior, 'HOLD', 0, 'SAFE_CPC_HOLD', 'Bid já alcançou o CPC seguro.', 97, 24);
-  return bidResult(input, posterior, 'INCREASE', 0.05, 'PROFITABLE_GROWTH_TEST', 'Venda same-SKU lucrativa permite crescimento de 5% dentro do CPC economico seguro.', 92, 6);
+
+  /*
+   * =================================================
+   * COM VENDAS: ECONOMIA
+   * =================================================
+   */
+
+  if(input.sameSkuOrders>0){
+
+    const target =
+      Number(
+        input.targetAcos || 0
+      );
+
+    const current =
+      input.acos===null
+        ? null
+        : Number(input.acos);
+
+    const ratio =
+      target>0 &&
+      current!==null
+        ? current/target
+        : null;
+
+    /*
+     * Perda acima do break-even sempre vence
+     * direction/cooldown.
+     */
+    if(
+      input.profitAfterAds<0 ||
+      (
+        current!==null &&
+        input.breakEvenAcos!==null &&
+        current>
+          Number(input.breakEvenAcos)
+      )
+    ){
+      return result(
+        'DECREASE_STRONG',
+        pctBid(-0.15),
+        'CONFIRMED_ECONOMIC_LOSS',
+        'Venda existe, mas a economia está abaixo do break-even: reduzir 15%.',
+        98,
+        12
+      );
+    }
+
+    /*
+     * Cooldown só bloqueia oscilação genérica.
+     */
+    if(input.cooldownActive){
+      return hold(
+        'DIRECTION_LOCK',
+        'Alteração recente ainda está dentro da janela de direção.',
+        98,
+        6
+      );
+    }
+
+    if(input.defensive){
+      return hold(
+        'DEFENSIVE_HOLD',
+        'Estado defensivo impede crescimento.',
+        98,
+        24
+      );
+    }
+
+    /*
+     * ACoS relativo ao alvo.
+     */
+
+    if(ratio!==null){
+
+      if(ratio<=0.70){
+
+        if(
+          !input.inStock ||
+          !input.economicsComplete ||
+          input.safeMaxCpc<=input.currentBid
+        ){
+          return hold(
+            'STRONG_WINNER_NO_SAFE_HEADROOM',
+            'Vencedor forte, porém sem headroom econômico/estoque para aumentar bid.',
+            98,
+            6
+          );
+        }
+
+        return result(
+          'INCREASE',
+          boundedIncrease(0.10),
+          'ACOS_STRONG_SCALE',
+          'ACoS <=70% do alvo: escala de 10% limitada pelo safe CPC.',
+          97,
+          6
+        );
+      }
+
+      if(ratio<=0.90){
+
+        if(
+          !input.inStock ||
+          !input.economicsComplete ||
+          input.safeMaxCpc<=input.currentBid
+        ){
+          return hold(
+            'WINNER_NO_SAFE_HEADROOM',
+            'Campanha eficiente, mas sem headroom seguro para crescer.',
+            97,
+            6
+          );
+        }
+
+        return result(
+          'INCREASE',
+          boundedIncrease(0.05),
+          'ACOS_SCALE',
+          'ACoS entre 70% e 90% do alvo: escala de 5%.',
+          94,
+          6
+        );
+      }
+
+      if(ratio<=1.10){
+        return hold(
+          'ACOS_HEALTHY_BAND',
+          'ACoS dentro da faixa saudável de 90%-110% do alvo.',
+          96,
+          12
+        );
+      }
+
+      if(ratio<=1.30){
+        return result(
+          'DECREASE_SOFT',
+          pctBid(-0.05),
+          'ACOS_MODERATE_CONTROL',
+          'ACoS entre 110% e 130% do alvo: redução de 5%.',
+          92,
+          24
+        );
+      }
+
+      if(ratio<=1.60){
+        return result(
+          'DECREASE_STRONG',
+          pctBid(-0.10),
+          'ACOS_STRONG_CONTROL',
+          'ACoS entre 130% e 160% do alvo: redução de 10%.',
+          95,
+          24
+        );
+      }
+
+      return result(
+        'DECREASE_STRONG',
+        pctBid(-0.15),
+        'ACOS_SEVERE_CONTROL',
+        'ACoS acima de 160% do alvo: redução de 15%.',
+        97,
+        12
+      );
+    }
+
+    /*
+     * Sem ACoS calculável, mas com lucro confirmado.
+     */
+    if(
+      input.profitAfterAds>=0 &&
+      input.inStock &&
+      input.economicsComplete &&
+      input.safeMaxCpc>input.currentBid
+    ){
+      return result(
+        'INCREASE',
+        boundedIncrease(0.05),
+        'PROFITABLE_GROWTH_TEST',
+        'Venda lucrativa com headroom econômico: crescimento de 5%.',
+        90,
+        12
+      );
+    }
+
+    return hold(
+      'PROFITABILITY_HOLD',
+      'Venda existe, mas ainda falta evidência para alterar bid.',
+      90,
+      12
+    );
+  }
+
+  /*
+   * =================================================
+   * ENTREGA COM AMOSTRA AINDA INSUFICIENTE
+   * =================================================
+   */
+
+  return hold(
+    'CONTINUE_LEARNING',
+    'Há entrega, mas ainda não existe evidência suficiente para intervenção.',
+    88,
+    12
+  );
 }
 
-export function evaluateDecisionGovernance(input: GovernanceInput): GovernanceResult {
-  const blockers: GovernanceResult['blockers'] = [];
-  const add = (priority: string, code: string, reason: string) => blockers.push({ priority, code, reason });
-  const action = lower(input.actionType);
-  const isBid = action.includes('bid');
-  const isBudget = action.includes('budget');
-  const isPause = action.includes('pause');
-  const isPrice = action.includes('price') || input.entityType === 'product_price';
-  const isIncrease = action.includes('increase') || (Number(input.proposedValue) > Number(input.currentValue));
-  const isDecrease = action.includes('decrease') || (Number(input.proposedValue) < Number(input.currentValue));
-  const reason = lower(`${input.reasonCode || ''} ${input.reason || ''}`);
-  const protectiveEconomicReduction = (isBid || isBudget) && isDecrease &&
-    /(confirmed_economic_loss|early_economic_loss_guard|clicks_no_same_sku_sale|safe_cpc|margin|loss|acos_above|above_target)/.test(reason);
-  const economicConfidenceFloor = Number(input.minEconomicConfidence ?? (protectiveEconomicReduction ? 0.60 : 0.90));
+export function evaluateDecisionGovernance(
+  input: GovernanceInput
+): GovernanceResult {
 
-  if (input.accountKillSwitch) add('P1', 'ACCOUNT_KILL_SWITCH', 'Kill switch da conta está ativo.');
-  const cap = Number(input.accountDailyCap || 0);
-  const committed = Number(input.accountSpend || 0) + Number(input.reservedPendingSpend || 0) + Number(input.proposedSpendImpact || 0);
-  if ((isIncrease || isBudget) && cap > 0 && committed > cap) add('P1', 'ACCOUNT_DAILY_CAP', 'Gasto real, pendente e proposto ultrapassa o teto diário.');
-  if (!input.snapshotId && !input.verifiedEvidenceId) add('P2', 'SNAPSHOT_REQUIRED', 'Toda decisão deve referenciar um snapshot canônico ou evidência intradiária verificada.');
-  if (!input.dataFresh || input.adsDataFresh === false || input.spApiDataFresh === false || input.economicsDataFresh === false) add('P2', 'STALE_DATA', 'Uma ou mais fontes obrigatórias estão vencidas.');
-  if (!input.productEligible || !input.listingActive || !input.offerActive || !input.buyable || !input.inStock) add('P3', 'PRODUCT_NOT_ELIGIBLE', 'Produto, listing, oferta, Buy Box ou estoque bloqueiam a ação.');
-  if (!input.economicsComplete) add('P4', 'ECONOMICS_INCOMPLETE', 'Custos, taxas ou margem não estão confirmados.');
-  if (Number(input.economicConfidence || 0) < economicConfidenceFloor) add('P4', 'LOW_ECONOMIC_CONFIDENCE', `Confiança econômica abaixo do mínimo de ${Math.round(economicConfidenceFloor * 100)}%.`);
-  const winnerWithinEconomicGuardrail = input.winnerProtected && Number(input.sameSkuOrders || 0) > 0 &&
-    Number(input.profitAfterAds || 0) >= 0 &&
-    (input.currentAcos === null || input.targetAcos === null || Number(input.currentAcos) <= Number(input.targetAcos));
-  if (winnerWithinEconomicGuardrail && (isPause || (isBid && isDecrease))) add('P5', 'WINNER_PROTECTED', 'Winner lucrativo dentro da meta está protegido contra pausa e corte indevido.');
-  if (input.winnerProtected && !input.sameSkuOrders && Number(input.haloOrders || 0) > 0) add('P5', 'HALO_NOT_WINNER_PROOF', 'Venda halo não protege o SKU anunciado.');
-  if (input.cooldownActive) add('P6', 'COOLDOWN_ACTIVE', 'Entidade já foi alterada na janela de cooldown.');
-  if (isPause && Number(input.campaignPauseShare || 0) > 0.50) add('P1', 'BATCH_PAUSE_BLOCKED_50', 'Mais de 50% das campanhas nunca pode ser pausado em lote.');
-  else if (isPause && Number(input.campaignPauseShare || 0) > 0.30 && !input.explicitBatchAuthorization) add('P1', 'BATCH_PAUSE_REQUIRES_AUTH', 'Mais de 30% de pausas exige autorização explícita.');
-  if (isPause && /zero.*(sale|venda|conversion|convers)|sem venda|no.?conversion/.test(reason) && !/structural|estrutural|out.?of.?stock|sem estoque|invalid|duplic/.test(reason)) add('P7', 'NO_SALE_PAUSE_BLOCKED', 'Ausência de venda isolada nunca pausa campanha.');
+  const blockers:
+    GovernanceResult['blockers'] = [];
 
-  if (isBid && input.currentValue && input.proposedValue) {
-    const change = (Number(input.proposedValue) - Number(input.currentValue)) / Number(input.currentValue);
-    const standardIncrease = Number(input.maxBidIncreasePct ?? 0.10);
-    const absoluteIncrease = Number(input.absoluteBidIncreasePct ?? 0.20);
-    const maxReduction = Number(input.maxBidReductionPct ?? 0.20);
-    if (change > absoluteIncrease + 1e-9) add('P1', 'BID_ABSOLUTE_INCREASE_LIMIT', 'Aumento ultrapassa o limite absoluto de bid.');
-    else if (change > standardIncrease + 1e-9 && input.confidence < 0.95) add('P8', 'BID_STANDARD_INCREASE_LIMIT', 'Aumento acima do padrão exige confiança alta.');
-    if (change < -maxReduction - 1e-9) add('P7', 'BID_REDUCTION_LIMIT', 'Redução ultrapassa o limite por ciclo.');
-    if (isIncrease && Number(input.safeMaxCpc || 0) > 0 && Number(input.proposedValue) > Number(input.safeMaxCpc)) add('P4', 'SAFE_CPC_EXCEEDED', 'Bid proposto ultrapassa o CPC seguro.');
-    if (isIncrease && (input.defensive || Number(input.profitAfterAds || 0) < 0)) add('P8', 'DEFENSIVE_GROWTH_BLOCKED', 'Perda confirmada ou estado defensivo bloqueia aumento.');
+  const add = (
+    priority:string,
+    code:string,
+    reason:string
+  ) =>
+    blockers.push({
+      priority,
+      code,
+      reason
+    });
+
+  const action =
+    lower(input.actionType);
+
+  const entity =
+    lower(input.entityType);
+
+  const isBid =
+    action.includes('bid');
+
+  const isBudget =
+    action.includes('budget');
+
+  const isPause =
+    action.includes('pause');
+
+  const isCreate =
+    action === 'create_campaign' ||
+    action === 'create_keyword' ||
+    action === 'create_target' ||
+    action.startsWith('create_');
+
+  const current =
+    Number(
+      input.currentValue
+    );
+
+  const proposed =
+    Number(
+      input.proposedValue
+    );
+
+  const isIncrease =
+    action.includes('increase') ||
+    (
+      Number.isFinite(current) &&
+      Number.isFinite(proposed) &&
+      proposed>current
+    );
+
+  const isDecrease =
+    action.includes('decrease') ||
+    action.includes('reduce') ||
+    (
+      Number.isFinite(current) &&
+      Number.isFinite(proposed) &&
+      proposed<current
+    );
+
+  /*
+   * PAUSA DEFENSIVA V3
+   *
+   * Pausa motivada por waste/perda comprovada NÃO é crescimento.
+   *
+   * Portanto:
+   * - stale de SP-API/economia complementar não bloqueia;
+   * - PRODUCT_NOT_ELIGIBLE não bloqueia;
+   * - winner protection continua bloqueando;
+   * - kill switch continua válido;
+   * - rollback continua obrigatório;
+   * - proveniência/evidência continua necessária.
+   */
+  const defensivePause =
+    isPause &&
+    /(persistent_waste|waste|zero_order|no_order|economic_loss|loss_confirmed|not_buyable|out_of_stock)/.test(
+      lower(`${input.reasonCode || ''} ${input.reason || ''}`)
+    );
+
+  /*
+   * Crescimento significa SOMENTE aumentar exposição.
+   *
+   * pause_campaign NÃO é growth.
+   * reduce_bid NÃO é growth.
+   */
+  const isGrowth =
+    isIncrease ||
+    isCreate;
+
+  const reason =
+    lower(
+      `${input.reasonCode || ''} ${input.reason || ''}`
+    );
+
+  const hasEvidence =
+    Boolean(
+      input.snapshotId ||
+      input.verifiedEvidenceId
+    );
+
+  const verifiedAdsEvidence =
+    Boolean(
+      input.verifiedEvidenceId
+    ) &&
+    input.dataFresh===true &&
+    input.adsDataFresh!==false;
+
+  const defensiveReduction =
+    (isBid || isBudget) &&
+    isDecrease &&
+    /(zero_order|waste|economic_loss|margin|safe_cpc|acos|above_target|no_sale|no_order)/.test(reason);
+
+  /*
+   * =================================================
+   * P0 — CONTA
+   * =================================================
+   */
+
+  if(input.accountKillSwitch){
+    add(
+      'P0',
+      'ACCOUNT_KILL_SWITCH',
+      'Kill switch da conta ativo.'
+    );
   }
-  if (isBudget && isIncrease && Number(input.stockCoverageDays ?? 999) < 14) add('P6', 'LOW_STOCK_BUDGET_INCREASE', 'Estoque baixo bloqueia aumento de budget.');
 
-  if (isPrice) {
-    if (input.parentAsin) add('P3', 'PARENT_ASIN_BLOCKED', 'Repricing opera somente em SKU e ASIN-filho.');
-    if (input.competitionFresh === false) add('P2', 'STALE_COMPETITION', 'Dados oficiais de competição estão vencidos.');
-    if (Number(input.predictionConfidence || 0) < Number(input.minPredictionConfidence ?? 0.90)) add('P9', 'LOW_PREDICTION_CONFIDENCE', 'Confiança de previsão abaixo de 90%.');
-    if (isDecrease && Number(input.proposedValue || 0) < Number(input.economicFloor || 0)) add('P4', 'PRICE_BELOW_FLOOR', 'Preço proposto fica abaixo do piso econômico.');
-    if (isDecrease && (Number(input.stockCoverageDays ?? 999) < 14 || Number(input.profitAfterAds || 0) < 0 || (input.currentAcos !== null && input.targetAcos !== null && Number(input.currentAcos) > Number(input.targetAcos)))) add('P4', 'PRICE_DECREASE_WORSENS_MARGIN', 'Estoque baixo, perda pós-Ads ou ACoS alto bloqueiam redução de preço.');
+  if(
+    isIncrease &&
+    input.accountDailyCap!==null &&
+    input.accountDailyCap!==undefined
+  ){
+
+    const cap =
+      Number(input.accountDailyCap);
+
+    const spend =
+      Number(input.accountSpend || 0) +
+      Number(input.reservedPendingSpend || 0) +
+      Number(input.proposedSpendImpact || 0);
+
+    if(
+      Number.isFinite(cap) &&
+      cap>0 &&
+      spend>cap
+    ){
+      add(
+        'P1',
+        'ACCOUNT_DAILY_CAP',
+        'A ação excederia o limite diário da conta.'
+      );
+    }
   }
-  if (input.confidence < 0.50) add('P10', 'LOW_DECISION_CONFIDENCE', 'Confiança geral insuficiente.');
-  if (!input.rollbackPlan) add('P10', 'ROLLBACK_PLAN_REQUIRED', 'Toda ação executável precisa de rollback lógico.');
 
-  blockers.sort((a, b) => Number(a.priority.slice(1)) - Number(b.priority.slice(1)));
-  return { allowed: blockers.length === 0, blockers, priority: blockers[0]?.priority || (isPrice ? 'P8' : isIncrease ? 'P8' : 'P7'), rollbackRequired: true };
+  /*
+   * =================================================
+   * P2 — PROVENIÊNCIA / FRESHNESS
+   * =================================================
+   */
+
+  if(!hasEvidence){
+    add(
+      'P2',
+      'SNAPSHOT_REQUIRED',
+      'A decisão precisa referenciar snapshot canônico ou evidência intradiária verificada.'
+    );
+  }
+
+  /*
+   * Redução defensiva:
+   * Ads fresco basta.
+   *
+   * Crescimento:
+   * exige todas as fontes necessárias.
+   */
+  /*
+   * =================================================
+   * P2 — FRESHNESS POR TIPO DE AÇÃO
+   * =================================================
+   *
+   * GROWTH:
+   * Ads + SP-API + economia precisam estar atuais.
+   *
+   * REDUÇÃO / PAUSA:
+   * dados Ads atuais são suficientes para defender
+   * exposição; stale de SP-API/economia não transforma
+   * ação defensiva em bloqueio.
+   */
+
+  if (isGrowth) {
+
+    if (
+      !input.dataFresh ||
+      input.adsDataFresh === false ||
+      input.spApiDataFresh === false ||
+      input.economicsDataFresh === false
+    ) {
+      add(
+        'P2',
+        'STALE_DATA',
+        'Uma ou mais fontes obrigatórias para crescimento estão vencidas.'
+      );
+    }
+
+  } else if (
+    isDecrease ||
+    isPause
+  ) {
+
+    if (
+      !input.dataFresh ||
+      input.adsDataFresh === false
+    ) {
+      add(
+        'P2',
+        'STALE_ADS_DATA',
+        'Ação defensiva exige métricas Ads recentes.'
+      );
+    }
+
+  }
+
+  /*
+   * =================================================
+   * P3 — HARD PRODUCT GUARDS
+   * =================================================
+   *
+   * Impedem crescimento.
+   *
+   * Não impedem automaticamente uma redução que
+   * diminui exposição financeira.
+   */
+
+  if(isGrowth){
+
+    if(
+      !input.productEligible ||
+      !input.listingActive ||
+      !input.offerActive ||
+      !input.buyable ||
+      !input.inStock
+    ){
+      add(
+        'P3',
+        'PRODUCT_NOT_ELIGIBLE',
+        'Produto/listing/oferta/buyability/estoque não permitem crescimento.'
+      );
+    }
+  }
+
+  /*
+   * =================================================
+   * P4 — ECONOMIA
+   * =================================================
+   */
+
+  if(isIncrease){
+
+    if(!input.economicsComplete){
+      add(
+        'P4',
+        'ECONOMICS_INCOMPLETE',
+        'Crescimento exige economia completa.'
+      );
+    }
+
+    const econConfidence =
+      Number(
+        input.economicConfidence || 0
+      );
+
+    const minimum =
+      Number(
+        input.minEconomicConfidence ??
+        0.90
+      );
+
+    if(econConfidence<minimum){
+      add(
+        'P4',
+        'LOW_ECONOMIC_CONFIDENCE',
+        `Confiança econômica abaixo de ${Math.round(minimum*100)}%.`
+      );
+    }
+
+    if(
+      isBid &&
+      input.safeMaxCpc!==null &&
+      input.safeMaxCpc!==undefined &&
+      Number.isFinite(proposed) &&
+      proposed>
+        Number(input.safeMaxCpc)+0.005
+    ){
+      add(
+        'P4',
+        'SAFE_CPC_CEILING',
+        'Novo bid ultrapassa o safe_max_cpc.'
+      );
+    }
+  }
+
+  /*
+   * =================================================
+   * P5 — WINNER PROTECTION
+   * =================================================
+   */
+
+  if(
+    input.winnerProtected &&
+    isPause
+  ){
+    add(
+      'P5',
+      'WINNER_PROTECTION',
+      'Campanha vencedora não pode ser pausada automaticamente.'
+    );
+  }
+
+  /*
+   * =================================================
+   * P6 — DIRECTION LOCK
+   * =================================================
+   */
+
+  if(
+    input.cooldownActive &&
+    !defensiveReduction
+  ){
+    add(
+      'P6',
+      'DIRECTION_LOCK',
+      'Alteração recente ainda está protegida contra oscilação.'
+    );
+  }
+
+  /*
+   * =================================================
+   * P10 — ROLLBACK
+   * =================================================
+   */
+
+  const executableMutation =
+    isBid ||
+    isBudget ||
+    isPause ||
+    isCreate ||
+    entity==='product_price';
+
+  if(
+    executableMutation &&
+    !input.rollbackPlan
+  ){
+    add(
+      'P10',
+      'ROLLBACK_PLAN_REQUIRED',
+      'Toda ação executável precisa de rollback derivável ou explícito.'
+    );
+  }
+
+
+  blockers.sort(
+    (a,b)=>
+      Number(
+        a.priority.replace('P','')
+      ) -
+      Number(
+        b.priority.replace('P','')
+      )
+  );
+
+  return {
+    allowed:
+      blockers.length===0,
+
+    blockers,
+
+    priority:
+      blockers[0]?.priority ||
+      'ALLOW',
+
+    rollbackRequired:
+      executableMutation
+  };
 }
 
 export function canonicalDecisionIdempotencyKey(input: {
@@ -329,3 +1256,342 @@ export function canonicalEntityLockKey(input: {
   return ['marketplace-decision', input.accountId, input.sku || '-', input.campaignId || '-', input.entityId || '-', input.decisionWindow]
     .map((value) => String(value).trim().toLowerCase()).join('|');
 }
+
+
+/*
+ * =========================================================
+ * V3_PREFLIGHT_NO_INVALID_OPERATIONAL_DECISION
+ * =========================================================
+ *
+ * CONTRATO DO CANONICAL_PROFIT_ENGINE_V3
+ *
+ * A governance deve ser consultada ANTES de persistir uma
+ * decisão como executável.
+ *
+ * Uma ação que falharia por:
+ *
+ * - WINNER_PROTECTION
+ * - ZERO_DELIVERY_NO_FINANCIAL_LOSS
+ * - PRODUCT_NOT_ELIGIBLE
+ * - OUT_OF_STOCK
+ * - NOT_BUYABLE
+ * - LISTING_INACTIVE
+ * - OFFER_INACTIVE
+ * - SAFE_CPC_CEILING
+ * - PAUSE_REQUIRES_REDUCTION_SEQUENCE
+ * - DIRECTION_LOCK
+ * - UNRESOLVED_PRODUCT
+ *
+ * não deve virar uma ação operacional para depois aparecer
+ * como "Cancelado pelo motor".
+ *
+ * O resultado lógico do pre-flight é:
+ *
+ * 1. ação alternativa permitida; OU
+ * 2. HOLD / NO_DECISION; OU
+ * 3. REPLACE/REBUILD; OU
+ * 4. investigação autônoma da contradição.
+ *
+ * Apenas ações admissíveis chegam ao executor Amazon.
+ */
+export const V3_PREFLIGHT_NO_INVALID_OPERATIONAL_DECISION = true;
+
+
+/*
+ * ============================================================
+ * V3_CONTROLLED_IMPRESSION_RECOVERY
+ * ============================================================
+ *
+ * Recuperação de entrega não é SCALE pleno.
+ *
+ * Uma keyword MANUAL EXACT subexposta pode receber pequeno
+ * aumento de bid mesmo quando a economia ainda não alcançou
+ * confiança suficiente para scale agressivo.
+ *
+ * HARD GUARDS reais continuam soberanos.
+ */
+
+export type ImpressionRecoveryGovernanceInput = {
+  action?: string;
+  decision_type?: string;
+  rule_key?: string;
+
+  phase?: string;
+
+  impressions?: number;
+  clicks?: number;
+  spend?: number;
+  orders?: number;
+
+  old_bid?: number;
+  new_bid?: number;
+
+  safe_cpc?: number;
+  effective_ceiling?: number;
+
+  snapshot_verified?: boolean;
+  intraday_verified?: boolean;
+
+  product_eligible?: boolean;
+
+  stock_available?: number | null;
+
+  listing_buyable?: boolean | null;
+
+  economic_confidence?: number | null;
+
+  economics_complete?: boolean | null;
+};
+
+export function evaluateControlledImpressionRecovery(
+  input: ImpressionRecoveryGovernanceInput
+) {
+
+  const action=
+    String(
+      input.action ||
+      ''
+    );
+
+  const decisionType=
+    String(
+      input.decision_type ||
+      ''
+    );
+
+  const ruleKey=
+    String(
+      input.rule_key ||
+      ''
+    );
+
+  const isRecovery=
+    action === 'set_bid'
+    &&
+    (
+      decisionType ===
+        'increase_bid_impression_recovery'
+      ||
+      ruleKey ===
+        'V3_MANUAL_EXACT_IMPRESSION_RECOVERY'
+    );
+
+  if(!isRecovery) {
+    return {
+      applicable:false,
+      allowed:false,
+      reason:null
+    };
+  }
+
+  const phase=
+    String(
+      input.phase ||
+      ''
+    ).toUpperCase();
+
+  const oldBid=
+    Number(
+      input.old_bid ||
+      0
+    );
+
+  const newBid=
+    Number(
+      input.new_bid ||
+      0
+    );
+
+  const safeCpc=
+    Number(
+      input.safe_cpc ||
+      0
+    );
+
+  const ceiling=
+    Number(
+      input.effective_ceiling ||
+      0
+    );
+
+  const spend=
+    Number(
+      input.spend ||
+      0
+    );
+
+  const orders=
+    Number(
+      input.orders ||
+      0
+    );
+
+  /*
+   * HARD GUARDS
+   */
+  if(
+    input.product_eligible === false
+  ) {
+    return {
+      applicable:true,
+      allowed:false,
+      hard_block:true,
+      reason:'PRODUCT_NOT_ELIGIBLE'
+    };
+  }
+
+  if(
+    input.stock_available != null
+    &&
+    Number(input.stock_available) <= 0
+  ) {
+    return {
+      applicable:true,
+      allowed:false,
+      hard_block:true,
+      reason:'OUT_OF_STOCK'
+    };
+  }
+
+  if(
+    input.listing_buyable === false
+  ) {
+    return {
+      applicable:true,
+      allowed:false,
+      hard_block:true,
+      reason:'LISTING_NOT_BUYABLE'
+    };
+  }
+
+  /*
+   * Não permitir aumento acima dos limites técnicos.
+   */
+  if(
+    safeCpc > 0
+    &&
+    newBid > safeCpc + 0.0001
+  ) {
+    return {
+      applicable:true,
+      allowed:false,
+      hard_block:true,
+      reason:'SAFE_CPC_EXCEEDED'
+    };
+  }
+
+  if(
+    ceiling > 0
+    &&
+    newBid > ceiling + 0.0001
+  ) {
+    return {
+      applicable:true,
+      allowed:false,
+      hard_block:true,
+      reason:'EFFECTIVE_CEILING_EXCEEDED'
+    };
+  }
+
+  const increasePct=
+    oldBid > 0
+      ? (
+          newBid / oldBid -
+          1
+        ) * 100
+      : 999;
+
+  /*
+   * Recovery nunca pode ser aumento grande.
+   */
+  const maxRecoveryPct=
+    ['NEW','YOUNG'].includes(phase)
+      ? 15
+      : 10;
+
+  if(
+    increasePct >
+      maxRecoveryPct + 0.01
+  ) {
+    return {
+      applicable:true,
+      allowed:false,
+      hard_block:true,
+      reason:'RECOVERY_INCREMENT_TOO_LARGE'
+    };
+  }
+
+  /*
+   * Para recovery, snapshot intradiário verificado
+   * pode substituir snapshot canônico completo.
+   */
+  const evidenceReady=
+    input.snapshot_verified === true
+    ||
+    input.intraday_verified === true;
+
+  if(!evidenceReady) {
+    return {
+      applicable:true,
+      allowed:false,
+      hard_block:false,
+      recoverable:true,
+      reason:'WAIT_FOR_VERIFIED_INTRADAY_SNAPSHOT'
+    };
+  }
+
+  /*
+   * Economia incompleta/confiança <90%:
+   *
+   * impede scale pleno,
+   * mas NÃO impede recovery pequeno.
+   */
+  const economicsComplete=
+    input.economics_complete === true;
+
+  const confidence=
+    Number(
+      input.economic_confidence ||
+      0
+    );
+
+  return {
+    applicable:true,
+
+    allowed:true,
+
+    hard_block:false,
+
+    recovery_mode:true,
+
+    limited_scale:
+      !economicsComplete
+      ||
+      confidence < 0.90,
+
+    max_increase_pct:
+      maxRecoveryPct,
+
+    reason:
+      (
+        !economicsComplete
+        ||
+        confidence < 0.90
+      )
+        ? 'CONTROLLED_DELIVERY_RECOVERY_WITH_LIMITED_ECONOMIC_EVIDENCE'
+        : 'CONTROLLED_DELIVERY_RECOVERY',
+
+    rollback_required:true,
+
+    reevaluate_hours:
+      ['NEW','YOUNG'].includes(phase)
+        ? 3
+        : 6,
+
+    spend_guard_required:
+      orders <= 0
+      &&
+      spend > 0
+  };
+}
+
