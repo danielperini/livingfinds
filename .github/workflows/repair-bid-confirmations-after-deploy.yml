@@ -36,3 +36,36 @@ jobs:
             console.log(\"BID_CONFIRMATION_REPAIR_HTTP=\" + response.status + \"|OK=\" + data.ok + \"|SCANNED=\" + (data.scanned ?? 0) + \"|NORMALIZED=\" + (data.normalized ?? 0) + \"|RESOLVED_IDS=\" + (data.resolved_remote_keyword_ids ?? 0) + \"|SUPERSEDED=\" + (data.superseded ?? 0) + \"|AMAZON_MUTATIONS=\" + (data.amazon_mutations_sent ?? \"unknown\"));
             if (!response.ok || data.ok === false) throw new Error(data.error || \"bid confirmation repair failed\");
           ' </dev/null"
+
+      - name: Drenar decisões de lance aprovadas
+        env:
+          TARGET: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
+          VPS_PATH: ${{ secrets.VPS_PATH }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$TARGET" "cd '$VPS_PATH' && docker compose -f server/docker-compose.yml exec -T app deno eval '
+            const token = Deno.env.get(\"API_TOKEN\") || Deno.env.get(\"ADMIN_PASSWORD\") || \"\";
+            const response = await fetch(\"http://127.0.0.1:8000/functions/drainApprovedBidDecisions\", {
+              method: \"POST\",
+              headers: { \"content-type\": \"application/json\", \"x-api-token\": token },
+              body: JSON.stringify({
+                _service_role: true,
+                trigger_type: \"post_deploy_automatic_bid_drain\",
+                lookback_hours: 72,
+                max_execute: 20,
+                scan_limit: 500
+              })
+            });
+            const data = await response.json().catch(() => ({}));
+            console.log(\"BID_DRAIN_HTTP=\" + response.status
+              + \"|OK=\" + data.ok
+              + \"|STATUS_COUNTS=\" + JSON.stringify(data.status_counts || {})
+              + \"|EXECUTABLE=\" + (data.scanned_executable ?? 0)
+              + \"|CANONICAL=\" + (data.canonical_targets ?? 0)
+              + \"|SUPERSEDED=\" + (data.superseded_duplicates ?? 0)
+              + \"|SELECTED=\" + (data.selected ?? 0)
+              + \"|AMAZON_MUTATIONS=\" + (data.amazon_mutations_sent ?? 0)
+              + \"|FAILED=\" + (data.failed ?? 0)
+              + \"|REMAINING=\" + (data.remaining_canonical ?? 0));
+            console.log(\"BID_DRAIN_RESULTS=\" + JSON.stringify(data.results || []));
+            if (!response.ok || data.ok === false) throw new Error(data.error || \"automatic bid drain failed\");
+          ' </dev/null"
