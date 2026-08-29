@@ -728,11 +728,11 @@ export function buildCanonicalBidDecision(
 
         return result(
           'INCREASE',
-          boundedIncrease(0.10),
+          boundedIncrease(0.15),
           'ACOS_STRONG_SCALE',
-          'ACoS <=70% do alvo: escala de 10% limitada pelo safe CPC.',
+          'ACoS <=70% do alvo: escala de até 15% limitada pelo safe CPC e break-even.',
           97,
-          6
+          3
         );
       }
 
@@ -753,11 +753,11 @@ export function buildCanonicalBidDecision(
 
         return result(
           'INCREASE',
-          boundedIncrease(0.05),
+          boundedIncrease(0.10),
           'ACOS_SCALE',
-          'ACoS entre 70% e 90% do alvo: escala de 5%.',
+          'ACoS entre 70% e 90% do alvo: escala de até 10% limitada pelo safe CPC e break-even.',
           94,
-          6
+          4
         );
       }
 
@@ -813,11 +813,11 @@ export function buildCanonicalBidDecision(
     ){
       return result(
         'INCREASE',
-        boundedIncrease(0.05),
+        boundedIncrease(0.10),
         'PROFITABLE_GROWTH_TEST',
-        'Venda lucrativa com headroom econômico: crescimento de 5%.',
+        'Venda lucrativa com headroom econômico: crescimento de até 10% limitado pelo safe CPC e break-even.',
         90,
-        12
+        6
       );
     }
 
@@ -1082,20 +1082,11 @@ export function evaluateDecisionGovernance(
    */
 
   if(isGrowth){
-
-    if(
-      !input.productEligible ||
-      !input.listingActive ||
-      !input.offerActive ||
-      !input.buyable ||
-      !input.inStock
-    ){
-      add(
-        'P3',
-        'PRODUCT_NOT_ELIGIBLE',
-        'Produto/listing/oferta/buyability/estoque não permitem crescimento.'
-      );
-    }
+    if(!input.productEligible) add('P3', 'PRODUCT_NOT_ELIGIBLE', 'Produto não elegível para crescimento.');
+    if(!input.listingActive) add('P3', 'LISTING_INACTIVE', 'Listing inativo não permite crescimento.');
+    if(!input.offerActive) add('P3', 'OFFER_INACTIVE', 'Oferta inativa não permite crescimento.');
+    if(!input.buyable) add('P3', 'NOT_BUYABLE', 'Oferta não comprável não permite crescimento.');
+    if(!input.inStock) add('P3', 'OUT_OF_STOCK', 'Sem estoque não permite crescimento.');
   }
 
   /*
@@ -1263,7 +1254,7 @@ export function canonicalEntityLockKey(input: {
  * V3_PREFLIGHT_NO_INVALID_OPERATIONAL_DECISION
  * =========================================================
  *
- * CONTRATO DO CANONICAL_PROFIT_ENGINE_V3
+ * CONTRATO DO CANONICAL_PROFIT_ENGINE_V4
  *
  * A governance deve ser consultada ANTES de persistir uma
  * decisão como executável.

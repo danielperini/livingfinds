@@ -169,7 +169,8 @@ Deno.serve(async (request) => {
 
     // ignore_window=true: processar TODOS os scheduled sem filtro de due()
     // limit maior (20) para desbloquear fila acumulada
-    const batchLimit = ignoreWindow ? 20 : 2;
+    const requestedLimit = Math.max(1, Math.min(20, Number(body.max_items ?? (ignoreWindow ? 20 : 2))));
+    const batchLimit = requestedLimit;
     const rawQueue = await base44.asServiceRole.entities.ProductKickoffQueue.filter({
       ...(body.amazon_account_id ? { amazon_account_id: body.amazon_account_id } : {}),
       status: 'scheduled',

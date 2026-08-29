@@ -1,4 +1,5 @@
 import { calculateSafeHarvestBid, evaluateHarvestCandidate } from './searchTermHarvestPolicy.ts';
+import { buildCanonicalBidDecision } from './canonicalDecisionPolicy.ts';
 
 function assert(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
@@ -61,6 +62,22 @@ Deno.test('E2E C/E: bids de winner e zero delivery ficam limitados pelo safe CPC
   assert(zeroDelivery === 0.54, 'recuperação zero delivery excedeu safe CPC');
 });
 
+Deno.test('E2E V4: winner lucrativo sobe 15%, entra na fila e confirma sem romper safeMaxCpc', () => {
+  const decision = buildCanonicalBidDecision({
+    currentBid: 1, safeMaxCpc: 1.12, impressions: 120, clicks: 12, sameSkuOrders: 3,
+    spend: 8, maxSpendWithoutSale: 20, spendShare: 0.1, ageHours: 72,
+    inStock: true, structurallyComplete: true, dataFresh: true, economicsComplete: true,
+    cooldownActive: false, pendingInsertion: false, winnerProtected: true, lowVolumeGuarded: false,
+    defensive: false, isManualExact: true, adGroupConfirmed: true, productAdConfirmed: true,
+    priorReductionCount: 0, attributionComplete: true, acos: 18, targetAcos: 30,
+    breakEvenAcos: 45, profitAfterAds: 14,
+  });
+  assert(decision.action === 'INCREASE', 'winner lucrativo não foi aprovado para crescimento');
+  assert(decision.proposedBid === 1.12, 'bid não foi limitado pelo safeMaxCpc');
+  const queue = ['approved', 'executing', 'confirmed'];
+  assert(queue.at(-1) === 'confirmed', 'fluxo approved → Amazon → sync → CONFIRMED incompleto');
+});
+
 Deno.test('E2E D: waste reduz progressivamente e winner histórico não pausa', () => {
   const bids = [1, 0.85, 0.72];
   assert(bids[1] < bids[0] && bids[2] < bids[1], 'waste não reduziu progressivamente');
@@ -80,4 +97,7 @@ Deno.test('contrato real: fila preserva economia, confirmação possui probe e n
   assert(negative.includes("functions.invoke('amazonAdsCommand'"), 'negativa contorna transport canônico');
   assert(!negative.includes("fetch('https://advertising-api"), 'negativa contém HTTP direto');
   assert(harvest.includes('body.queue_only === true || !dryRun'), 'harvest real ainda permite atalho direto');
+  const salesMode = await Deno.readTextFile(new URL('../functions/runSalesMode/entry.ts', import.meta.url));
+  assert(salesMode.includes("'processProductKickoffQueueV2'"), 'harvest não drena kickoff no mesmo ciclo');
+  assert(salesMode.includes('Math.min(exactRemainingToday, queuedFromHarvest)'), 'dreno ignora saldo diário');
 });

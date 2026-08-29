@@ -3,10 +3,10 @@ import {
 } from 'npm:@base44/sdk@0.8.40';
 
 const POLICY_VERSION =
-  'PROFIT_ENGINE_V3';
+  'PROFIT_ENGINE_V4';
 
 const DECISION_OWNER =
-  'CANONICAL_PROFIT_ENGINE_V3';
+  'CANONICAL_PROFIT_ENGINE_V4';
 
 async function invoke(
   base44:any,
@@ -329,13 +329,13 @@ Deno.serve(async(request)=>{
               'runCanonicalProfitEngineV3',
 
             canonical_engine:
-              'CANONICAL_PROFIT_ENGINE_V3',
+              DECISION_OWNER,
 
             decision_owner:
-              'CANONICAL_PROFIT_ENGINE_V3',
+              DECISION_OWNER,
 
             policy_version:
-              'PROFIT_ENGINE_V3',
+              POLICY_VERSION,
 
             weekly_ai_review: true,
 
@@ -426,10 +426,10 @@ Deno.serve(async(request)=>{
             reenter_v3:false,
 
             canonical_engine:
-              'CANONICAL_PROFIT_ENGINE_V3',
+              DECISION_OWNER,
 
             policy_version:
-              'PROFIT_ENGINE_V3',
+              POLICY_VERSION,
 
             trigger_type:
               'v3_sku_portfolio_internal'
@@ -554,10 +554,10 @@ Deno.serve(async(request)=>{
             reenter_v3:true,
 
             canonical_engine:
-              'CANONICAL_PROFIT_ENGINE_V3',
+              DECISION_OWNER,
 
             policy_version:
-              'PROFIT_ENGINE_V3',
+              POLICY_VERSION,
 
             trigger_type:
               'v3_contradiction_resolver_internal'
@@ -636,7 +636,7 @@ return Response.json({
       ok,
 
       engine:
-        'CANONICAL_PROFIT_ENGINE_V3',
+        DECISION_OWNER,
 
       policy_version:
         POLICY_VERSION,
@@ -694,7 +694,7 @@ return Response.json({
         ok:false,
 
         engine:
-          'CANONICAL_PROFIT_ENGINE_V3',
+          DECISION_OWNER,
 
         policy_version:
           POLICY_VERSION,

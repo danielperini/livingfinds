@@ -57,7 +57,7 @@ Deno.serve(async (req) => {
         endpoint: `${apiBase(account.region)}/fba/inventory/v1/summaries?${query}`,
         method: 'GET',
         headers: { 'x-amz-access-token': accessToken, 'x-amz-date': new Date().toISOString().replace(/[:-]|\.\d{3}/g, ''), 'user-agent': 'LivingFinds/1.0 (Language=TypeScript)' },
-        queue_type: 'READ', max_attempts: 5, _service_role: true,
+        queue_type: 'READ', max_attempts: 5, skip_outside_window_delay: true, _service_role: true,
       });
       const result = call?.data || call || {};
       if (!result.ok) throw new Error(result.errors?.[0]?.message || 'Falha ao consultar inventário');

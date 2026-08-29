@@ -87,7 +87,8 @@ function applySort(items, sortBy, colSort) {
     case 'no_campaign': return arr.sort((a, b) => (productHasCampaign(a) ? 1 : 0) - (productHasCampaign(b) ? 1 : 0));
     case 'out_of_stock': return arr.sort((a, b) => (offerStatus(b) === 'out_of_stock' ? 1 : 0) - (offerStatus(a) === 'out_of_stock' ? 1 : 0));
     case 'last_update': return arr.sort((a, b) => {
-      const getSync = p => new Date(p.last_sync_at || p.last_catalog_sync_at || p.synced_at || 0).getTime();
+      const getSync = p => Math.max(0, ...[p.last_sync_at, p.last_catalog_sync_at, p.synced_at, p.updated_date]
+        .filter(Boolean).map(value => new Date(value).getTime()).filter(Number.isFinite));
       return getSync(b) - getSync(a);
     });
     case 'total_sales_30d': return arr.sort((a, b) => Number(b.total_sales_30d || 0) - Number(a.total_sales_30d || 0));
@@ -396,8 +397,10 @@ export default function Products({ externalRefreshTrigger }) {
       if (!existing) { byAsin.set(key, p); continue; }
       const newStock = Number(p.fba_inventory || 0);
       const existStock = Number(existing.fba_inventory || 0);
-      const newSync = new Date(p.last_sync_at || p.synced_at || 0).getTime();
-      const existSync = new Date(existing.last_sync_at || existing.synced_at || 0).getTime();
+      const newestSync = row => Math.max(0, ...[row.last_sync_at, row.last_catalog_sync_at, row.synced_at, row.updated_date]
+        .filter(Boolean).map(value => new Date(value).getTime()).filter(Number.isFinite));
+      const newSync = newestSync(p);
+      const existSync = newestSync(existing);
       if (newStock > existStock || (newStock === existStock && newSync > existSync)) {
         byAsin.set(key, p);
       }
