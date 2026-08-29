@@ -1,6 +1,8 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
 const BID_ACTIONS = new Set(['set_bid', 'increase_bid', 'reduce_bid', 'update_bid']);
+const CONFIRMABLE_STATUSES = ['executed', 'confirming', 'completed', 'awaiting_confirmation', 'conflict_reconciling'];
+const LOCAL_TERMINAL_STATUSES = ['blocked', 'cancelled', 'skipped', 'superseded', 'expired'];
 
 function ts(row: any): number {
   const raw = row?.executed_at || row?.last_attempt_at || row?.updated_at || row?.created_at || 0;
@@ -9,6 +11,8 @@ function ts(row: any): number {
 }
 
 function attempted(row: any): boolean {
+  // last_attempt_at sozinho NÃO é evidência de envio à Amazon: gates locais também
+  // gravam esse campo. Só estes sinais demonstram tentativa operacional real.
   return Boolean(row?.amazon_request_id || row?.amazon_response || row?.executed_at || Number(row?.attempt_count || 0) > 0);
 }
 
@@ -27,6 +31,11 @@ async function resolveKeyword(base44: any, row: any): Promise<any | null> {
   return candidates.find((item: any) => String(item.state || item.status || '').toLowerCase() === 'enabled') || candidates[0] || null;
 }
 
+function entityKey(row: any): string {
+  const provisional = String(row.keyword_id || row.entity_id || `${row.asin || ''}|${row.keyword_text || ''}` || row.id);
+  return `${row.amazon_account_id || ''}|${provisional}`;
+}
+
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
@@ -38,9 +47,8 @@ Deno.serve(async (req) => {
 
     const accountId = body.amazon_account_id ? String(body.amazon_account_id) : '';
     const cutoff = Date.now() - 24 * 3600_000;
-    // Legado pode ter fechado a fila como completed sem concluir a confirmação.
-    // Esses registros também devem ser relidos remotamente, sem reenviar o bid.
-    const batches = await Promise.all(['executed', 'confirming', 'completed'].map((status) =>
+    const allStatuses = [...CONFIRMABLE_STATUSES, ...LOCAL_TERMINAL_STATUSES];
+    const batches = await Promise.all(allStatuses.map((status) =>
       base44.asServiceRole.entities.OptimizationDecision.filter(
         accountId ? { amazon_account_id: accountId, status } : { status }, '-updated_at', 500
       ).catch(() => [])
@@ -48,18 +56,37 @@ Deno.serve(async (req) => {
     const rows = batches.flat()
       .filter((row: any) => BID_ACTIONS.has(String(row.action || '')))
       .filter((row: any) => ts(row) >= cutoff)
-      .filter((row: any) => row.confirmation_status !== 'confirmed');
+      .filter((row: any) => String(row.confirmation_status || '').toLowerCase() !== 'confirmed');
 
-    const byEntity = new Map<string, any[]>();
+    // 1) Estados terminais locais que nunca chegaram à Amazon não possuem
+    // confirmação pendente. Normalizamos isso sem reenviar qualquer mutação.
+    let terminalNormalized = 0;
     for (const row of rows) {
-      const provisional = String(row.keyword_id || row.entity_id || `${row.asin || ''}|${row.keyword_text || ''}` || row.id);
-      const key = `${row.amazon_account_id || ''}|${provisional}`;
+      const status = String(row.status || '').toLowerCase();
+      if (!LOCAL_TERMINAL_STATUSES.includes(status) || attempted(row)) continue;
+      await base44.asServiceRole.entities.OptimizationDecision.update(row.id, {
+        confirmation_required: false,
+        confirmation_status: 'not_applicable',
+        confirmation_error: null,
+        queue_status: ['blocked'].includes(status) ? 'cancelled' : (row.queue_status || 'completed'),
+        updated_at: new Date().toISOString(),
+      }).catch(() => null);
+      terminalNormalized++;
+    }
+
+    // 2) Apenas decisões realmente tentadas podem entrar na confirmação remota.
+    const confirmable = rows.filter((row: any) =>
+      CONFIRMABLE_STATUSES.includes(String(row.status || '').toLowerCase()) && attempted(row)
+    );
+    const byEntity = new Map<string, any[]>();
+    for (const row of confirmable) {
+      const key = entityKey(row);
       const group = byEntity.get(key) || [];
       group.push(row);
       byEntity.set(key, group);
     }
 
-    let normalized = 0, resolvedIds = 0, superseded = 0, skippedNoAttempt = 0;
+    let normalized = 0, resolvedIds = 0, superseded = 0;
     const accounts = new Set<string>();
 
     for (const group of byEntity.values()) {
@@ -74,7 +101,7 @@ Deno.serve(async (req) => {
         }).catch(() => null);
         superseded++;
       }
-      if (!attempted(latest)) { skippedNoAttempt++; continue; }
+
       const keyword = await resolveKeyword(base44, latest);
       const patch: any = {
         status: 'confirming', queue_status: 'completed', confirmation_required: true,
@@ -105,7 +132,16 @@ Deno.serve(async (req) => {
       confirmations.push({ amazon_account_id: aid, ok: response?.ok !== false, data: response?.data || response });
     }
 
-    return Response.json({ ok: true, scanned: rows.length, normalized, resolved_remote_keyword_ids: resolvedIds, superseded, skipped_no_amazon_attempt: skippedNoAttempt, confirmations, amazon_mutations_sent: 0 });
+    return Response.json({
+      ok: true,
+      scanned: rows.length,
+      terminal_normalized: terminalNormalized,
+      normalized,
+      resolved_remote_keyword_ids: resolvedIds,
+      superseded,
+      confirmations,
+      amazon_mutations_sent: 0,
+    });
   } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || String(error) }, { status: 500 });
   }
