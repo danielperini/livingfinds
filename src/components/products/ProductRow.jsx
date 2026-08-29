@@ -16,9 +16,12 @@ export function isCampaignActiveFn(product) {
 }
 
 export function stockFreshness(product) {
-  const syncAt = product?.last_sync_at || product?.last_catalog_sync_at || product?.synced_at || product?.updated_date || null;
-  if (!syncAt) return 'unknown';
-  const ageHours = (Date.now() - new Date(syncAt).getTime()) / 3600000;
+  const syncTimes = [product?.last_sync_at, product?.last_catalog_sync_at, product?.synced_at, product?.updated_date]
+    .filter(Boolean)
+    .map((value) => new Date(value).getTime())
+    .filter(Number.isFinite);
+  if (syncTimes.length === 0) return 'unknown';
+  const ageHours = (Date.now() - Math.max(...syncTimes)) / 3600000;
   const limit = isCampaignActiveFn(product) ? STOCK_WITH_CAMPAIGN_FRESH_HOURS : STOCK_FRESH_HOURS;
   return ageHours <= limit ? 'fresh' : 'stale';
 }
