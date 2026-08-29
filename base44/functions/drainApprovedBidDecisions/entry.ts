@@ -19,8 +19,6 @@ function rowTs(row: any): number {
 }
 
 function hasAmazonExecutionEvidence(row: any): boolean {
-  // Status, attempt_count e last_attempt_at podem ser gravados por gates locais.
-  // Só request/response/executed_at demonstram uma tentativa operacional real.
   return Boolean(row?.amazon_request_id || row?.amazon_response || row?.executed_at);
 }
 
@@ -31,11 +29,18 @@ function isBidDecision(row: any): boolean {
   if (EXECUTOR_BID_ACTIONS.has(action)) return true;
   if (`${action} ${type} ${reason}`.includes('bid')) return true;
   if (`${action} ${type} ${reason}`.includes('lance')) return true;
+  if (row?.new_bid !== undefined && row?.new_bid !== null) return true;
+  if (row?.old_bid !== undefined && row?.old_bid !== null) return true;
+  if (row?.bid_change_pct !== undefined && row?.bid_change_pct !== null) return true;
   return false;
 }
 
+function targetBidOf(row: any): number {
+  return Number(row?.value_after ?? row?.proposed_value ?? row?.new_bid);
+}
+
 function hasValidTargetBid(row: any): boolean {
-  const value = Number(row?.value_after ?? row?.proposed_value);
+  const value = targetBidOf(row);
   return Number.isFinite(value) && value > 0;
 }
 
@@ -86,9 +91,6 @@ Deno.serve(async (request) => {
     const observedBatches = await Promise.all(
       OBSERVED_STATUSES.map(async (status) => [status, await loadStatus(base44, status, accountId, scanLimit)] as const),
     );
-
-    // A causa encontrada em produção inclui registros legados cujo status/action não
-    // pertence à taxonomia atual. Por isso a fila também faz uma leitura bruta recente.
     const rawRecent = await base44.asServiceRole.entities.OptimizationDecision.filter(
       accountId ? { amazon_account_id: accountId } : {}, '-created_at', scanLimit,
     ).catch(() => []);
@@ -109,15 +111,12 @@ Deno.serve(async (request) => {
 
     const unsentBidRows = recentRows.filter((row: any) => isBidDecision(row) && !hasAmazonExecutionEvidence(row));
     const candidates = unsentBidRows.filter((row: any) => canRecover(row));
-
-    const unknownStatusCounts: Record<string, number> = {};
+    const unsentStatusCounts: Record<string, number> = {};
     for (const row of unsentBidRows) {
       const status = String(row?.status || '(vazio)').toLowerCase();
-      unknownStatusCounts[status] = (unknownStatusCounts[status] || 0) + 1;
+      unsentStatusCounts[status] = (unsentStatusCounts[status] || 0) + 1;
     }
 
-    // Para cada alvo Amazon fica somente a decisão mais recente. Assim 300 decisões
-    // repetidas não viram 300 mutações: viram uma única mutação canônica por target.
     const groups = new Map<string, any[]>();
     for (const row of candidates) {
       const key = canonicalKey(row);
@@ -153,9 +152,6 @@ Deno.serve(async (request) => {
       const previousStatus = String(decision.status || '').toLowerCase();
       const previousAction = String(decision.action || '').toLowerCase();
       const patch: any = {};
-
-      // Normaliza apenas a decisão canônica selecionada. O executor existente continua
-      // sendo a única trilha que efetivamente chama Amazon Ads e aplica seus guards.
       if (!['approved', 'executing'].includes(previousStatus)) {
         patch.status = 'approved';
         patch.queue_status = 'pending';
@@ -167,6 +163,9 @@ Deno.serve(async (request) => {
         recoveredLegacy++;
       }
       if (!EXECUTOR_BID_ACTIONS.has(previousAction)) patch.action = 'update_bid';
+      const targetBid = targetBidOf(decision);
+      if (!(Number(decision?.value_after) > 0)) patch.value_after = targetBid;
+      if (!(Number(decision?.proposed_value) > 0)) patch.proposed_value = targetBid;
       if (Object.keys(patch).length) {
         patch.updated_at = new Date().toISOString();
         await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, patch);
@@ -202,7 +201,7 @@ Deno.serve(async (request) => {
       lookback_hours: lookbackHours,
       raw_recent: recentRows.length,
       status_counts: statusCounts,
-      unsent_status_counts: unknownStatusCounts,
+      unsent_status_counts: unsentStatusCounts,
       unsent_bid_rows: unsentBidRows.length,
       scanned_recoverable: candidates.length,
       canonical_targets: canonical.length,
