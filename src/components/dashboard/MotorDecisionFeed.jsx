@@ -13,6 +13,7 @@ const PAGE_SIZE = 10;
 const CURRENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const MAX_CLEANUP_ROUNDS = 6;
 const CLEANUP_BATCH_SIZE = 1000;
+const LOCAL_NO_EXECUTION_STATUSES = new Set(['blocked', 'cancelled', 'canceled', 'skipped', 'superseded', 'expired', 'rejected']);
 
 function fmtDateKey(iso) {
   if (!iso) return null;
@@ -52,6 +53,25 @@ function historicalDedupeKey(item) {
   const status = String(raw.status || '').toLowerCase();
   if (status !== 'cancelled' || raw.rule_key !== 'winner_protection_dedup') return null;
   return [item.source, raw.rule_key, raw.amazon_account_id, raw.entity_id || raw.campaign_id, raw.asin, raw.action].join('|');
+}
+
+function hasRealAmazonAttempt(raw) {
+  return Boolean(
+    raw?.amazon_request_id || raw?.amazon_response || raw?.executed_at || Number(raw?.attempt_count || 0) > 0
+  );
+}
+
+function isLiveOperationalItem(item) {
+  const raw = item?.raw || {};
+  const status = String(raw.status || '').toLowerCase();
+  const confirmation = String(raw.amazon_confirmation_status || raw.confirmation_status || '').toLowerCase();
+
+  // O painel “agora” é de atividade operacional real. Hard guards/no-ops que
+  // impediram qualquer chamada à Amazon permanecem auditáveis no histórico/CSV,
+  // mas não são apresentados como se o motor tivesse executado algo.
+  if (LOCAL_NO_EXECUTION_STATUSES.has(status) && !hasRealAmazonAttempt(raw)) return false;
+  if (confirmation === 'not_applicable' && !hasRealAmazonAttempt(raw)) return false;
+  return true;
 }
 
 function toneBadge(tone) {
@@ -195,14 +215,9 @@ function AccordionItem({ item, isOpen, onToggle }) {
 
 /**
  * MotorDecisionFeed — "O que o Motor está fazendo agora".
- * Lista de accordions (um por decisão / alteração de bid). Cada accordion mostra
- * título + badge de ação + tempo relativo + badge de status; ao abrir, revela o
- * DecisionColloquy completo (lazy render). Vários accordions podem ficar abertos
- * simultaneamente; paginação e agrupamento por data permanecem.
- *
- * O histórico pode ser exportado para CSV e podado manualmente. A poda usa a
- * política canônica do backend: preserva decisões abertas e execuções efetivas
- * de produtos ativos; remove ruído terminal e vínculos inativos/não resolvidos.
+ * O recorte de 24h exibe apenas atividade operacional real. Decisões barradas
+ * antes de qualquer envio à Amazon ficam preservadas no histórico/CSV para
+ * auditoria, sem poluir o painel operacional.
  */
 export default function MotorDecisionFeed({ decisions, bidChanges, accountId }) {
   const [page, setPage] = useState(1);
@@ -232,7 +247,9 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId }) 
 
   const recent = useMemo(() => merged.filter((item) => {
     const timestamp = new Date(item.timestamp || 0).getTime();
-    return Number.isFinite(timestamp) && timestamp >= Date.now() - CURRENT_WINDOW_MS;
+    return Number.isFinite(timestamp)
+      && timestamp >= Date.now() - CURRENT_WINDOW_MS
+      && isLiveOperationalItem(item);
   }), [merged]);
   const visibleItems = showHistory ? merged : recent;
   const totalItems = visibleItems.length;
@@ -355,7 +372,7 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId }) 
       <div className="flex flex-col items-center justify-center py-8 text-center">
         <Bot className="w-7 h-7 text-theme-muted mb-2" />
         <p className="text-sm text-theme-secondary font-medium">Motor em repouso nas últimas 24h</p>
-        <p className="text-xs text-theme-muted mt-1">Nenhuma decisão nova exige execução agora. Bloqueios antigos ficam no histórico.</p>
+        <p className="text-xs text-theme-muted mt-1">Nenhuma decisão nova exige execução agora. Bloqueios locais continuam disponíveis no histórico para auditoria.</p>
         {merged.length > 0 && (
           <>
             <button type="button" onClick={toggleHistory} className="mt-3 text-xs font-semibold text-blue-600 hover:text-blue-700">
