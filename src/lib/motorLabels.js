@@ -120,13 +120,68 @@ export function getAmazonConfirmationStatus(item) {
   if (decisionStatus === 'pending_approval') {
     return { label: 'Aguardando aprovação', tone: 'amber', symbol: '⏳' };
   }
-  if (['executing', 'confirming'].includes(decisionStatus) || queueStatus === 'processing') {
+  /*
+   * V4: estados pós-execução reconhecidos pelo confirmador.
+   *
+   * awaiting_confirmation e conflict_reconciling são estados
+   * operacionais válidos — não significam ausência de confirmação.
+   */
+  if (
+    ['executing', 'confirming', 'awaiting_confirmation', 'conflict_reconciling']
+      .includes(decisionStatus) ||
+    queueStatus === 'processing'
+  ) {
     return hasAmazonAttempt
-      ? { label: 'Aguardando confirmação', tone: 'amber', symbol: '⏳' }
+      ? { label: 'Aguardando confirmação Amazon', tone: 'amber', symbol: '⏳' }
       : { label: 'Enviando à Amazon', tone: 'amber', symbol: '⏳' };
   }
+
+  /*
+   * A Amazon pode levar algum tempo para refletir o novo estado.
+   * O confirmador classifica isso como propagating.
+   */
+  if (confirmationStatus === 'propagating') {
+    return {
+      label: 'Propagando na Amazon',
+      tone: 'amber',
+      symbol: '⏳'
+    };
+  }
+
   if (confirmationStatus === 'pending' && hasAmazonAttempt) {
-    return { label: 'Aguardando confirmação', tone: 'amber', symbol: '⏳' };
+    return {
+      label: 'Aguardando confirmação Amazon',
+      tone: 'amber',
+      symbol: '⏳'
+    };
+  }
+
+  /*
+   * A entidade ainda não apareceu no probe remoto.
+   * Diferenciamos isso de uma decisão que jamais foi enviada.
+   */
+  if (confirmationStatus === 'not_found') {
+    return {
+      label: 'Aguardando entidade na Amazon',
+      tone: 'amber',
+      symbol: '⏳'
+    };
+  }
+
+  if (confirmationStatus === 'superseded') {
+    return {
+      label: 'Substituído por decisão mais recente',
+      tone: 'slate',
+      symbol: '·'
+    };
+  }
+
+  if (confirmationStatus === 'unsupported') {
+    return {
+      label: 'Confirmação automática indisponível',
+      tone: 'slate',
+      symbol: '·'
+    };
   }
   if (decisionStatus === 'scheduled' || queueStatus === 'scheduled') {
     return { label: 'Agendado na fila local', tone: 'amber', symbol: '⏳' };
