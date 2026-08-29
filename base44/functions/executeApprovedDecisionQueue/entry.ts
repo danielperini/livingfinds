@@ -64,6 +64,14 @@ const HARD_GOVERNANCE_BLOCKERS = new Set([
   'LISTING_INACTIVE','OFFER_INACTIVE','SAFE_CPC_CEILING','SAFE_CPC_EXCEEDED','ECONOMIC_CEILING',
   'MARGIN_FLOOR','PARENT_ASIN'
 ]);
+const BID_ACTIONS = new Set(['set_bid', 'update_bid', 'increase_bid', 'reduce_bid', 'bid_change', 'bid_increase', 'bid_decrease']);
+const CAMPAIGN_REQUIRED_ACTIONS = new Set([...BID_ACTIONS, 'repair_campaign', 'pause_campaign', 'budget_change', 'update_budget', 'increase_budget', 'reduce_budget']);
+const V4_HARD_BID_BLOCKERS = new Set([
+  'OUT_OF_STOCK', 'NOT_BUYABLE', 'PRODUCT_NOT_ELIGIBLE', 'NOT_ELIGIBLE',
+  'LISTING_INACTIVE', 'LISTING_SUPPRESSED', 'NEGATIVE_MARGIN', 'CONFIRMED_ECONOMIC_LOSS',
+  'BREAK_EVEN_VIOLATION', 'ACCOUNT_DAILY_CAP', 'DAILY_CAP', 'BUDGET_EXCEEDED',
+  'MANUAL_RESTRICTION', 'USER_RESTRICTION',
+]);
 function governanceRetryMinutes(codes: string[], attempt: number): number {
   if (codes.includes('COOLDOWN_ACTIVE')) return 180;
   if (codes.some((c) => c.includes('STRUCTURE'))) return 10;
@@ -118,6 +126,9 @@ Deno.serve(async (request) => {
     if (!account) return Response.json({ ok: true, skipped: true, reason: 'Nenhuma conta conectada' });
 
     const aid = account.id;
+    await base44.asServiceRole.functions.invoke('normalizeV4OperationalPriorities', {
+      amazon_account_id: aid, _service_role: true,
+    }).catch(() => null);
     const [approvedRows, retryRows, skippedRows] = await Promise.all([
       base44.asServiceRole.entities.OptimizationDecision.filter(
         { amazon_account_id: aid, status: 'approved' }, 'created_at', MAX_BATCH + 50
@@ -361,6 +372,19 @@ Deno.serve(async (request) => {
       if (Date.now() - t0 > EXECUTION_DEADLINE_MS) break;
       let lockOwnerId: string | null = null;
       try {
+        const actionNameV4 = String(decision.action || decision.decision_type || '').toLowerCase();
+        const currentCampaignId = String(decision.campaign_id || decision.amazon_campaign_id || '').trim();
+        if (CAMPAIGN_REQUIRED_ACTIONS.has(actionNameV4) && !currentCampaignId) {
+          await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+            status: 'cancelled', queue_status: 'closed', approval_status: 'no_decision_campaign_not_found',
+            confirmation_status: 'not_applicable', confirmation_required: false,
+            reason_code: 'NO_DECISION_CAMPAIGN_NOT_FOUND', hide_from_live_operational_feed: true,
+            error_message: 'NO_DECISION_CAMPAIGN_NOT_FOUND: ação dependente de campanha não pode executar sem campaignId.',
+          }).catch(() => {});
+          results.push({ id: decision.id, action: decision.action, ok: false, skipped: true, reason: 'NO_DECISION_CAMPAIGN_NOT_FOUND' });
+          skipped++;
+          continue;
+        }
         if (Number(decision.attempt_count || 0) >= Number(decision.max_attempts || 3)) {
           await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
             status: 'failed_final', queue_status: 'failed', error_message: 'MAX_ATTEMPTS_EXHAUSTED',
@@ -469,18 +493,20 @@ Deno.serve(async (request) => {
 
           const awaitingAmazonConfirmation = priorEntityDecisions.some((prior: any) => {
             if (String(prior.id || '') === String(decision.id || '')) return false;
-            const pendingConfirmation = ['pending', 'propagating'].includes(String(prior.confirmation_status || '').toLowerCase()) ||
-              ['confirming', 'awaiting_confirmation'].includes(String(prior.status || '').toLowerCase());
+            const pendingConfirmation = ['pending', 'executing', 'confirming', 'propagating'].includes(String(prior.confirmation_status || '').toLowerCase()) ||
+              ['pending', 'executing', 'confirming', 'propagating', 'awaiting_confirmation'].includes(String(prior.status || '').toLowerCase()) ||
+              ['pending', 'executing', 'confirming', 'propagating'].includes(String(prior.queue_status || '').toLowerCase());
             if (!pendingConfirmation) return false;
-            const ts = new Date(String(prior.executed_at || prior.last_attempt_at || prior.updated_at || prior.created_at || 0)).getTime();
-            return Number.isFinite(ts) && ts >= Date.now() - 2 * 3600000;
+            return /bid/i.test(String(prior.canonical_action_type || prior.action || prior.decision_type || ''));
           });
           if (awaitingAmazonConfirmation) {
             await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-              status: 'waiting_retry', queue_status: 'scheduled', next_retry_at: new Date(Date.now() + 10 * 60000).toISOString(),
-              error_message: 'AWAITING_AMAZON_CONFIRMATION: existe escrita recente da mesma entidade aguardando propagacao.',
+              status: 'cancelled', queue_status: 'closed', approval_status: 'no_decision_soft_bid_block',
+              confirmation_status: 'not_applicable', confirmation_required: false, hide_from_live_operational_feed: true,
+              reason_code: 'NO_DECISION_SOFT_BID_BLOCK',
+              error_message: 'HOLD: existe alteração de bid anterior pending/executing/confirming/propagating.',
             }).catch(() => {});
-            results.push({ id: decision.id, action: decision.action, ok: false, scheduled: true, reason: 'AWAITING_AMAZON_CONFIRMATION' });
+            results.push({ id: decision.id, action: decision.action, ok: false, skipped: true, reason: 'NO_DECISION_SOFT_BID_BLOCK' });
             skipped++;
             continue;
           }
@@ -970,6 +996,17 @@ Deno.serve(async (request) => {
             const recoverable = !hasHardBlocker && codes.some((code) =>
               RECOVERABLE_GOVERNANCE_BLOCKERS.has(code) || code.includes('STALE') || code.includes('INCOMPLETE') || code.includes('COOLDOWN')
             );
+            if (BID_ACTIONS.has(String(decision.action || '').toLowerCase()) && !codes.some((code) => V4_HARD_BID_BLOCKERS.has(code))) {
+              await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+                status: 'cancelled', queue_status: 'closed', approval_status: 'no_decision_soft_bid_block',
+                confirmation_status: 'not_applicable', confirmation_required: false,
+                reason_code: 'NO_DECISION_SOFT_BID_BLOCK', hide_from_live_operational_feed: true,
+                error_message: `NO_DECISION_SOFT_BID_BLOCK: ${codes.join(',')} | HOLD para recálculo V4`.slice(0, 500),
+              }).catch(() => {});
+              results.push({ id: decision.id, action: decision.action, ok: false, skipped: true, reason: 'NO_DECISION_SOFT_BID_BLOCK', governance });
+              skipped++;
+              continue;
+            }
             if (recoverable) {
               const retryMinutes = governanceRetryMinutes(codes, Number(decision.attempt_count || 0));
               await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {

@@ -21,7 +21,8 @@ const HARD_BID_GUARD_CODES=new Set([
   'out_of_stock','not_buyable','listing_inactive','listing_suppressed',
   'product_inactive','not_eligible','negative_margin',
   'confirmed_economic_loss','break_even_violation','account_daily_cap',
-  'daily_cap','budget_exceeded','user_restriction','manual_restriction'
+  'daily_cap','budget_exceeded','user_restriction','manual_restriction',
+  'manual_pause','user_pause'
 ]);
 
 function normalizedGuardCode(value:any){
@@ -107,6 +108,10 @@ Deno.serve(async(req)=>{
     for(const account of accounts){
 
       const aid=String(account.id);
+      await base44.asServiceRole.functions.invoke('normalizeV4OperationalPriorities', {
+        amazon_account_id:aid,
+        _service_role:true
+      }).catch(()=>null);
 
       const [
         blocked,
@@ -373,7 +378,10 @@ Deno.serve(async(req)=>{
                 approval_status:'no_decision_soft_bid_block',
                 confirmation_required:false,
                 confirmation_status:'not_applicable',
-                error_message:'NO_DECISION: bloqueio operacional reversível sem campanha vinculada; não manter bid em blocked.',
+                amazon_confirmation_status:'not_applicable',
+                reason_code:'NO_DECISION_SOFT_BID_BLOCK',
+                error_message:'NO_DECISION_SOFT_BID_BLOCK: bloqueio reversível encerrado para recálculo V4.',
+                hide_from_live_operational_feed:true,
                 updated_at:new Date().toISOString()
               }
             ).catch(()=>null);
@@ -682,7 +690,10 @@ Deno.serve(async(req)=>{
               approval_status:'no_decision_soft_bid_block',
               confirmation_required:false,
               confirmation_status:'not_applicable',
-              error_message:'NO_DECISION: bloqueio operacional reversível de ajuste de bid; proposta encerrada sem execução Amazon.',
+              amazon_confirmation_status:'not_applicable',
+              reason_code:'NO_DECISION_SOFT_BID_BLOCK',
+              error_message:'NO_DECISION_SOFT_BID_BLOCK: proposta encerrada sem execução Amazon; próximo ciclo V4 recalcula.',
+              hide_from_live_operational_feed:true,
               updated_at:new Date().toISOString()
             }
           ).catch(()=>null);

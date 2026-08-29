@@ -109,12 +109,25 @@ Deno.serve(async (request) => {
         })
       : { ok: true, skipped: true, reason: 'daily_exact_quota_reached', max_promotions: 0 };
 
+    // V4: o winner same-SKU não aguarda o próximo tick do scheduler. A fila
+    // deduplicada é drenada no mesmo ciclo e nunca acima do saldo diário.
+    const queuedFromHarvest = Math.max(0, Number(harvest?.queued_count || 0));
+    const kickoffDrain = !dryRun && exactRemainingToday > 0 && queuedFromHarvest > 0
+      ? await invoke(base44, 'processProductKickoffQueueV2', {
+          ...common,
+          force: true,
+          ignore_window: true,
+          max_items: Math.min(exactRemainingToday, queuedFromHarvest),
+          trigger_type: 'sales_mode_same_cycle_harvest_drain_v4',
+        })
+      : { ok: true, skipped: true, reason: dryRun ? 'dry_run' : 'nothing_new_to_drain' };
+
     const bidRecovery = await invoke(base44, 'runIntradaySalesRecovery', {
       ...common,
       snapshot_run_id: snapshotRunId,
       trigger_type: 'sales_mode_bid_recovery',
-      max_bid_step_pct: body.max_bid_step_pct ?? 10,
-      competitive_coverage_bid_step_pct: body.competitive_bid_step_pct ?? 7,
+      max_bid_step_pct: body.max_bid_step_pct ?? 15,
+      competitive_coverage_bid_step_pct: body.competitive_bid_step_pct ?? 10,
       max_budget_step_pct: body.max_budget_step_pct ?? 12,
     });
 
@@ -184,7 +197,7 @@ Deno.serve(async (request) => {
           remaining: executionPasses.length ? Number(executionPasses[executionPasses.length - 1]?.remaining || 0) : 0,
         };
 
-    const stages = { snapshots, aiStrategy, harvest, bidRecovery, bidEconomics, waste, economicGuard, budget, execution };
+    const stages = { snapshots, aiStrategy, harvest, kickoffDrain, bidRecovery, bidEconomics, waste, economicGuard, budget, execution };
     const wasteRows = Array.isArray(waste?.results) ? waste.results : [];
     const metrics = {
       terms_harvested: numberFrom(harvest, 'aggregates', 'terms_harvested', 'candidates'),

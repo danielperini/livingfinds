@@ -219,6 +219,16 @@ function isV3CompletedAction(item) {
 function isV3FutureOperationalAction(item) {
   if (!item) return false;
 
+  const operationalText = String([
+    item?.status, item?.queue_status, item?.approval_status, item?.reason_code,
+    item?.error_message, item?.action, item?.decision_type,
+  ].filter(Boolean).join(' ')).toUpperCase();
+  if (
+    item?.hide_from_live_operational_feed === true ||
+    /CANCELLED|CANCELED|SKIPPED|SUPERSEDED|EXPIRED|NO_DECISION|SOFT_BID_BLOCK/.test(operationalText) ||
+    /(^|[^A-Z])HOLD([^A-Z]|$)/.test(operationalText)
+  ) return false;
+
   if (isV3ProtectionOnly(item)) {
     return false;
   }
@@ -294,7 +304,7 @@ function v3ActionLabel(item) {
       return 'Recuperar entrega';
 
     default:
-      return 'Otimização V3';
+      return 'Otimização V4';
   }
 }
 
@@ -341,18 +351,19 @@ function v3OperationalPriority(item) {
 function isV3OperationallyActionable(item) {
   const priority = v3OperationalPriority(item);
 
-  const status = String(
-    item?.status ||
-    item?.queue_status ||
-    ''
-  ).toUpperCase();
+  const status = String([
+    item?.status, item?.queue_status, item?.approval_status,
+    item?.reason_code, item?.error_message, item?.action,
+  ].filter(Boolean).join(' ')).toUpperCase();
 
   /*
    * Histórico resolvido não entra nas prioridades.
    */
   if (
     priority >= 4 ||
-    /SUPERSEDED|CANCELLED|CANCELED|CONFIRMED/.test(status)
+    item?.hide_from_live_operational_feed === true ||
+    /SUPERSEDED|CANCELLED|CANCELED|CONFIRMED|SKIPPED|EXPIRED|NO_DECISION|SOFT_BID_BLOCK/.test(status) ||
+    /(^|[^A-Z])HOLD([^A-Z]|$)/.test(status)
   ) {
     return false;
   }
@@ -400,6 +411,8 @@ function isV3Decision(item) {
   ]);
 
   return (
+    policy === 'PROFIT_ENGINE_V4' ||
+    owner === 'CANONICAL_PROFIT_ENGINE_V4' ||
     policy === 'PROFIT_ENGINE_V3' ||
     owner === 'CANONICAL_PROFIT_ENGINE_V3' ||
     internalV3Sources.has(source) ||
@@ -533,7 +546,7 @@ const V3_SCHEDULED_ACTIONS = [
     minute: 20,
     cadence: 'daily',
     detail:
-      'Envia à execução os ajustes aprovados pelo CANONICAL_PROFIT_ENGINE_V3.',
+      'Envia à execução os ajustes aprovados pelo CANONICAL_PROFIT_ENGINE_V4.',
   },
   {
     id: 'daily-confirmation',
@@ -698,7 +711,7 @@ function ScheduledV3Actions() {
             </div>
 
             <p className="text-[11px] text-slate-500 mt-1">
-              Pipeline automático do CANONICAL_PROFIT_ENGINE_V3 · horário de Brasília
+              Amazon Truth → Snapshot → IA → V4 → Fila Canônica → Amazon → Confirmação → Amazon Truth · horário de Brasília
             </p>
           </div>
 
@@ -1123,7 +1136,7 @@ export default function SalaDeComandoPremium() {
           raw: item,
 
           type:
-            'Ação V3',
+            'Ação V4',
 
           actionType,
 
@@ -1134,7 +1147,7 @@ export default function SalaDeComandoPremium() {
             item.rationale ||
             item.reason ||
             item.decision_reason ||
-            'Ação definida pelo CANONICAL_PROFIT_ENGINE_V3 aguardando execução.',
+            'Ação definida pelo CANONICAL_PROFIT_ENGINE_V4 aguardando execução.',
 
           tone:
             (
@@ -1191,7 +1204,7 @@ export default function SalaDeComandoPremium() {
         raw: item,
 
         type:
-          'Ação V3',
+          'Ação V4',
 
         actionType:
           'KICKOFF',
@@ -1241,7 +1254,7 @@ export default function SalaDeComandoPremium() {
         raw: item,
 
         type:
-          'Ação V3',
+          'Ação V4',
 
         actionType:
           'REBUILD_CAMPAIGN',
@@ -1291,7 +1304,7 @@ export default function SalaDeComandoPremium() {
         raw: item,
 
         type:
-          'Ação V3',
+          'Ação V4',
 
         actionType:
           'CREATE_CAMPAIGN',
@@ -1522,8 +1535,8 @@ export default function SalaDeComandoPremium() {
         title: 'Monitoramento do motor',
         description: 'Visão consolidada de alertas, alterações de bid, rotinas e histórico de execução.',
         stats: [
-          ['Ação V3s ativos', summary.activeAlerts.length],
-          ['Ação V3s urgentes', summary.urgentAlerts.length],
+          ['Ações V4 ativas', summary.activeAlerts.length],
+          ['Ações V4 urgentes', summary.urgentAlerts.length],
           ['Alterações de bid', data.bidLogs.length],
         ],
       },
@@ -1588,7 +1601,7 @@ export default function SalaDeComandoPremium() {
               <ShieldCheck className="w-3.5 h-3.5" /> Central operacional
             </div>
             <h1 className="text-2xl md:text-3xl font-semibold text-white tracking-[-0.045em] mt-2">Central de Decisões</h1>
-            <p className="text-sm text-slate-400 mt-2">Decisões do CANONICAL_PROFIT_ENGINE_V3, execução Amazon e proteções operacionais.</p>
+            <p className="text-sm text-slate-400 mt-2">Decisões do CANONICAL_PROFIT_ENGINE_V4, execução Amazon e proteções operacionais.</p>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
             <div className={`rounded-xl border px-3 py-2 ${summary.healthOk ? 'border-emerald-400/20 bg-emerald-500/10' : 'border-amber-400/20 bg-amber-500/10'}`}>

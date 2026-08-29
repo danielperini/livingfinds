@@ -2,6 +2,18 @@
   "timezone": "America/Sao_Paulo",
   "jobs": [
     {
+      "name": "Products and Ads fresh sync - every 6 hours",
+      "function": "syncProductsAdsWindow",
+      "cron": "15 */6 * * *",
+      "payload": {
+        "amazon_account_id": "6a40448b9af1241f356e9fcc",
+        "_service_role": true,
+        "_window_execution": true,
+        "trigger_type": "scheduled_products_ads_fresh_sync"
+      },
+      "enabled": true
+    },
+    {
       "name": "Amazon Ads report polling - every 10 minutes",
       "function": "pollAmazonAdsReportJobs",
       "cron": "*/10 * * * *",
@@ -78,6 +90,16 @@
       }
     },
     {
+      "name": "V4 operational normalizer - before executor",
+      "function": "normalizeV4OperationalPriorities",
+      "cron": "5,20,35,50 * * * *",
+      "run_on_startup": true,
+      "payload": {
+        "_service_role": true,
+        "trigger_type": "v4_pre_executor_normalization"
+      }
+    },
+    {
       "name": "Canonical decision executor - every 15 minutes",
       "function": "executeApprovedDecisionQueue",
       "cron": "6,21,36,51 * * * *",
@@ -85,6 +107,16 @@
       "payload": {
         "_service_role": true,
         "max_decisions": 25
+      }
+    },
+    {
+      "name": "Product kickoff queue V4 fallback - every 5 minutes",
+      "function": "processProductKickoffQueueV2",
+      "cron": "*/5 * * * *",
+      "payload": {
+        "_service_role": true,
+        "max_items": 2,
+        "trigger_type": "v4_kickoff_fallback"
       }
     },
     {
@@ -209,13 +241,13 @@
       }
     },
     {
-      "name": "Canonical Profit Engine V3 - every 15 minutes",
+      "name": "Canonical Profit Engine V4 - every 15 minutes",
       "function": "runCanonicalDecisionCycle",
       "cron": "7,22,37,52 * * * *",
       "payload": {
         "_service_role": true,
         "dry_run": false,
-        "trigger_type": "canonical_profit_engine_v3_scheduler",
+        "trigger_type": "canonical_profit_engine_v4_scheduler",
         "sku_by_sku_review": true,
         "product_level_objective": "generate_profitable_sales_for_every_eligible_sku",
         "portfolio_objective": "maximize_expected_profit_with_sku_sales_coverage",
@@ -223,7 +255,7 @@
       }
     },
     {
-      "name": "Canonical Profit Engine V3 - Weekly AI Review - Sunday 21:00 BRT",
+      "name": "Canonical Profit Engine V4 - Weekly AI Review - Sunday 21:00 BRT",
       "function": "runCanonicalDecisionCycle",
       "cron": "0 21 * * 0",
       "payload": {
@@ -247,17 +279,17 @@
       }
     },
     {
-      "name": "Canonical Profit Engine V3 - Daily Metrics Refresh - 22:45 BRT",
+      "name": "Canonical Profit Engine V4 - Daily Metrics Refresh - 22:45 BRT",
       "function": "syncAmazonIntradayCampaignMetrics",
       "cron": "45 22 * * *",
       "payload": {
         "_service_role": true,
         "action": "auto",
-        "trigger_type": "v3_daily_pre_review_metrics"
+        "trigger_type": "v4_daily_pre_review_metrics"
       }
     },
     {
-      "name": "Canonical Profit Engine V3 - Daily AI Review - 23:00 BRT",
+      "name": "Canonical Profit Engine V4 - Daily AI Review - 23:00 BRT",
       "function": "runCanonicalDecisionCycle",
       "cron": "0 23 * * *",
       "payload": {
@@ -296,56 +328,56 @@
         "no_decision_when_no_safe_alternative": true,
         "preserve_hard_guards": true,
         "confirmation_required": true,
-        "trigger_type": "v3_daily_ai_review"
+        "trigger_type": "v4_daily_ai_review"
       }
     },
     {
-      "name": "Canonical Profit Engine V3 - Daily Queue Execution - 23:20 BRT",
+      "name": "Canonical Profit Engine V4 - Daily Queue Execution - 23:20 BRT",
       "function": "executeApprovedDecisionQueue",
       "cron": "20 23 * * *",
       "payload": {
         "_service_role": true,
         "max_decisions": 100,
         "expedited": true,
-        "trigger_type": "v3_daily_post_review_execution"
+        "trigger_type": "v4_daily_post_review_execution"
       }
     },
     {
-      "name": "Canonical Profit Engine V3 - Daily Amazon Confirmation - 23:35 BRT",
+      "name": "Canonical Profit Engine V4 - Daily Amazon Confirmation - 23:35 BRT",
       "function": "confirmExecutedDecisions",
       "cron": "35 23 * * *",
       "payload": {
         "_service_role": true,
-        "trigger_type": "v3_daily_amazon_confirmation"
+        "trigger_type": "v4_daily_amazon_confirmation"
       }
     },
     {
-      "name": "Canonical Profit Engine V3 - Daily Remote Truth - 23:50 BRT",
+      "name": "Canonical Profit Engine V4 - Daily Remote Truth - 23:50 BRT",
       "function": "syncAdsCampaignStatesV2",
       "cron": "50 23 * * *",
       "payload": {
         "_service_role": true,
-        "trigger_type": "v3_daily_remote_truth"
+        "trigger_type": "v4_daily_remote_truth"
       }
     },
     {
-      "name": "Canonical Profit Engine V3 - Operational Queue Reconciliation - Hourly",
+      "name": "Canonical Profit Engine V4 - Operational Queue Reconciliation - Hourly",
       "function": "reconcileOperationalQueues",
       "cron": "10 * * * *",
       "payload": {
         "_service_role": true,
         "dry_run": false,
         "skip_history_prune": false,
-        "trigger_type": "v3_hourly_queue_reconciliation"
+        "trigger_type": "v4_hourly_queue_reconciliation"
       }
     },
     {
-      "name": "Canonical Profit Engine V3 - Decision Outcome Reconciliation",
+      "name": "Canonical Profit Engine V4 - Decision Outcome Reconciliation",
       "function": "reconcileV3DecisionOutcomes",
       "cron": "5 * * * *",
       "payload": {
         "_service_role": true,
-        "trigger_type": "scheduled_v3_decision_reconciliation"
+        "trigger_type": "scheduled_v4_decision_reconciliation"
       },
       "enabled": true
     }
