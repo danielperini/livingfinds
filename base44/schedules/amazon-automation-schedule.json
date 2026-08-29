@@ -315,22 +315,22 @@
       "enabled": true
     },
     {
-      "name": "OpenAI V4 - Daily Autonomous Amazon Portfolio Director - 23:00 BRT",
-      "function": "runDailyAmazonPortfolioDirector",
-      "cron": "0 23 * * *",
-      "payload": {
-        "_service_role": true,
-        "trigger_type": "openai_daily_autonomous_portfolio_director_v4"
-      },
-      "enabled": true
-    },
-    {
       "name": "V4 Operational Watchdog - every 4 hours",
       "function": "runV4OperationalWatchdog",
       "cron": "25 */4 * * *",
       "payload": {
         "_service_role": true,
         "trigger_type": "v4_operational_watchdog_4h"
+      },
+      "enabled": true
+    },
+    {
+      "name": "Diretor Autônomo Amazon Ads V4 - Daily 23:00 BRT",
+      "function": "runDailyAutonomousAdsDirectorV4",
+      "cron": "0 23 * * *",
+      "payload": {
+        "_service_role": true,
+        "trigger_type": "daily_autonomous_ads_director"
       },
       "enabled": true
     }
