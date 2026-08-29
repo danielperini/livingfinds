@@ -34,11 +34,24 @@ async function markDecision(base44: any, decision: any, ok: boolean, detail: any
   const now = new Date().toISOString();
   const requestIds = Array.isArray(detail?.request_ids) ? detail.request_ids.filter(Boolean) : [];
   await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-    status: ok ? 'executed' : 'failed',
+    // Uma mutação aceita pela Amazon ainda precisa ser relida remotamente antes
+    // de ser considerada concluída. "confirming" impede novo bid concorrente.
+    status: ok ? 'confirming' : 'failed',
     queue_status: ok ? 'completed' : 'failed',
     queue_processed_at: now,
     executed_at: ok ? now : null,
+    last_attempt_at: now,
+    confirmation_required: ok,
+    confirmation_status: ok ? 'pending' : 'not_applicable',
+    confirmation_error: null,
     error_message: ok ? null : message(detail),
+    campaign_id: detail?.campaign_id || decision.campaign_id || null,
+    ad_group_id: detail?.ad_group_id || decision.ad_group_id || null,
+    keyword_id: detail?.keyword_id || decision.keyword_id || null,
+    // Para decisão de keyword, garanta que entity_id seja o ID remoto confirmável.
+    entity_id: decision.entity_type === 'keyword'
+      ? (detail?.keyword_id || decision.keyword_id || decision.entity_id || null)
+      : decision.entity_id,
     amazon_response: JSON.stringify(detail).slice(0, 4000),
     amazon_request_id: requestIds.join(',').slice(0, 500) || detail?.request_id || detail?.amazon_request_id || null,
     updated_at: now,
@@ -53,7 +66,7 @@ async function checkIdempotency(base44: any, decision: any) {
   }, 'created_at', 50).catch(() => []);
   const others = matches.filter((row: any) => row.id !== decision.id);
 
-  const executed = others.find((row: any) => row.status === 'executed');
+  const executed = others.find((row: any) => ['executed', 'confirming', 'completed'].includes(String(row.status || '')));
   if (executed) {
     return { blocked: true, reason: 'idempotency_already_executed', canonical_decision_id: executed.id };
   }
@@ -63,8 +76,6 @@ async function checkIdempotency(base44: any, decision: any) {
     return { blocked: true, reason: 'idempotency_active_decision_exists', canonical_decision_id: active.id };
   }
 
-  // Registros failed/cancelled não bloqueiam retry. Nenhuma ação Amazon foi
-  // confirmada nesses estados.
   return { blocked: false };
 }
 
@@ -163,8 +174,7 @@ async function executeOne(base44: any, decision: any) {
   }
 
   const now = new Date().toISOString();
-  const bootstrap = decision.decision_type === 'manual_zero_delivery_bootstrap' ||
-    decision.source_function === 'manual_zero_delivery_bootstrap';
+  const bootstrap = decision.decision_type === 'manual_zero_delivery_bootstrap' || decision.source_function === 'manual_zero_delivery_bootstrap';
   const localKeywords = await base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: accountId, keyword_id: resolvedKeywordId }, null, 5).catch(() => []);
   for (const row of localKeywords) {
     await base44.asServiceRole.entities.Keyword.update(row.id, {
@@ -187,9 +197,7 @@ async function executeOne(base44: any, decision: any) {
   }
 
   if (bootstrap) {
-    const campaigns = await base44.asServiceRole.entities.Campaign.filter({
-      amazon_account_id: accountId, campaign_id: campaignId,
-    }, null, 5).catch(() => []);
+    const campaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId, campaign_id: campaignId }, null, 5).catch(() => []);
     const nextReview = new Date(Date.now() + 72 * 3600_000).toISOString();
     for (const row of campaigns) {
       await base44.asServiceRole.entities.Campaign.update(row.id, {
@@ -219,17 +227,14 @@ async function executeOne(base44: any, decision: any) {
 
   return {
     ok: true,
-    status: 'executed',
+    status: 'confirming',
     decision_id: decision.id,
     campaign_id: campaignId,
     ad_group_id: adGroupId,
     keyword_id: resolvedKeywordId,
     bid: targetBid,
     configured_bid_ceiling: bidPolicy.ceiling,
-    request_ids: [
-      groupUpdate?.request_id || groupUpdate?.amazon_request_id,
-      keywordUpdate?.request_id || keywordUpdate?.amazon_request_id,
-    ].filter(Boolean),
+    request_ids: [groupUpdate?.request_id || groupUpdate?.amazon_request_id, keywordUpdate?.request_id || keywordUpdate?.amazon_request_id].filter(Boolean),
   };
 }
 
@@ -257,12 +262,15 @@ Deno.serve(async (request) => {
       const idempotency = await checkIdempotency(base44, decision);
       if (idempotency.blocked) {
         await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-          status: 'cancelled',
-          queue_status: 'cancelled',
+          status: 'superseded',
+          queue_status: 'completed',
+          confirmation_required: false,
+          confirmation_status: 'not_applicable',
+          confirmation_error: `${idempotency.reason}: ${idempotency.canonical_decision_id}`,
           error_message: `${idempotency.reason}: ${idempotency.canonical_decision_id}`,
           updated_at: new Date().toISOString(),
         }).catch(() => {});
-        results.push({ id, ok: true, skipped: true, status: 'cancelled_duplicate', ...idempotency });
+        results.push({ id, ok: true, skipped: true, status: 'superseded_duplicate', ...idempotency });
         continue;
       }
 
