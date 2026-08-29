@@ -38,7 +38,9 @@ Deno.serve(async (req) => {
 
     const accountId = body.amazon_account_id ? String(body.amazon_account_id) : '';
     const cutoff = Date.now() - 24 * 3600_000;
-    const batches = await Promise.all(['executed', 'confirming'].map((status) =>
+    // Legado pode ter fechado a fila como completed sem concluir a confirmação.
+    // Esses registros também devem ser relidos remotamente, sem reenviar o bid.
+    const batches = await Promise.all(['executed', 'confirming', 'completed'].map((status) =>
       base44.asServiceRole.entities.OptimizationDecision.filter(
         accountId ? { amazon_account_id: accountId, status } : { status }, '-updated_at', 500
       ).catch(() => [])
