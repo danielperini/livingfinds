@@ -1,12 +1,16 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
-const BID_ACTIONS = new Set(['set_bid', 'increase_bid', 'reduce_bid', 'update_bid']);
-const RECOVERABLE_STATUSES = ['approved', 'executing', 'executed'];
+const EXECUTOR_BID_ACTIONS = new Set(['set_bid', 'increase_bid', 'reduce_bid', 'update_bid']);
 const OBSERVED_STATUSES = [
   'approved', 'executing', 'pending', 'queued', 'ready', 'proposed', 'created',
   'confirming', 'executed', 'completed', 'failed', 'blocked', 'cancelled',
-  'skipped', 'superseded', 'expired', 'rejected',
+  'skipped', 'superseded', 'expired', 'rejected', 'pending_approval', 'scheduled',
 ];
+const HARD_TERMINAL = new Set([
+  'blocked', 'cancelled', 'canceled', 'skipped', 'superseded', 'expired', 'rejected',
+  'failed', 'failed_final', 'error', 'rolled_back', 'confirming', 'awaiting_confirmation',
+  'conflict_reconciling', 'pending_approval',
+]);
 
 function rowTs(row: any): number {
   const raw = row?.created_at || row?.created_date || row?.evaluated_at || row?.updated_at || 0;
@@ -15,10 +19,24 @@ function rowTs(row: any): number {
 }
 
 function hasAmazonExecutionEvidence(row: any): boolean {
-  // Nunca considere apenas status/last_attempt_at/attempt_count como prova de envio.
-  // O bug que gerou a fila atual marcou centenas de decisões como "executed"
-  // sem request/response/executed_at da Amazon.
+  // Status, attempt_count e last_attempt_at podem ser gravados por gates locais.
+  // Só request/response/executed_at demonstram uma tentativa operacional real.
   return Boolean(row?.amazon_request_id || row?.amazon_response || row?.executed_at);
+}
+
+function isBidDecision(row: any): boolean {
+  const action = String(row?.action || '').toLowerCase();
+  const type = String(row?.decision_type || '').toLowerCase();
+  const reason = String(row?.change_type || row?.reason_code || '').toLowerCase();
+  if (EXECUTOR_BID_ACTIONS.has(action)) return true;
+  if (`${action} ${type} ${reason}`.includes('bid')) return true;
+  if (`${action} ${type} ${reason}`.includes('lance')) return true;
+  return false;
+}
+
+function hasValidTargetBid(row: any): boolean {
+  const value = Number(row?.value_after ?? row?.proposed_value);
+  return Number.isFinite(value) && value > 0;
 }
 
 function canonicalKey(row: any): string {
@@ -31,20 +49,25 @@ function canonicalKey(row: any): string {
   return `${account}|${entity}`;
 }
 
-function isRecoverableNow(row: any): boolean {
+function canRecover(row: any): boolean {
   const status = String(row?.status || '').toLowerCase();
-  if (!RECOVERABLE_STATUSES.includes(status)) return false;
+  const queueStatus = String(row?.queue_status || '').toLowerCase();
+  const confirmationStatus = String(row?.amazon_confirmation_status || row?.confirmation_status || '').toLowerCase();
+  if (!isBidDecision(row) || !hasValidTargetBid(row)) return false;
   if (hasAmazonExecutionEvidence(row)) return false;
-  if (status !== 'executing') return true;
-  const attemptTs = Date.parse(String(row?.last_attempt_at || row?.updated_at || row?.created_at || 0));
-  return !Number.isFinite(attemptTs) || attemptTs < Date.now() - 20 * 60_000;
+  if (HARD_TERMINAL.has(status)) return false;
+  if (['failed', 'cancelled', 'completed'].includes(queueStatus) && status !== 'executed') return false;
+  if (['confirmed', 'divergent', 'not_applicable'].includes(confirmationStatus)) return false;
+  if (status === 'executing') {
+    const attemptTs = Date.parse(String(row?.last_attempt_at || row?.updated_at || row?.created_at || 0));
+    if (Number.isFinite(attemptTs) && attemptTs >= Date.now() - 20 * 60_000) return false;
+  }
+  return true;
 }
 
 async function loadStatus(base44: any, status: string, accountId: string, limit: number) {
   return base44.asServiceRole.entities.OptimizationDecision.filter(
-    accountId ? { amazon_account_id: accountId, status } : { status },
-    '-created_at',
-    limit,
+    accountId ? { amazon_account_id: accountId, status } : { status }, '-created_at', limit,
   ).catch(() => []);
 }
 
@@ -57,33 +80,44 @@ Deno.serve(async (request) => {
     const accountId = body.amazon_account_id ? String(body.amazon_account_id) : '';
     const lookbackHours = Math.max(1, Math.min(168, Number(body.lookback_hours || 72)));
     const maxExecute = Math.max(1, Math.min(50, Number(body.max_execute || 20)));
-    const perStatusLimit = Math.max(50, Math.min(1000, Number(body.scan_limit || 500)));
+    const scanLimit = Math.max(100, Math.min(1500, Number(body.scan_limit || 750)));
     const cutoff = Date.now() - lookbackHours * 3600_000;
 
     const observedBatches = await Promise.all(
-      OBSERVED_STATUSES.map(async (status) => [status, await loadStatus(base44, status, accountId, perStatusLimit)] as const),
+      OBSERVED_STATUSES.map(async (status) => [status, await loadStatus(base44, status, accountId, scanLimit)] as const),
     );
+
+    // A causa encontrada em produção inclui registros legados cujo status/action não
+    // pertence à taxonomia atual. Por isso a fila também faz uma leitura bruta recente.
+    const rawRecent = await base44.asServiceRole.entities.OptimizationDecision.filter(
+      accountId ? { amazon_account_id: accountId } : {}, '-created_at', scanLimit,
+    ).catch(() => []);
+
     const statusCounts: Record<string, number> = {};
-    const phantomCounts: Record<string, number> = {};
     for (const [status, rows] of observedBatches) {
-      const recentBidRows = rows.filter((row: any) =>
-        BID_ACTIONS.has(String(row?.action || '')) && rowTs(row) >= cutoff
-      );
-      statusCounts[status] = recentBidRows.length;
-      phantomCounts[status] = recentBidRows.filter((row: any) => !hasAmazonExecutionEvidence(row)).length;
+      statusCounts[status] = rows.filter((row: any) => isBidDecision(row) && rowTs(row) >= cutoff).length;
     }
 
-    // Recupera inclusive o estado "executed" fantasma: decisão marcada como executada
-    // internamente, porém sem qualquer evidência de request/response/executed_at na Amazon.
-    const candidates = observedBatches
-      .filter(([status]) => RECOVERABLE_STATUSES.includes(status))
-      .flatMap(([, rows]) => rows)
-      .filter((row: any) => BID_ACTIONS.has(String(row?.action || '')))
-      .filter((row: any) => rowTs(row) >= cutoff)
-      .filter((row: any) => isRecoverableNow(row));
+    const sourceRows = rawRecent.length ? rawRecent : observedBatches.flatMap(([, rows]) => rows);
+    const seenIds = new Set<string>();
+    const recentRows = sourceRows.filter((row: any) => {
+      const id = String(row?.id || '');
+      if (!id || seenIds.has(id)) return false;
+      seenIds.add(id);
+      return rowTs(row) >= cutoff;
+    });
 
-    // Nunca reproduz centenas de decisões repetidas. Para cada alvo real, só a decisão
-    // mais recente sobrevive; as anteriores viram superseded antes de qualquer mutação.
+    const unsentBidRows = recentRows.filter((row: any) => isBidDecision(row) && !hasAmazonExecutionEvidence(row));
+    const candidates = unsentBidRows.filter((row: any) => canRecover(row));
+
+    const unknownStatusCounts: Record<string, number> = {};
+    for (const row of unsentBidRows) {
+      const status = String(row?.status || '(vazio)').toLowerCase();
+      unknownStatusCounts[status] = (unknownStatusCounts[status] || 0) + 1;
+    }
+
+    // Para cada alvo Amazon fica somente a decisão mais recente. Assim 300 decisões
+    // repetidas não viram 300 mutações: viram uma única mutação canônica por target.
     const groups = new Map<string, any[]>();
     for (const row of candidates) {
       const key = canonicalKey(row);
@@ -100,9 +134,7 @@ Deno.serve(async (request) => {
       canonical.push(winner);
       for (const older of group.slice(1)) {
         await base44.asServiceRole.entities.OptimizationDecision.update(older.id, {
-          status: 'superseded',
-          queue_status: 'completed',
-          confirmation_required: false,
+          status: 'superseded', queue_status: 'completed', confirmation_required: false,
           confirmation_status: 'not_applicable',
           confirmation_error: `SUPERSEDED_BY_AUTOMATIC_BID_DRAIN:${winner.id}`,
           error_message: `SUPERSEDED_BY_AUTOMATIC_BID_DRAIN:${winner.id}`,
@@ -115,25 +147,29 @@ Deno.serve(async (request) => {
     canonical.sort((a, b) => rowTs(a) - rowTs(b));
     const selected = canonical.slice(0, maxExecute);
     const results: any[] = [];
-    let recoveredPhantomExecuted = 0;
+    let recoveredLegacy = 0;
 
     for (const decision of selected) {
       const previousStatus = String(decision.status || '').toLowerCase();
+      const previousAction = String(decision.action || '').toLowerCase();
+      const patch: any = {};
 
-      // O executor canônico só aceita approved/executing. Uma decisão "executed"
-      // sem evidência Amazon é reaberta de forma explícita e auditável antes do envio.
-      if (previousStatus === 'executed') {
-        await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-          status: 'approved',
-          queue_status: 'pending',
-          queue_processed_at: null,
-          confirmation_required: false,
-          confirmation_status: 'not_applicable',
-          confirmation_error: 'RECOVERED_PHANTOM_EXECUTED_WITHOUT_AMAZON_EVIDENCE',
-          error_message: null,
-          updated_at: new Date().toISOString(),
-        });
-        recoveredPhantomExecuted++;
+      // Normaliza apenas a decisão canônica selecionada. O executor existente continua
+      // sendo a única trilha que efetivamente chama Amazon Ads e aplica seus guards.
+      if (!['approved', 'executing'].includes(previousStatus)) {
+        patch.status = 'approved';
+        patch.queue_status = 'pending';
+        patch.queue_processed_at = null;
+        patch.confirmation_required = false;
+        patch.confirmation_status = null;
+        patch.confirmation_error = `RECOVERED_UNSENT_LEGACY_DECISION:${previousStatus || 'empty'}`;
+        patch.error_message = null;
+        recoveredLegacy++;
+      }
+      if (!EXECUTOR_BID_ACTIONS.has(previousAction)) patch.action = 'update_bid';
+      if (Object.keys(patch).length) {
+        patch.updated_at = new Date().toISOString();
+        await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, patch);
       }
 
       const response = await base44.asServiceRole.functions.invoke('executePairedManualBidDecision', {
@@ -147,7 +183,8 @@ Deno.serve(async (request) => {
         decision_id: decision.id,
         asin: decision.asin || null,
         keyword_id: decision.keyword_id || null,
-        previous_status: previousStatus,
+        previous_status: previousStatus || null,
+        previous_action: previousAction || null,
         ok: item?.ok !== false,
         skipped: Boolean(item?.skipped),
         status: item?.status || null,
@@ -163,11 +200,13 @@ Deno.serve(async (request) => {
     return Response.json({
       ok: failed === 0,
       lookback_hours: lookbackHours,
+      raw_recent: recentRows.length,
       status_counts: statusCounts,
-      phantom_counts: phantomCounts,
+      unsent_status_counts: unknownStatusCounts,
+      unsent_bid_rows: unsentBidRows.length,
       scanned_recoverable: candidates.length,
       canonical_targets: canonical.length,
-      recovered_phantom_executed: recoveredPhantomExecuted,
+      recovered_legacy: recoveredLegacy,
       superseded_duplicates: superseded,
       selected: selected.length,
       executed,
