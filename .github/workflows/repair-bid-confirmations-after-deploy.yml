@@ -25,18 +25,14 @@ jobs:
           TARGET: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
           VPS_PATH: ${{ secrets.VPS_PATH }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$TARGET" "bash -s" <<'EOF'
-            set -e
-            cd "$VPS_PATH"
-            docker compose -f server/docker-compose.yml exec -T app deno eval '
-              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-              const response = await fetch("http://127.0.0.1:8000/functions/repairBidConfirmationOrphansV42", {
-                method: "POST",
-                headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({ _service_role: true, trigger_type: "post_deploy_bid_confirmation_repair" })
-              });
-              const data = await response.json().catch(() => ({}));
-              console.log("BID_CONFIRMATION_REPAIR_HTTP=" + response.status + "|OK=" + data.ok + "|SCANNED=" + (data.scanned ?? 0) + "|NORMALIZED=" + (data.normalized ?? 0) + "|RESOLVED_IDS=" + (data.resolved_remote_keyword_ids ?? 0) + "|SUPERSEDED=" + (data.superseded ?? 0) + "|AMAZON_MUTATIONS=" + (data.amazon_mutations_sent ?? "unknown"));
-              if (!response.ok || data.ok === false) throw new Error(data.error || "bid confirmation repair failed");
-            ' </dev/null
-          EOF
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$TARGET" "cd '$VPS_PATH' && docker compose -f server/docker-compose.yml exec -T app deno eval '
+            const token = Deno.env.get(\"API_TOKEN\") || Deno.env.get(\"ADMIN_PASSWORD\") || \"\";
+            const response = await fetch(\"http://127.0.0.1:8000/functions/repairBidConfirmationOrphansV42\", {
+              method: \"POST\",
+              headers: { \"content-type\": \"application/json\", \"x-api-token\": token },
+              body: JSON.stringify({ _service_role: true, trigger_type: \"post_deploy_bid_confirmation_repair\" })
+            });
+            const data = await response.json().catch(() => ({}));
+            console.log(\"BID_CONFIRMATION_REPAIR_HTTP=\" + response.status + \"|OK=\" + data.ok + \"|SCANNED=\" + (data.scanned ?? 0) + \"|NORMALIZED=\" + (data.normalized ?? 0) + \"|RESOLVED_IDS=\" + (data.resolved_remote_keyword_ids ?? 0) + \"|SUPERSEDED=\" + (data.superseded ?? 0) + \"|AMAZON_MUTATIONS=\" + (data.amazon_mutations_sent ?? \"unknown\"));
+            if (!response.ok || data.ok === false) throw new Error(data.error || \"bid confirmation repair failed\");
+          ' </dev/null"
