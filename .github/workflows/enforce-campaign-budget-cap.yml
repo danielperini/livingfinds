@@ -1,0 +1,54 @@
+name: Enforce campaign budget cap
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Deploy para VPS"]
+    types: [completed]
+
+concurrency:
+  group: enforce-campaign-budget-cap
+  cancel-in-progress: false
+
+jobs:
+  enforce:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Preparar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: Limitar campanhas a R$15 por dia
+        env:
+          TARGET: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
+          VPS_PATH: ${{ secrets.VPS_PATH }}
+        run: |
+          for attempt in 1 2 3; do
+            echo "Tentativa SSH $attempt/3 para aplicar teto de orçamento"
+            if ssh -i ~/.ssh/deploy_key -o ConnectTimeout=30 -o StrictHostKeyChecking=no "$TARGET" "cd '$VPS_PATH' && docker compose -f server/docker-compose.yml exec -T app deno eval '
+              const token = Deno.env.get(\"API_TOKEN\") || Deno.env.get(\"ADMIN_PASSWORD\") || \"\";
+              const response = await fetch(\"http://127.0.0.1:8000/functions/enforceCampaignBudgetCap\", {
+                method: \"POST\",
+                headers: { \"content-type\": \"application/json\", \"x-api-token\": token },
+                body: JSON.stringify({ _service_role: true, trigger_type: \"automatic_campaign_budget_cap\" })
+              });
+              const data = await response.json().catch(() => ({}));
+              console.log(\"BUDGET_CAP_HTTP=\" + response.status
+                + \"|OK=\" + data.ok
+                + \"|SCANNED=\" + (data.campaigns_scanned ?? 0)
+                + \"|OVER_CAP=\" + (data.campaigns_over_cap ?? 0)
+                + \"|AMAZON_ADJUSTED=\" + (data.amazon_adjusted ?? 0)
+                + \"|FAILED=\" + (data.failed ?? 0));
+              if (!response.ok || data.ok === false) throw new Error(data.error || \"budget cap enforcement failed\");
+            ' </dev/null"; then
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "Falha após 3 tentativas"
+          exit 1
