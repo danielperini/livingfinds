@@ -1,6 +1,6 @@
 /**
  * pauseCampaign — Pausa campanhas SP via Amazon Ads API v3
- * Usa PATCH /sp/campaigns (v3) que é o endpoint correto para atualizar state.
+ * Usa PUT /sp/campaigns (v3), o endpoint de atualização em lote confirmado pelo projeto.
  * Centraliza autenticação via secret ADS_REFRESH_TOKEN (fonte primária).
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
@@ -120,7 +120,7 @@ Deno.serve(async (req) => {
 
       for (const batch of chunks(campaignIds, 100)) {
         const response = await fetch(`${baseUrl}/sp/campaigns`, {
-          method: 'PATCH',
+          method: 'PUT',
           headers: {
             'Authorization': `Bearer ${token}`,
             'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
@@ -142,6 +142,7 @@ Deno.serve(async (req) => {
           if (id) pausedIds.push(String(id));
         }
         for (const e of errors) failedItems.push(e);
+        if (response.ok && successes.length === 0 && errors.length === 0) pausedIds.push(...batch);
 
         if (!response.ok && !successes.length) {
           if (response.status === 401 || response.status === 403) {
@@ -164,7 +165,7 @@ Deno.serve(async (req) => {
         const CT2 = 'application/vnd.spCampaign.v3+json';
         for (const batch of chunks(campaignIds, 100)) {
           const resp2 = await fetch(`${baseUrl2}/sp/campaigns`, {
-            method: 'PATCH',
+            method: 'PUT',
             headers: {
               'Authorization': `Bearer ${token2}`,
               'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
@@ -180,6 +181,8 @@ Deno.serve(async (req) => {
             const id = s?.campaignId || s?.campaign?.campaignId;
             if (id) pausedIds.push(String(id));
           }
+          const errors2 = data2?.campaigns?.error || data2?.error || [];
+          if (resp2.ok && successes2.length === 0 && errors2.length === 0) pausedIds.push(...batch);
         }
         if (pausedIds.length) apiErrorMsg = '';
       } catch { /* ignora — continua com pausa local */ }
@@ -225,7 +228,7 @@ Deno.serve(async (req) => {
           await new Promise(r => setTimeout(r, 3000));
           // Tentativa de re-pausa
           const retryRes = await fetch(`${baseUrl2}/sp/campaigns`, {
-            method: 'PATCH',
+            method: 'PUT',
             headers: {
               'Authorization': `Bearer ${token2}`,
               'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
