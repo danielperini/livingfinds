@@ -296,6 +296,7 @@ Deno.serve(async (request) => {
           created.push({ campaign_id: c.id, campaign_name: c.campaign.name || c.campaign.campaign_name, rationale, dry_run: true });
           continue;
         }
+        try {
         const decision = await base44.asServiceRole.entities.OptimizationDecision.create({
           amazon_account_id: aid,
           decision_type: 'sales_mode_waste_rotation',
@@ -368,6 +369,13 @@ Deno.serve(async (request) => {
           created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
         });
         created.push({ decision_id: decision.id, campaign_id: c.id, campaign_name: c.campaign.name || c.campaign.campaign_name, rationale });
+        } catch (error: any) {
+          if (/idempotency|duplicate key|unique constraint/i.test(String(error?.message || ''))) {
+            created.push({ campaign_id: c.id, campaign_name: c.campaign.name || c.campaign.campaign_name, idempotency_key: key, reused_existing: true, rationale });
+            continue;
+          }
+          throw error;
+        }
       }
 
       results.push({
