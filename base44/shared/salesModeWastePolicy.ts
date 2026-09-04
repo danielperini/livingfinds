@@ -13,7 +13,7 @@ export type WasteEvidence = {
 };
 
 export type WasteDecision = {
-  action: "HOLD" | "REDUCE_BID_5" | "REDUCE_BID_10" | "PAUSE";
+  action: "HOLD" | "REDUCE_BID_5" | "REDUCE_BID_10" | "REDUCE_BID_15" | "PAUSE";
   reason: string;
   confidence: number;
   wasteScore: number;
@@ -77,9 +77,11 @@ export function decideSalesModeWaste(input: WasteEvidence): WasteDecision {
   }
   if (input.priorReductions < 1) {
     return {
-      action: "REDUCE_BID_5",
-      reason: "waste_detected_first_reduction",
-      confidence: 0.88,
+      action: noSaleProof && clicks >= 10 ? "REDUCE_BID_15" : "REDUCE_BID_5",
+      reason: noSaleProof && clicks >= 10
+        ? "zero_sales_10_clicks_strong_reduction"
+        : "waste_detected_first_reduction",
+      confidence: noSaleProof && clicks >= 10 ? 0.94 : 0.88,
       wasteScore,
     };
   }

@@ -20,7 +20,7 @@ Deno.test("waste follows hold, two reductions, then pause only with persistent p
   );
   assertEquals(
     decideSalesModeWaste({ ...waste, priorReductions: 0 }).action,
-    "REDUCE_BID_5",
+    "REDUCE_BID_15",
   );
   assertEquals(
     decideSalesModeWaste({ ...waste, priorReductions: 1 }).action,

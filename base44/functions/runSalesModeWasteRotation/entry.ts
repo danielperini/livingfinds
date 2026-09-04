@@ -341,7 +341,10 @@ Deno.serve(async (request) => {
               ? 'HARD_ZERO_DELIVERY_30D'
               : c.wasteDecision.reason.toUpperCase(),
           value_before: isPause ? 'ENABLED' : n(c.wasteKeyword.current_bid || c.wasteKeyword.bid),
-          value_after: isPause ? 'PAUSED' : Number((n(c.wasteKeyword.current_bid || c.wasteKeyword.bid) * (c.wasteDecision.action === 'REDUCE_BID_10' ? 0.9 : 0.95)).toFixed(2)),
+          value_after: isPause ? 'PAUSED' : Number((n(c.wasteKeyword.current_bid || c.wasteKeyword.bid) * (
+            c.wasteDecision.action === 'REDUCE_BID_15' ? 0.85 :
+            c.wasteDecision.action === 'REDUCE_BID_10' ? 0.9 : 0.95
+          )).toFixed(2)),
           confidence: c.wasteDecision.confidence,
 
           rollback_plan:
@@ -357,9 +360,9 @@ Deno.serve(async (request) => {
           idempotency_key: key, conflict_group: `${aid}|campaign|${c.id}`,
           source_function: 'runSalesModeWasteRotation',
 
-          policy_version: 'PROFIT_ENGINE_V3',
-          decision_owner: 'CANONICAL_PROFIT_ENGINE_V3',
-          canonical_engine: 'CANONICAL_PROFIT_ENGINE_V3',
+          policy_version: 'PROFIT_ENGINE_V4',
+          decision_owner: 'CANONICAL_PROFIT_ENGINE_V4',
+          canonical_engine: 'CANONICAL_PROFIT_ENGINE_V4',
 
           model_version: 'sales-mode-v1.2-long-window-winner-protection',
           target_acos: targetAcos,
