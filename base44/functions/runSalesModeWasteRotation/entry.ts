@@ -160,35 +160,8 @@ Deno.serve(async (request) => {
           ageDays >= Math.max(14, minAgeDays) &&
           zeroDelivery30d
         ) {
-          candidates.push({
-            campaign,
-            id,
-            ageDays,
-
-            spend:0,
-            sales:0,
-            orders:0,
-            clicks:0,
-            impressions:0,
-            acos:999,
-
-            long,
-            longAcos:999,
-            longRoas:0,
-
-            priorReductions:2,
-
-            wasteDecision:{
-              action: 'HOLD',
-              reason:'DELEGATE_ZERO_DELIVERY_TO_LIFECYCLE',
-              confidence:0.99,
-              wasteScore:100,
-            },
-
-            wasteKeyword:null,
-            score:100000 + ageDays,
-          });
-
+          // Zero-delivery is handled by the lifecycle engine. It is a HOLD here,
+          // never a keyword bid candidate (there may be no keyword to reference).
           continue;
         }
 
@@ -381,16 +354,16 @@ Deno.serve(async (request) => {
               observed_at:
                 new Date().toISOString(),
               verified_by:
-                'CANONICAL_PROFIT_ENGINE_V3',
+                'CANONICAL_PROFIT_ENGINE_V4',
               source:
                 'runSalesModeWasteRotation'
             },
 
             canonical_engine:
-              'CANONICAL_PROFIT_ENGINE_V3',
+              'CANONICAL_PROFIT_ENGINE_V4',
 
             policy_version:
-              'PROFIT_ENGINE_V3'
+              'PROFIT_ENGINE_V4'
           }),
           created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
         });
