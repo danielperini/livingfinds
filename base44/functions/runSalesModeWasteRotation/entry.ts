@@ -264,7 +264,7 @@ Deno.serve(async (request) => {
 
       for (const c of selected) {
         const isPause = c.wasteDecision.action === 'PAUSE';
-        const key = `SALES_MODE_WASTE_${c.wasteDecision.action}|${aid}|${c.id}|${today}`;
+        const key = `SALES_MODE_WASTE_${c.wasteDecision.action}|${aid}|${c.id}|${today}|PROFIT_ENGINE_V4`;
 
         const rationale = `${lookbackDays}d: gasto R$${c.spend.toFixed(2)}, ${c.clicks} cliques, ${c.orders} pedidos; 30d: ${c.long.orders} pedidos, ROAS ${Number.isFinite(c.longRoas) ? c.longRoas.toFixed(2) : '0'}; ${c.wasteDecision.reason}.`;
         if (
