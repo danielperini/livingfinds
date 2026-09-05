@@ -2,7 +2,7 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { availableAdsStock, stockAdsDecision } from '../../shared/stockAdsPolicy.ts';
 import { clearManualPauseLockPatch } from '../../shared/productCampaignPauseGuard.ts';
 
-const MANUAL_FLOOR = 5;
+const MANUAL_FLOOR = 1;
 const enabled = (c: any) => String(c.amazon_status || c.state || c.status || '').toUpperCase() === 'ENABLED';
 const manual = (c: any) => {
   const type = String(c.targeting_type || '').toUpperCase();
