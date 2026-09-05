@@ -21,7 +21,7 @@ const EXTENDED_REPORTS: any[] = [
     columns: ['date','campaignId','campaignName','adGroupId','adGroupName','matchType','impressions','clicks','cost','purchases7d','purchases14d','sales7d','sales14d','roasClicks14d'],
   },
   {
-    key: 'adGroups', reportTypeId: 'spAdGroups', groupBy: ['adGroup'],
+    key: 'adGroups', reportTypeId: 'spAdGroups', groupBy: ['adGroup'], optional: true,
     columns: ['date','campaignId','campaignName','adGroupId','adGroupName','impressions','clicks','cost','purchases7d','purchases14d','sales7d','sales14d','roasClicks14d'],
   },
   {
