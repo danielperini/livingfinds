@@ -373,7 +373,8 @@ export default function CampaignFactory() {
     total:      bankEntries.length,
     winners:    bankEntries.filter(e => ['WINNER', 'PROVEN'].includes(e.lifecycle_status)).length,
     strong:     bankEntries.filter(e => e.winner_tier === 'STRONG_WINNER').length,
-    harvest:    bankEntries.filter(e => e.harvest_candidate).length,
+    harvest:    bankEntries.filter(e => e.harvest_candidate &&
+      (Number(e.same_sku_orders || 0) > 0 || e.same_sku_attribution_verified === true)).length,
     candidates: bankEntries.filter(e => e.lifecycle_status === 'CANDIDATE').length,
     validating: bankEntries.filter(e => e.lifecycle_status === 'VALIDATING').length,
     failed:     bankEntries.filter(e => e.lifecycle_status === 'FAILED').length,
@@ -416,7 +417,9 @@ export default function CampaignFactory() {
         return winnerSort.direction === 'asc' ? result : -result;
       });
   }, [bankEntries, winnerSort]);
-  const harvests = useMemo(() => bankEntries.filter(e => e.harvest_candidate).sort((a,b) => b.promotion_score - a.promotion_score), [bankEntries]);
+  const harvests = useMemo(() => bankEntries.filter(e => e.harvest_candidate &&
+    (Number(e.same_sku_orders || 0) > 0 || e.same_sku_attribution_verified === true))
+    .sort((a,b) => b.promotion_score - a.promotion_score), [bankEntries]);
 
   const funnel = useMemo(() => {
     const total     = bankEntries.length;

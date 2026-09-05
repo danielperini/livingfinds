@@ -17,7 +17,7 @@ const CORE_REPORTS: any[] = [
 
 const EXTENDED_REPORTS: any[] = [
   {
-    key: 'targeting', reportTypeId: 'spTargeting', groupBy: ['adGroup'],
+    key: 'targeting', reportTypeId: 'spTargeting', groupBy: ['targeting'],
     columns: ['date','campaignId','campaignName','adGroupId','adGroupName','matchType','impressions','clicks','cost','purchases7d','purchases14d','sales7d','sales14d','roasClicks14d'],
   },
   {
