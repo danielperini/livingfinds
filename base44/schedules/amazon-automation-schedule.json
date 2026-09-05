@@ -100,6 +100,55 @@
       }
     },
     {
+      "name": "Daily economic assessment - hourly after reports",
+      "function": "runDailyEconomicAssessment",
+      "cron": "12 * * * *",
+      "run_on_startup": true,
+      "payload": {
+        "amazon_account_id": "6a40448b9af1241f356e9fcc",
+        "_service_role": true,
+        "trigger_type": "scheduler_economic_assessment"
+      }
+    },
+    {
+      "name": "Rolling weekly economic report - daily",
+      "function": "runWeeklyAdsPerformanceReport",
+      "cron": "25 8 * * *",
+      "payload": {
+        "amazon_account_id": "6a40448b9af1241f356e9fcc",
+        "_service_role": true,
+        "force": true
+      }
+    },
+    {
+      "name": "Decision consequence evaluation - every 6 hours",
+      "function": "evaluateDecisionOutcomes",
+      "cron": "28 */6 * * *",
+      "payload": {
+        "amazon_account_id": "6a40448b9af1241f356e9fcc",
+        "_service_role": true
+      }
+    },
+    {
+      "name": "Keyword learning refresh - every 6 hours",
+      "function": "buildKeywordLearningSignals",
+      "cron": "32 */6 * * *",
+      "payload": {
+        "amazon_account_id": "6a40448b9af1241f356e9fcc",
+        "_service_role": true
+      }
+    },
+    {
+      "name": "Same-SKU winner harvest - every 6 hours",
+      "function": "runImmediateSameSkuSearchTermHarvest",
+      "cron": "36 */6 * * *",
+      "payload": {
+        "amazon_account_id": "6a40448b9af1241f356e9fcc",
+        "_service_role": true,
+        "trigger_type": "scheduler_same_sku_harvest"
+      }
+    },
+    {
       "name": "Canonical decision executor - every 15 minutes",
       "function": "executeApprovedDecisionQueue",
       "cron": "6,21,36,51 * * * *",

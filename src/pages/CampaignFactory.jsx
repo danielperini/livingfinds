@@ -265,26 +265,11 @@ export default function CampaignFactory() {
       // The learning pipeline writes with service-role permissions. This authenticated
       // snapshot refreshes it and returns the same rows without hiding valid data from
       // the dashboard because of entity-level read rules.
-      let snapshotResponse = null;
-      let snapshotError = null;
-      try {
-        // Abrir a página é somente leitura. Atualizações do Factory não devem ser
-        // disparadas implicitamente por refresh, troca de aba ou montagem duplicada.
-        snapshotResponse = await base44.functions.invoke('getCampaignFactorySnapshot', {
-          amazon_account_id: acc.id,
-          refresh: false,
-        });
-      } catch (error) {
-        snapshotError = error?.response?.data?.error || error?.message || String(error);
-      }
-      const snapshot = snapshotResponse?.data || snapshotResponse || null;
-      setRefreshHealth(snapshot?.refresh || (snapshot?.ok ? null : {
-        snapshot: {
-          ok: false,
-          fallback: true,
-          error: snapshot?.error || snapshotError || 'Função de snapshot não respondeu; usando leitura direta preservada.',
-        },
-      }));
+      // O Hostinger já expõe as entidades autenticadas diretamente. Evitar uma
+      // segunda chamada de snapshot elimina dependência de header externo e
+      // mantém a tela estritamente alinhada aos dados persistidos pelo motor.
+      const snapshot = null;
+      setRefreshHealth(null);
 
       const [fallbackBank, fallbackPlans, termData, sugData, prodData, kwData, stData] = await Promise.all([
         snapshot?.ok ? Promise.resolve([]) : base44.entities.KeywordBank.filter({ amazon_account_id: acc.id }, '-promotion_score', 500).catch(() => []),
