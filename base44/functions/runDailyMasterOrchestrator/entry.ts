@@ -214,7 +214,7 @@ Deno.serve(async (req) => {
 
     // Ultima acao de Ads: restaura e confirma remotamente o piso depois dos
     // guardrails, motores de lucro e reparos que podem alterar estados.
-    add('ensureSkuCampaignFloor', 'sku_campaign_floor_final', { manual_floor: 5 });
+    add('ensureSkuCampaignFloor', 'sku_campaign_floor_final', { manual_floor: 1 });
     // Trava final: reduz qualquer excesso ao teto salvo em Configurações.
     add('bulkSetAllBids', 'amazon_bid_ceiling_final');
     // O estado local nao e prova de ativacao; confirmar novamente na Amazon.
