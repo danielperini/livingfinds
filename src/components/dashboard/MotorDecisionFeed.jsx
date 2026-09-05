@@ -132,7 +132,10 @@ function isCurrentOperationalDecision(item) {
     [
       'superseded',
       'rejected',
-      'expired'
+      'expired',
+      'cancelled',
+      'canceled',
+      'skipped'
     ].includes(status)
   ) {
     return false;
@@ -147,6 +150,10 @@ function isCurrentOperationalDecision(item) {
     )
       .trim()
       .toUpperCase();
+
+  if (reason.startsWith('NO_DECISION') || reason === 'HOLD' || reason.includes('SOFT_BID_BLOCK')) {
+    return false;
+  }
 
   /*
    * Decisões que o V3 deliberadamente converteu em

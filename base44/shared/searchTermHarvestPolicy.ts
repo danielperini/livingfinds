@@ -246,6 +246,7 @@ export function aggregateSearchTerms(rows: any[]): HarvestAggregate[] {
       attributionFallbackReason: undefined,
     } satisfies HarvestAggregate;
 
+    current.rawVariants ||= [];
     if (!current.rawVariants.includes(term)) current.rawVariants.push(term);
     const attribution = own(row, 'same_sku_attribution_verified') ? {
       totalOrders: numberValue(row.total_orders ?? row.orders_7d ?? row.orders_14d ?? row.orders_30d),
