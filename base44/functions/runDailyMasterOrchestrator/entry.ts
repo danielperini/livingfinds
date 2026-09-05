@@ -212,13 +212,16 @@ Deno.serve(async (req) => {
     // Sempre: criar campanhas MANUAL EXACT para winners do TermBank (1 campanha por termo)
     add('runTermBankToCampaigns', 'term_bank_to_campaigns', { max_per_run: 10, max_per_asin: 5 });
 
+    // Pausa desperdicio confirmado antes de repor cobertura com campanha limpa.
+    add('pauseManualCampaignsNoSales10d', 'manual_zero_sales_loss_guard');
+
     // Ultima acao de Ads: restaura e confirma remotamente o piso depois dos
     // guardrails, motores de lucro e reparos que podem alterar estados.
     add('ensureSkuCampaignFloor', 'sku_campaign_floor_final', { manual_floor: 1 });
     // Trava final: reduz qualquer excesso ao teto salvo em Configurações.
     add('bulkSetAllBids', 'amazon_bid_ceiling_final');
     // O estado local nao e prova de ativacao; confirmar novamente na Amazon.
-    add('verifyRemoteSkuCampaignFloor', 'sku_campaign_floor_remote_verification', { manual_floor: 5 });
+    add('verifyRemoteSkuCampaignFloor', 'sku_campaign_floor_remote_verification', { manual_floor: 1 });
 
     // 1x/dia: backup
     if (!backupDone || force) add('runBackupToDrive', 'daily_backup', { backup_type: 'daily_incremental' }, true);

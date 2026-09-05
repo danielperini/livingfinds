@@ -137,7 +137,10 @@ Deno.serve(async (req) => {
             auto = replacement?.data || replacement || {};
           }
         }
-        const candidates = uniqueCampaigns(campaigns.filter((c: any) => manual(c) && !archived(c) && idOf(c) && belongsTo(c, sku, asin)));
+        const candidates = uniqueCampaigns(campaigns.filter((c: any) => manual(c) && !archived(c) && idOf(c)
+          && String(c.last_pause_reason || '').toUpperCase() !== 'MANUAL_SPEND_ZERO_SALES_10D'
+          && String(c.last_pause_reason || '').toUpperCase() !== 'DAILY_ZERO_SALES_LOSS_CAP_10_BRL'
+          && belongsTo(c, sku, asin)));
         const ranked = [...candidates].sort((a: any, b: any) => {
           const canonicalA = String(a.name || a.campaign_name || '').toUpperCase().startsWith('SP | MANUAL') ? 1 : 0;
           const canonicalB = String(b.name || b.campaign_name || '').toUpperCase().startsWith('SP | MANUAL') ? 1 : 0;
