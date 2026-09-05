@@ -77,6 +77,15 @@ function deriveTitle(raw) {
   return 'Decisão do motor';
 }
 
+function formatBidChange(raw) {
+  const before = Number(raw?.value_before ?? raw?.old_bid);
+  const after = Number(raw?.value_after ?? raw?.new_bid);
+  if (!Number.isFinite(before) || !Number.isFinite(after) || before === after) return null;
+  const pct = before > 0 ? ((after / before) - 1) * 100 : null;
+  const pctLabel = Number.isFinite(pct) ? ` (${pct > 0 ? '+' : ''}${pct.toFixed(0)}%)` : '';
+  return `R$ ${before.toFixed(2)} → R$ ${after.toFixed(2)}${pctLabel}`;
+}
+
 
 /*
  * =========================================================
@@ -268,6 +277,7 @@ function AccordionItem({ item, isOpen, onToggle }) {
   const reason = useMemo(() => getMotorReasonLabel(raw), [raw]);
   const confirm = useMemo(() => getAmazonConfirmationStatus(raw), [raw]);
   const title = useMemo(() => deriveTitle(raw), [raw]);
+  const bidChange = useMemo(() => formatBidChange(raw), [raw]);
   const metricWindow = raw?.metric_window || raw?.decision_window || raw?.baseline_window || raw?.data_window_days
     ? `${raw.metric_window || raw.decision_window || raw.baseline_window}${raw.data_window_days ? ` · ${raw.data_window_days}d` : ''}`
     : null;
@@ -289,6 +299,7 @@ function AccordionItem({ item, isOpen, onToggle }) {
         />
         <div className="min-w-0 flex-1 flex items-center gap-2 flex-wrap sm:flex-nowrap">
           <span className="text-sm font-semibold text-theme-primary truncate" title={title}>{title}</span>
+          {bidChange && <span className="text-[11px] font-bold text-emerald-700 whitespace-nowrap">{bidChange}</span>}
           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border whitespace-nowrap ${toneBadge(action.tone)}`}>
             {action.label}
           </span>

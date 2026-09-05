@@ -617,7 +617,18 @@ Deno.serve(async (request) => {
           });
           if (!governance.allowed) {
             const codes = governance.blockers.map((blocker) => String(blocker.code || '').toUpperCase());
-            const __originalHasHardBlocker = codes.some((code) => HARD_GOVERNANCE_BLOCKERS.has(code));
+            const evidenceIsIncomplete = codes.some((code) =>
+              ['SNAPSHOT_REQUIRED', 'SNAPSHOT_MISSING', 'STALE_DATA', 'ADS_DATA_STALE',
+               'SP_API_DATA_STALE', 'ECONOMICS_DATA_STALE', 'ECONOMICS_INCOMPLETE',
+               'LOW_ECONOMIC_CONFIDENCE', 'PREDICTION_CONFIDENCE', 'ECONOMIC_CONFIDENCE'].includes(code)
+            );
+            // PRODUCT_NOT_ELIGIBLE is a hard guard only with current, affirmative
+            // product truth. When the same evaluation says the snapshot/evidence
+            // is missing or stale, it is insufficient evidence and becomes HOLD.
+            const __originalHasHardBlocker = codes.some((code) =>
+              HARD_GOVERNANCE_BLOCKERS.has(code) &&
+              !(code === 'PRODUCT_NOT_ELIGIBLE' && evidenceIsIncomplete)
+            );
 
         /*
          * V3_CONTROLLED_IMPRESSION_RECOVERY_EXECUTION
@@ -996,7 +1007,11 @@ Deno.serve(async (request) => {
             const recoverable = !hasHardBlocker && codes.some((code) =>
               RECOVERABLE_GOVERNANCE_BLOCKERS.has(code) || code.includes('STALE') || code.includes('INCOMPLETE') || code.includes('COOLDOWN')
             );
-            if (BID_ACTIONS.has(String(decision.action || '').toLowerCase()) && !codes.some((code) => V4_HARD_BID_BLOCKERS.has(code))) {
+            const hasConfirmedV4HardBidBlocker = codes.some((code) =>
+              V4_HARD_BID_BLOCKERS.has(code) &&
+              !(code === 'PRODUCT_NOT_ELIGIBLE' && evidenceIsIncomplete)
+            );
+            if (BID_ACTIONS.has(String(decision.action || '').toLowerCase()) && !hasConfirmedV4HardBidBlocker) {
               await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
                 status: 'cancelled', queue_status: 'closed', approval_status: 'no_decision_soft_bid_block',
                 confirmation_status: 'not_applicable', confirmation_required: false,
