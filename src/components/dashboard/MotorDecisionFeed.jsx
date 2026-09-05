@@ -89,7 +89,7 @@ function formatBidChange(raw) {
 
 /*
  * =========================================================
- * CANONICAL PROFIT ENGINE V3 — CURRENT FEED VISIBILITY
+ * CANONICAL PROFIT ENGINE V4 — CURRENT FEED VISIBILITY
  * =========================================================
  *
  * O histórico completo continua disponível.
@@ -125,7 +125,7 @@ function isCurrentOperationalDecision(item) {
       .toLowerCase();
 
   /*
-   * SUPERSEDED significa que outra avaliação V3 venceu.
+   * SUPERSEDED significa que outra avaliação V4 venceu.
    * Não é ação operacional atual.
    */
   if (

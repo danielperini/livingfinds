@@ -529,7 +529,7 @@ const V3_SCHEDULED_ACTIONS = [
   },
   {
     id: 'daily-ai-review',
-    label: 'Revisão diária IA + V3',
+    label: 'Revisão diária IA + V4',
     time: '23:00',
     hour: 23,
     minute: 0,
@@ -777,7 +777,7 @@ function ScheduledV3Actions() {
           </span>
           <span>→</span>
           <span>
-            IA + V3
+            IA + V4
           </span>
           <span>→</span>
           <span>
@@ -1087,7 +1087,7 @@ export default function SalaDeComandoPremium() {
         asin ||
         item?.campaign_name ||
         item?.sku ||
-        'V3',
+        'V4',
         title,
       ]
         .filter(Boolean)
@@ -1266,7 +1266,7 @@ export default function SalaDeComandoPremium() {
           item.last_error ||
           item.reason ||
           item.description ||
-          'Estrutura de campanha identificada pelo V3 para reparo/rebuild.',
+          'Estrutura de campanha identificada pelo V4 para reparo/rebuild.',
 
         tone:
           'info',
@@ -1446,14 +1446,14 @@ export default function SalaDeComandoPremium() {
             <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between gap-3">
               <div>
                 <h2 className="text-base font-semibold text-white">Prioridades operacionais</h2>
-                <p className="text-xs text-slate-500 mt-1">Ações definidas pela IA e pelo V3 que aguardam execução.</p>
+                <p className="text-xs text-slate-500 mt-1">Ações definidas pela IA e pelo V4 que aguardam execução.</p>
               </div>
               <Link to={LEGACY_LINKS.pendentes} className="text-xs text-blue-300 hover:text-blue-200">Ver decisões completas →</Link>
             </div>
             {priorityItems.length === 0 ? (
               <div className="p-10 text-center">
                 <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto" />
-                <p className="text-sm text-slate-300 mt-3">Nenhuma ação V3 aguardando execução.</p>
+                <p className="text-sm text-slate-300 mt-3">Nenhuma ação V4 aguardando execução.</p>
                 <p className="text-xs text-slate-500 mt-1">A próxima revisão diária ou semanal poderá gerar novas prioridades.</p>
               </div>
             ) : (
@@ -1621,7 +1621,7 @@ export default function SalaDeComandoPremium() {
         <MetricCard label="Ação imediata" value={summary.urgentAlerts.length + summary.pendingDecisions.length} detail="prioridades e aprovações" tone={summary.urgentAlerts.length > 0 ? 'danger' : 'info'} icon={AlertTriangle} />
         <MetricCard label="Executadas hoje" value={summary.executedToday.length} detail="decisões concluídas" tone="success" icon={CheckCircle2} />
         <MetricCard label="Fila com erro" value={summary.failedQueue.length} detail={`${summary.pendingQueue.length} em processamento/recuperação${summary.safetyBlockedQueue.length ? ` · ${summary.safetyBlockedQueue.length} protegidos` : ''}${summary.historicalQueue.length ? ` · ${summary.historicalQueue.length} histórico(s)` : ''}`} tone={summary.failedQueue.length > 0 ? 'danger' : 'default'} icon={XCircle} />
-        <MetricCard label="Protegidas pelo V3" value={summary.protectedDecisions?.length || 0} detail="hard guards / superseded" tone={summary.pendingDecisions.length > 0 ? 'warning' : 'default'} icon={Clock3} />
+        <MetricCard label="Protegidas pelo V4" value={summary.protectedDecisions?.length || 0} detail="hard guards / superseded" tone={summary.pendingDecisions.length > 0 ? 'warning' : 'default'} icon={Clock3} />
         <MetricCard label="Saúde do sistema" value={summary.healthOk ? 'Estável' : 'Atenção'} detail={summary.healthOk ? 'sincronização e fila operacionais' : summary.healthReasons.join(' · ')} tone={summary.healthOk ? 'success' : 'warning'} icon={Activity} />
       </div>
 
