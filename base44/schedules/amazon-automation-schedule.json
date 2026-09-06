@@ -338,6 +338,31 @@
       }
     },
     {
+      "name": "V4 profitable placement optimization - every 6 hours",
+      "function": "applyBiddingStrategyByCampaign",
+      "cron": "42 */6 * * *",
+      "payload": {
+        "amazon_account_id": "6a40448b9af1241f356e9fcc",
+        "_service_role": true,
+        "dry_run": false,
+        "trigger_type": "v4_profitable_placements"
+      },
+      "enabled": true
+    },
+    {
+      "name": "V4 qualified manual exact creation - 3x daily",
+      "function": "runTermBankToCampaigns",
+      "cron": "5 7,15,23 * * *",
+      "payload": {
+        "amazon_account_id": "6a40448b9af1241f356e9fcc",
+        "_service_role": true,
+        "max_per_run": 20,
+        "max_per_asin": 15,
+        "trigger_type": "v4_qualified_manual_exact"
+      },
+      "enabled": true
+    },
+    {
       "name": "GPT read-only cross-module analysis - 3x daily BRT",
       "function": "summarizeForAI",
       "cron": "55 6,14,22 * * *",

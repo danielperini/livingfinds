@@ -15,6 +15,7 @@ const STRATEGY_MAP: Record<string, string> = {
   fixed: 'MANUAL',
 };
 const MAX_TOP_OF_SEARCH_BOOST = 20;
+const MAX_PRODUCT_PAGES_BOOST = 10;
 const COOLDOWN_HOURS = 24;
 const LOOKBACK_DAYS = 14;
 
@@ -62,7 +63,7 @@ function decideStrategy(params: {
   metrics: any;
   targetAcos: number;
   inventory: number;
-}): { strategy: 'down_only' | 'up_and_down' | 'fixed'; tosBoost: number; reason: string; acos: number | null } {
+}): { strategy: 'down_only' | 'up_and_down' | 'fixed'; tosBoost: number; productPagesBoost: number; reason: string; acos: number | null } {
   const { campaign, economics, assessment, metrics, targetAcos, inventory } = params;
   const ageHours = hoursSince(campaign.start_date || campaign.created_at);
   const spend = numberValue(metrics.spend);
@@ -70,23 +71,30 @@ function decideStrategy(params: {
   const orders = numberValue(metrics.orders);
   const acos = sales > 0 ? spend / sales * 100 : null;
 
-  if (inventory === 0) return { strategy: 'down_only', tosBoost: 0, reason: 'Estoque zero: nenhuma ampliação de lance ou placement.', acos };
-  if (ageHours < 72 && spend < 5) return { strategy: 'fixed', tosBoost: 0, reason: 'Campanha com menos de 72h e pouca evidência: lance fixo sem placement.', acos };
-  if (!economicsAreActionable(economics, assessment)) return { strategy: 'down_only', tosBoost: 0, reason: 'Economia do SKU incompleta: somente redução dinâmica.', acos };
+  if (inventory === 0) return { strategy: 'down_only', tosBoost: 0, productPagesBoost: 0, reason: 'Estoque zero: nenhuma ampliação de lance ou placement.', acos };
+  if (ageHours < 72 && spend < 5) return { strategy: 'fixed', tosBoost: 0, productPagesBoost: 0, reason: 'Campanha com menos de 72h e pouca evidência: lance fixo sem placement.', acos };
+  if (!economicsAreActionable(economics, assessment)) return { strategy: 'down_only', tosBoost: 0, productPagesBoost: 0, reason: 'Economia do SKU incompleta: somente redução dinâmica.', acos };
 
   const pressure = classifyProfitPressure(assessment, economics);
   if (['critical', 'defensive', 'watch'].includes(pressure)) {
-    return { strategy: 'down_only', tosBoost: 0, reason: `Proteção econômica ${pressure}: Down Only e Top of Search zerado.`, acos };
+    return { strategy: 'down_only', tosBoost: 0, productPagesBoost: 0, reason: `Proteção econômica ${pressure}: Down Only e placements zerados.`, acos };
   }
-  if (orders === 0 || acos === null) return { strategy: 'down_only', tosBoost: 0, reason: 'Sem conversão atribuída: Down Only, sem boost.', acos };
-  if (acos > targetAcos) return { strategy: 'down_only', tosBoost: 0, reason: `ACoS ${roundMoney(acos)}% acima da meta segura ${targetAcos}%.`, acos };
+  if (orders === 0 || acos === null) return { strategy: 'down_only', tosBoost: 0, productPagesBoost: 0, reason: 'Sem conversão atribuída: Down Only, sem boost.', acos };
+  if (acos > targetAcos) return { strategy: 'down_only', tosBoost: 0, productPagesBoost: 0, reason: `ACoS ${roundMoney(acos)}% acima da meta segura ${targetAcos}%.`, acos };
 
   const headroom = Math.max(0, (targetAcos - acos) / Math.max(targetAcos, 1));
-  const proposedBoost = Math.min(MAX_TOP_OF_SEARCH_BOOST, Math.max(5, Math.round(5 + headroom * 15)));
+  const baseBid = numberValue(campaign.default_bid || campaign.bid || campaign.current_bid, 0);
+  const safeMaxCpc = numberValue(economics?.safe_max_cpc, 0);
+  const safePlacementPct = baseBid > 0 && safeMaxCpc > 0
+    ? Math.max(0, Math.floor((safeMaxCpc / baseBid - 1) * 100))
+    : 0;
+  const proposedBoost = Math.min(MAX_TOP_OF_SEARCH_BOOST, safePlacementPct, Math.max(5, Math.round(5 + headroom * 15)));
   const exceptional = orders >= 5 && acos <= targetAcos * 0.70 && numberValue(assessment?.profit_after_ads, 0) > 0;
+  const productPagesBoost = Math.min(MAX_PRODUCT_PAGES_BOOST, safePlacementPct, exceptional ? 10 : 5);
   return {
     strategy: 'down_only',
     tosBoost: proposedBoost,
+    productPagesBoost,
     reason: exceptional
       ? `Vencedora comprovada: ${orders} pedidos, ACoS ${roundMoney(acos)}% e lucro pós-Ads positivo. Down Only preservado para impedir aumentos dinâmicos acima de 20%; Top of Search ${proposedBoost}%.`
       : `Campanha rentável: ${orders} pedidos, ACoS ${roundMoney(acos)}% abaixo da meta segura ${targetAcos}%. Down Only com Top of Search ${proposedBoost}%.`,
@@ -173,7 +181,8 @@ Deno.serve(async (req) => {
         ? 'up_and_down'
         : ['manual', 'fixed'].includes(String(campaign.bidding_strategy || '').toLowerCase()) ? 'fixed' : 'down_only';
       const previousTos = numberValue(campaign.top_of_search_adjustment, 0);
-      const changed = previousStrategy !== decision.strategy || previousTos !== decision.tosBoost;
+      const previousProductPages = numberValue(campaign.product_pages_adjustment, 0);
+      const changed = previousStrategy !== decision.strategy || previousTos !== decision.tosBoost || previousProductPages !== decision.productPagesBoost;
       const preview = {
         campaign_id: campaignId,
         asin,
@@ -182,6 +191,8 @@ Deno.serve(async (req) => {
         strategy_after: decision.strategy,
         top_of_search_before: previousTos,
         top_of_search_after: decision.tosBoost,
+        product_pages_before: previousProductPages,
+        product_pages_after: decision.productPagesBoost,
         orders_14d: numberValue(metrics.orders),
         spend_14d: roundMoney(metrics.spend),
         sales_14d: roundMoney(metrics.sales),
@@ -222,7 +233,10 @@ Deno.serve(async (req) => {
         payload: {
           campaigns: [{
             campaignId,
-            placement: { placementBidAdjustment: [{ predicate: 'PLACEMENT_TOP', percentage: decision.tosBoost }] },
+            placement: { placementBidAdjustment: [
+              { predicate: 'PLACEMENT_TOP', percentage: decision.tosBoost },
+              { predicate: 'PLACEMENT_PRODUCT_PAGE', percentage: decision.productPagesBoost },
+            ] },
           }],
         },
       }).catch((error: any) => ({ ok: false, error: error.message })));
@@ -237,6 +251,7 @@ Deno.serve(async (req) => {
       await base44.asServiceRole.entities.Campaign.update(campaign.id, {
         bidding_strategy: decision.strategy,
         top_of_search_adjustment: decision.tosBoost,
+        product_pages_adjustment: decision.productPagesBoost,
         last_activity_at: now,
       }).catch(() => {});
       await base44.asServiceRole.entities.CampaignChangeHistory.create({
@@ -244,9 +259,9 @@ Deno.serve(async (req) => {
         campaign_id: campaignId,
         asin,
         change_type: 'bidding_strategy_auto',
-        field_changed: 'bidding_strategy + top_of_search_adjustment',
-        old_value: `${previousStrategy} / ToS ${previousTos}%`,
-        new_value: `${decision.strategy} / ToS ${decision.tosBoost}%`,
+        field_changed: 'bidding_strategy + top_of_search_adjustment + product_pages_adjustment',
+        old_value: `${previousStrategy} / ToS ${previousTos}% / PP ${previousProductPages}%`,
+        new_value: `${decision.strategy} / ToS ${decision.tosBoost}% / PP ${decision.productPagesBoost}%`,
         reason: decision.reason,
         acos_at_change: decision.acos || 0,
         target_acos_at_change: policy.target_acos,
@@ -264,6 +279,8 @@ Deno.serve(async (req) => {
       dry_run: dryRun,
       policy: {
         max_top_of_search_boost_pct: MAX_TOP_OF_SEARCH_BOOST,
+        max_product_pages_boost_pct: MAX_PRODUCT_PAGES_BOOST,
+        safe_max_cpc_required_for_positive_placement: true,
         automatic_up_and_down_disabled: true,
         product_economics_required: true,
         lookback_days: LOOKBACK_DAYS,
