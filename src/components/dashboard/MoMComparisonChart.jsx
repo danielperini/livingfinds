@@ -117,6 +117,8 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
   const firstCurrent = `${curYear}-${String(curMonth + 1).padStart(2, '0')}-01`;
   const firstPrev = prevMonthDate.toISOString().slice(0, 10);
   const lastDayPrevMonth = new Date(Date.UTC(curYear, curMonth, 0)).getUTCDate();
+  const matchedPrevDay = Math.min(yesterdayBRT.getUTCDate(), lastDayPrevMonth);
+  const matchedPrevEnd = `${prevMonthDate.getUTCFullYear()}-${String(prevMonthDate.getUTCMonth() + 1).padStart(2, '0')}-${String(matchedPrevDay).padStart(2, '0')}`;
 
   // Dias do mês anterior completo (para exibir o mês completo no gráfico)
   const daysInPrevMonth = lastDayPrevMonth;
@@ -184,7 +186,10 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
     let previousTotal = 0;
     return [{ day: 0, curCumulative: 0, prevCumulative: 0 }, ...chartData.map((point) => {
       const hasCurrent = point.curRevenue != null;
-      const hasPrevious = point.prevRevenue != null;
+      // A curva acumulada compara exatamente a mesma quantidade de dias.
+      // O restante do mês anterior continua disponível nos gráficos diários,
+      // mas não pode inflar a referência contra um mês ainda em andamento.
+      const hasPrevious = point.day <= daysInCurMonth && point.prevRevenue != null;
       if (hasCurrent) currentTotal += Number(point.curRevenue);
       if (hasPrevious) previousTotal += Number(point.prevRevenue);
       return {
@@ -229,13 +234,13 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
 
     for (const [date, v] of Object.entries(salesDailyByDate)) {
       if (date >= firstCurrent && date <= yesterdayStr) cur.revenue += v.revenue;
-      if (date >= firstPrev && date < firstCurrent) prev.revenue += v.revenue;
+      if (date >= firstPrev && date <= matchedPrevEnd) prev.revenue += v.revenue;
     }
     for (const [date, v] of Object.entries(adsByDate)) {
       if (date >= firstCurrent && date <= yesterdayStr) {
         cur.spend += v.spend; cur.sales += v.sales; cur.orders += v.orders;
       }
-      if (date >= firstPrev && date < firstCurrent) {
+      if (date >= firstPrev && date <= matchedPrevEnd) {
         prev.spend += v.spend; prev.sales += v.sales; prev.orders += v.orders;
       }
     }
@@ -250,7 +255,7 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
         acos: prev.sales > 0 ? (prev.spend / prev.sales) * 100 : 0,
       },
     };
-  }, [salesDailyByDate, adsByDate, firstCurrent, firstPrev, yesterdayStr]);
+  }, [salesDailyByDate, adsByDate, firstCurrent, firstPrev, matchedPrevEnd, yesterdayStr]);
 
   const dataKeyMap = {
     revenue: { cur: 'curRevenue', prev: 'prevRevenue' },
@@ -295,7 +300,7 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
         <div>
           <h2 className="text-sm font-semibold text-slate-300">Comparação mês atual vs mês anterior</h2>
           <p className="text-[10px] text-slate-500 mt-0.5">
-            <span>{curMonthLabel} (dias 1–{daysInCurMonth}, {daysWithCurData} c/ dados) vs {prevMonthLabel} completo ({daysWithPrevData} c/ dados) · Fonte: relatórios já baixados</span>
+            <span>{curMonthLabel} vs {prevMonthLabel}, ambos dos dias 1–{daysInCurMonth} · somente dados fechados · Fonte: relatórios já baixados</span>
           </p>
         </div>
         <div className="flex bg-surface-2 border border-surface-3 rounded-lg p-0.5 gap-0.5 flex-wrap">
@@ -318,9 +323,9 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
           </div>
         </div>
         <div className="bg-surface-2/50 rounded-lg p-3">
-          <p className="text-[10px] text-slate-500 mb-1 capitalize">{prevMonthLabel} (mês completo)</p>
+          <p className="text-[10px] text-slate-500 mb-1 capitalize">{prevMonthLabel} (dias 1–{matchedPrevDay})</p>
           <p className="text-base font-bold text-slate-400">{fmtTotals(prevVal)}</p>
-          <p className="text-[10px] text-slate-600 mt-1">referência</p>
+          <p className="text-[10px] text-slate-600 mt-1">período equivalente</p>
         </div>
       </div>
 
