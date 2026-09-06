@@ -1,0 +1,22 @@
+name: Apply campaign creation gaps
+
+on:
+  push:
+    branches: [feat/campaign-funnel-implementation]
+    paths: [.github/workflows/audit-campaign-gaps.yml]
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -T 10 -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+      - name: Create qualified campaigns and verify Amazon coverage
+        env:
+          TARGET: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
+        run: |
+          ssh -i ~/.ssh/deploy_key "$TARGET" "docker exec server-app-1 deno eval 'const aid=\"6a40448b9af1241f356e9fcc\"; const call=async(fn,extra={})=>{const r=await fetch(\"http://127.0.0.1:8000/functions/\"+fn,{method:\"POST\",headers:{authorization:\"Bearer \"+Deno.env.get(\"API_TOKEN\"),\"content-type\":\"application/json\"},body:JSON.stringify({amazon_account_id:aid,_service_role:true,...extra})});return await r.json()}; const before=await call(\"verifyRemoteSkuCampaignFloor\",{manual_floor:1}); const creation=await call(\"runTermBankToCampaigns\",{max_per_run:20,max_per_asin:15}); await call(\"syncAdsCampaignStatesV2\",{force:true,trigger_type:\"post_70_confidence_campaign_creation\"}); const after=await call(\"verifyRemoteSkuCampaignFloor\",{manual_floor:1}); console.log(\"CAMPAIGN_CREATION_RESULT=\"+JSON.stringify({before:{products:before.products,deficits_count:before.deficits_count,deficits:before.deficits},creation,after:{products:after.products,compliant:after.compliant,deficits_count:after.deficits_count,deficits:after.deficits}}))'"
