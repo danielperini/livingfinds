@@ -3,8 +3,7 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 const num = (value: any) => Number(value || 0);
 const campaignId = (row: any) => String(row.campaign_id || row.amazon_campaign_id || '').trim();
 const isEnabled = (row: any) => String(row.amazon_status || row.state || row.status || '').toUpperCase() === 'ENABLED';
-const isManual = (row: any) => String(row.targeting_type || '').toUpperCase() === 'MANUAL'
-  || String(row.name || row.campaign_name || '').toUpperCase().includes('MANUAL');
+const upper = (value: any) => String(value || '').trim().toUpperCase();
 
 Deno.serve(async (req) => {
   const base44 = createClientFromRequest(req);
@@ -19,10 +18,19 @@ Deno.serve(async (req) => {
   const days = 10;
   const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-  const [campaigns, metrics] = await Promise.all([
+  const [campaigns, metrics, products, economics] = await Promise.all([
     base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, '-updated_date', 5000),
     base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 10000),
+    base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, '-updated_at', 5000),
+    base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, '-updated_at', 5000),
   ]);
+
+  const productByAsin = new Map(products.filter((row: any) => row.asin).map((row: any) => [upper(row.asin), row]));
+  const economicsByAsin = new Map<string, any>();
+  for (const row of economics) {
+    const asin = upper(row.asin);
+    if (asin && !economicsByAsin.has(asin)) economicsByAsin.set(asin, row);
+  }
 
   const totals = new Map<string, { spend: number; sales: number; orders: number }>();
   const todayTotals = new Map<string, { spend: number; sales: number; orders: number }>();
@@ -52,7 +60,13 @@ Deno.serve(async (req) => {
     const tenDayWaste = (!created || created <= cutoff) && num(performance?.spend) > 0
       && num(performance?.sales) === 0 && num(performance?.orders) === 0;
     const dailyLossCap = num(daily?.spend) >= 10 && num(daily?.sales) === 0 && num(daily?.orders) === 0;
-    return cid && isEnabled(campaign) && isManual(campaign) && (tenDayWaste || dailyLossCap);
+    const asin = upper(campaign.asin || campaign.advertised_asin);
+    const product = productByAsin.get(asin);
+    const economics = economicsByAsin.get(asin);
+    const breakEvenAcos = num(economics?.break_even_acos || product?.break_even_acos_pct);
+    const allowedSpend = breakEvenAcos > 0 ? num(performance?.sales) * breakEvenAcos / 100 : 0;
+    const confirmedEconomicLoss = breakEvenAcos > 0 && num(performance?.spend) > allowedSpend;
+    return cid && isEnabled(campaign) && (tenDayWaste || dailyLossCap || confirmedEconomicLoss);
   });
 
   const paused: any[] = [];
@@ -62,9 +76,17 @@ Deno.serve(async (req) => {
     const performance = totals.get(cid)!;
     const daily = todayTotals.get(cid) || { spend: 0, sales: 0, orders: 0 };
     const dailyCapTriggered = daily.spend >= 10 && daily.sales === 0 && daily.orders === 0;
-    const reasonCode = dailyCapTriggered ? 'DAILY_ZERO_SALES_LOSS_CAP_10_BRL' : 'MANUAL_SPEND_ZERO_SALES_10D';
+    const asin = upper(campaign.asin || campaign.advertised_asin);
+    const product = productByAsin.get(asin);
+    const economics = economicsByAsin.get(asin);
+    const breakEvenAcos = num(economics?.break_even_acos || product?.break_even_acos_pct);
+    const allowedSpend = performance.sales * breakEvenAcos / 100;
+    const economicLoss = Math.max(0, performance.spend - allowedSpend);
+    const reasonCode = dailyCapTriggered
+      ? 'DAILY_ZERO_SALES_LOSS_CAP_10_BRL'
+      : performance.sales > 0 ? 'CONFIRMED_ECONOMIC_LOSS_10D' : 'SPEND_ZERO_SALES_10D';
     const response = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
-      _service_role: true, amazon_account_id: aid, operation: 'pauseManualCampaignNoSales10d',
+      _service_role: true, amazon_account_id: aid, operation: 'pauseCampaignEconomicLoss10d',
       method: 'PUT', path: '/sp/campaigns', payload: { campaigns: [{ campaignId: cid, state: 'PAUSED' }] },
       content_type: 'application/vnd.spCampaign.v3+json', accept: 'application/vnd.spCampaign.v3+json',
     }).catch((error: any) => ({ data: { ok: false, error: error?.message } }));
@@ -84,13 +106,13 @@ Deno.serve(async (req) => {
       decision_type: 'campaign_pause', action: 'pause_campaign', canonical_action_type: 'PAUSE_CAMPAIGN',
       status: 'confirmed', queue_status: 'confirmed', amazon_confirmation_status: 'confirmed',
       reason_code: reasonCode, rationale: dailyCapTriggered
-        ? `Campanha MANUAL atingiu R$ ${daily.spend.toFixed(2)} hoje sem venda. Teto diário de perda de R$10 acionado e pausa confirmada pela Amazon.`
-        : `Campanha MANUAL gastou R$ ${performance.spend.toFixed(2)} e teve zero vendas nos últimos 10 dias. Pausa confirmada pela Amazon.`,
-      data_used: JSON.stringify({ lookback_days: days, spend: performance.spend, daily_spend: daily.spend, sales: 0, orders: 0 }),
+        ? `Campanha atingiu R$ ${daily.spend.toFixed(2)} hoje sem venda. Teto diário de perda de R$10 acionado e pausa confirmada pela Amazon.`
+        : `Campanha gastou R$ ${performance.spend.toFixed(2)} em 10 dias, vendeu R$ ${performance.sales.toFixed(2)} e excedeu o gasto de equilíbrio em R$ ${economicLoss.toFixed(2)}. Pausa confirmada pela Amazon.`,
+      data_used: JSON.stringify({ lookback_days: days, spend: performance.spend, daily_spend: daily.spend, sales: performance.sales, orders: performance.orders, break_even_acos: breakEvenAcos, allowed_spend: allowedSpend, economic_loss: economicLoss }),
       operational_visibility: 'visible', executed_at: now, confirmed_at: now, created_at: now,
     }).catch(() => {});
     paused.push({ campaign_id: cid, campaign_name: campaign.name || campaign.campaign_name,
-      reason_code: reasonCode, spend_10d: Number(performance.spend.toFixed(2)), spend_today: Number(daily.spend.toFixed(2)) });
+      reason_code: reasonCode, spend_10d: Number(performance.spend.toFixed(2)), sales_10d: Number(performance.sales.toFixed(2)), economic_loss_10d: Number(economicLoss.toFixed(2)), spend_today: Number(daily.spend.toFixed(2)) });
   }
 
   return Response.json({ ok: errors.length === 0, lookback_days: days, evaluated: campaigns.length,

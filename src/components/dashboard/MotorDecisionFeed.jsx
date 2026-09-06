@@ -209,6 +209,15 @@ function isCurrentOperationalDecision(item) {
     return false;
   }
 
+  // Um bid bloqueado não é uma alteração em curso na Amazon. Hard guards
+  // continuam no histórico/auditoria; soft guards são encerrados pelo V4.
+  const blockedBid =
+    status === 'blocked' &&
+    ['increase_bid', 'reduce_bid', 'set_bid', 'update_bid', 'bid_change', 'bid_increase', 'bid_decrease']
+      .some((candidate) => action.includes(candidate));
+
+  if (blockedBid) return false;
+
   return true;
 }
 
