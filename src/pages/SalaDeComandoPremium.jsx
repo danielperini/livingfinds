@@ -570,14 +570,14 @@ const V3_SCHEDULED_ACTIONS = [
   },
   {
     id: 'weekly-ai-review',
-    label: 'Revisão semanal ampla da IA',
+    label: 'Revisão semanal econômica V4',
     time: '21:00',
     hour: 21,
     minute: 0,
     cadence: 'sunday',
     highlight: true,
     detail:
-      'Domingo: compara 7d × 30d, reavalia campanhas atuais e pausadas, winners, estrutura e ajustes autônomos.',
+      'Domingo: compara 7d × 30d, reavalia campanhas atuais e pausadas, winners e estrutura. GPT fornece análise; somente o V4 decide.',
   },
 ];
 
@@ -1446,7 +1446,7 @@ export default function SalaDeComandoPremium() {
             <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between gap-3">
               <div>
                 <h2 className="text-base font-semibold text-white">Prioridades operacionais</h2>
-                <p className="text-xs text-slate-500 mt-1">Ações definidas pela IA e pelo V4 que aguardam execução.</p>
+                <p className="text-xs text-slate-500 mt-1">Ações econômicas decididas pelo V4; GPT atua somente como análise consultiva.</p>
               </div>
               <Link to={LEGACY_LINKS.pendentes} className="text-xs text-blue-300 hover:text-blue-200">Ver decisões completas →</Link>
             </div>

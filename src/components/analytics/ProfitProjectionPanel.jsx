@@ -59,18 +59,25 @@ export default function ProfitProjectionPanel({ account }) {
       recentDates.has(row.assessment_date) && Number(row.real_sales || row.ads_sales || 0) > 0
     ).map((row) => row.asin));
     const sample = currentRows.filter((row) => sellingAsins.has(row.asin));
-    const dailyProfit = Object.values(sample.reduce((byDate, row) => {
+    // A projeção de escala usa apenas observações realmente lucrativas. O
+    // portfólio total continua nos gráficos econômicos; aqui mostramos quanto
+    // os vencedores conseguem produzir sem diluir a média com campanhas que o
+    // V4 já deve reduzir/pausar.
+    const profitableSample = sample.filter((row) =>
+      Number(row.units_real || row.orders_ads || 0) > 0 && Number(row.profit_after_ads || 0) > 0
+    );
+    const dailyProfit = Object.values(profitableSample.reduce((byDate, row) => {
       if (!byDate[row.assessment_date]) byDate[row.assessment_date] = { date: row.assessment_date, profit: 0 };
       byDate[row.assessment_date].profit += Number(row.profit_after_ads || 0);
       return byDate;
     }, {}));
-    const totals = sample.reduce((acc, row) => ({
+    const totals = profitableSample.reduce((acc, row) => ({
       profit: acc.profit + Number(row.profit_after_ads || 0),
       spend: acc.spend + Number(row.spend || 0),
       sales: acc.sales + Number(row.real_sales || row.ads_sales || 0),
       units: acc.units + Number(row.units_real || row.orders_ads || 0),
     }), { profit: 0, spend: 0, sales: 0, units: 0 });
-    const profitableAsins = new Set(sample.filter((row) => Number(row.units_real || row.orders_ads || 0) > 0 && Number(row.profit_after_ads || 0) > 0).map((row) => row.asin));
+    const profitableAsins = new Set(profitableSample.map((row) => row.asin));
     const salesPerUnit = totals.units > 0 ? totals.sales / totals.units : 0;
     const profitPerUnit = totals.units > 0 ? totals.profit / totals.units : 0;
     const observedAdsPercent = totals.sales > 0 ? totals.spend / totals.sales * 100 : 0;
@@ -103,7 +110,7 @@ export default function ProfitProjectionPanel({ account }) {
     </div>
     {!dataReady && <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-xs text-amber-300">Dados insuficientes para uma projeção confiável. São necessários pelo menos 30 dias, vendas recentes e lucro unitário positivo confirmado na aferição econômica.</div>}
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      <Card label="Lucro unitário projetado" value={money(safeProfitPerUnit)} detail={`Média real ajustada pelo Ads de ${selectedAdsPercent.toFixed(1)}%`} tone={safeProfitPerUnit > 0 ? 'text-emerald-400' : 'text-red-400'} />
+      <Card label="Lucro unitário dos vencedores" value={money(safeProfitPerUnit)} detail={`SKUs lucrativos · Ads observado ${selectedAdsPercent.toFixed(1)}%`} tone={safeProfitPerUnit > 0 ? 'text-emerald-400' : 'text-red-400'} />
       <Card label="Unidades por dia" value={number(unitsNeededDay)} detail={`${number(unitsNeededMonth)} unidades/mês`} tone="text-cyan" />
       <Card label="Receita mensal prevista" value={money(projectedRevenue)} detail={`Ticket médio ${money(model.salesPerUnit)}`} />
       <Card label="ROI sobre Ads" value={`${projectedRoi.toFixed(2)}x`} detail={`Investimento previsto ${money(projectedAds)}`} tone={projectedRoi >= 1 ? 'text-emerald-400' : 'text-amber-400'} />
@@ -115,7 +122,7 @@ export default function ProfitProjectionPanel({ account }) {
     </div>
     <div className="grid gap-4 lg:grid-cols-2">
       <div className="rounded-xl border border-surface-2 bg-surface-1 p-4"><p className="flex items-center gap-2 text-sm font-semibold text-white"><Target className="h-4 w-4 text-cyan" /> Capacidade de portfólio</p><div className="mt-4 grid grid-cols-3 gap-3 text-center"><div><p className="text-xl font-bold text-white">{model.activeSkus}</p><p className="text-[10px] text-slate-500">SKUs lucrativos e atuais</p></div><div><p className="text-xl font-bold text-cyan">{skusNeeded}</p><p className="text-[10px] text-slate-500">SKUs equivalentes necessários</p></div><div><p className="text-xl font-bold text-amber-400">{additionalSkus}</p><p className="text-[10px] text-slate-500">SKUs adicionais estimados</p></div></div><p className="mt-3 text-[10px] text-slate-500">{model.sellingProducts} de {model.currentProducts} SKUs ativos/com estoque venderam nos últimos 30 dias.</p></div>
-      <div className="rounded-xl border border-surface-2 bg-surface-1 p-4"><p className="flex items-center gap-2 text-sm font-semibold text-white"><TrendingUp className="h-4 w-4 text-emerald-400" /> Sugestão orientada por dados</p><p className="mt-3 text-sm leading-relaxed text-slate-300">{safeProfitPerUnit > 0 ? `Para alcançar ${money(monthlyGoal)}, a loja precisa sustentar cerca de ${number(unitsNeededDay)} unidades/dia. Antes de ampliar o catálogo, priorize os ${model.activeSkus} SKUs com lucro confirmado e mantenha Ads em até ${selectedAdsPercent.toFixed(1)}% da receita simulada.` : 'A margem projetada não é positiva com os dados e o nível de Ads informado. Revise preço, custos, taxa Amazon ou reduza o investimento em Ads antes de buscar escala.'}</p></div>
+      <div className="rounded-xl border border-surface-2 bg-surface-1 p-4"><p className="flex items-center gap-2 text-sm font-semibold text-white"><TrendingUp className="h-4 w-4 text-emerald-400" /> Decisão econômica V4</p><p className="mt-3 text-sm leading-relaxed text-slate-300">{safeProfitPerUnit > 0 ? `ESCALAR COM CONTROLE: priorizar os ${model.activeSkus} SKUs com lucro confirmado, aumentar bids/placements somente até o safeMaxCpc e manter Ads em até ${selectedAdsPercent.toFixed(1)}% da receita simulada. Campanhas acima do break-even entram em redução ou pausa; zero entrega entra em recuperação, não em corte por prejuízo.` : 'PROTEGER MARGEM: não ampliar investimento enquanto preço, custos e taxas não produzirem lucro unitário positivo. O V4 reduz ou pausa somente perdas confirmadas.'}</p></div>
     </div>
     <p className="text-[10px] text-slate-500">Modelo: Holt + tendência robusta Theil-Sen + efeito semanal + intervalos P10/P50/P90 de quantis empíricos dos resíduos. Projeção financeira, não garantia de resultado.</p>
   </div>;
