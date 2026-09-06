@@ -21,13 +21,15 @@ Deno.serve(async (req) => {
     }
 
     // Buscar dados consolidados das camadas anteriores
-    const [campaigns, keywords, searchTerms, products, decisions, alerts] = await Promise.all([
+    const cutoff30d = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+    const [campaigns, keywords, searchTerms, products, decisions, alerts, salesDaily] = await Promise.all([
       base44.asServiceRole.entities.Campaign.filter({ amazon_account_id }, '-spend', 500),
       base44.asServiceRole.entities.Keyword.filter({ amazon_account_id }, '-spend', 2000),
       base44.asServiceRole.entities.SearchTerm.filter({ amazon_account_id }, '-date', 2000),
       base44.asServiceRole.entities.Product.filter({ amazon_account_id }, '-total_sales_30d', 200),
       base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id, status: 'pending' }, '-created_date', 100),
       base44.asServiceRole.entities.Alert.filter({ amazon_account_id, status: 'active' }, '-created_at', 50),
+      base44.asServiceRole.entities.SalesDaily.filter({ amazon_account_id }, '-date', 5000),
     ]);
 
     // Calcular métricas agregadas
@@ -40,6 +42,10 @@ Deno.serve(async (req) => {
     const roas = totalSpend > 0 ? (totalSales / totalSpend) : 0;
     const ctr = totalClicks > 0 ? (totalClicks / (campaigns.reduce((sum, c) => sum + (c.impressions || 0), 0)) * 100) : 0;
     const cvr = totalClicks > 0 ? (totalOrders / totalClicks * 100) : 0;
+    const closedRealRevenue30d = salesDaily
+      .filter((row: any) => String(row.date || '') >= cutoff30d)
+      .reduce((sum: number, row: any) => sum + Number(row.ordered_product_sales || 0), 0);
+    const tacos = closedRealRevenue30d > 0 ? (totalSpend / closedRealRevenue30d * 100) : null;
 
     // Contar alertas por severidade
     const alertCounts = {
@@ -225,6 +231,9 @@ Deno.serve(async (req) => {
         total_sales: totalSales.toFixed(2),
         acos: acos.toFixed(1),
         roas: roas.toFixed(2),
+        tacos: tacos == null ? null : tacos.toFixed(1),
+        real_revenue_30d: closedRealRevenue30d.toFixed(2),
+        tacos_data_partial: closedRealRevenue30d <= 0,
         ctr: ctr.toFixed(2),
         cvr: cvr.toFixed(2),
         total_clicks: totalClicks,
@@ -256,6 +265,8 @@ Você é especialista em Amazon Ads, economia por SKU e recuperação de entrega
 - Vendas: $${totalSales.toFixed(2)}
 - ACoS: ${acos.toFixed(1)}% (meta: 25-30%)
 - ROAS: ${roas.toFixed(2)}x (meta: 3-4x)
+- Faturamento total SP-API fechado: $${closedRealRevenue30d.toFixed(2)}
+- TACoS: ${tacos == null ? 'indisponível — não inferir nem substituir por zero' : `${tacos.toFixed(1)}%`}
 - CTR: ${ctr.toFixed(2)}%
 - CVR: ${cvr.toFixed(2)}%
 
@@ -285,6 +296,7 @@ ${opportunities.map(o => `- ${o.type}: ${o.count} ocorrências`).join('\n')}
 5. Detecte campanhas gastando acima do esperado ou do limite econômico e recomende proteção contra prejuízo.
 6. Detecte campanhas sem gasto/entrega e avalie CREATE, PAUSE, HOLD ou aumento de bid limitado pelo safeMaxCpc.
 7. Não execute ações: entregue evidências e recomendações para decisão determinística do V4.
+8. Use TACoS apenas quando houver faturamento SP-API fechado. ACoS alto com TACoS controlado pode indicar halo orgânico; TACoS alto bloqueia recomendação de escala. Nunca conclua canibalização sem série temporal suficiente.
 
 Responda em JSON:
 {
