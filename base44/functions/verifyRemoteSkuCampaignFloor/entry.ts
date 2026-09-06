@@ -26,7 +26,7 @@ Deno.serve(async (req) => {
     const base44 = createClientFromRequest(req);
     const body = await req.json().catch(() => ({}));
     if (body._service_role !== true) return Response.json({ ok: false, error: 'Uso interno' }, { status: 403 });
-    const floor = Math.max(5, Number(body.manual_floor || 5));
+    const floor = Math.max(1, Number(body.manual_floor || 1));
     const accounts = body.amazon_account_id
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
       : await base44.asServiceRole.entities.AmazonAccount.list('-updated_date', 50);
