@@ -64,13 +64,31 @@ Deno.serve(async (req) => {
 
     const now = new Date().toISOString();
 
+    // A IA é somente consultiva. Toda mutação Amazon pertence ao pipeline
+    // determinístico CANONICAL_PROFIT_ENGINE_V4 e ao seu executor auditado.
+    const mutatingModes = new Set([
+      'autopilot', 'smart_bid', 'calibrate_bids', 'harvest',
+      'mine_opportunities', 'negate', 'full',
+    ]);
+    if (mutatingModes.has(String(mode).toLowerCase())) {
+      return Response.json({
+        ok: false,
+        blocked: true,
+        reason_code: 'AI_READ_ONLY_V4_EXECUTION_REQUIRED',
+        error: 'IA em modo somente leitura. Alterações são exclusivas do CANONICAL_PROFIT_ENGINE_V4.',
+        mode,
+        timestamp: now,
+      }, { status: 409 });
+    }
+
     // ── PING ─────────────────────────────────────────────────────────────
     if (mode === 'ping') {
       return Response.json({
         ok: true,
         engine: 'LivingFinds AI Engine v1',
         rules: AI_ENGINE_RULES,
-        modules: ['autopilot', 'smart_bid', 'calibrate_bids', 'harvest', 'mine_opportunities', 'negate', 'claude_analyze', 'full'],
+        modules: ['claude_analyze'],
+        execution_owner: 'CANONICAL_PROFIT_ENGINE_V4',
         canonical: true,
         timestamp: now,
       });

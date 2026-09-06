@@ -304,14 +304,14 @@
       }
     },
     {
-      "name": "Canonical Profit Engine V4 - Weekly AI Review - Sunday 21:00 BRT",
+      "name": "Canonical Profit Engine V4 - Weekly Data Review - Sunday 21:00 BRT",
       "function": "runCanonicalDecisionCycle",
       "cron": "0 21 * * 0",
       "payload": {
         "_service_role": true,
         "dry_run": false,
-        "weekly_ai_review": true,
-        "autonomous_adjustments": true,
+        "weekly_ai_review": false,
+        "autonomous_adjustments": false,
         "objective": "maximize_expected_profit",
         "secondary_objective": "sales_growth_with_positive_incremental_expected_profit",
         "review_window_days": 7,
@@ -320,7 +320,7 @@
         "retroactive": true,
         "force_full_scan": true,
         "preserve_hard_guards": true,
-        "trigger_type": "weekly_ai_review",
+        "trigger_type": "weekly_v4_data_review",
         "sku_by_sku_review": true,
         "product_level_objective": "generate_profitable_sales_for_every_eligible_sku",
         "portfolio_objective": "maximize_expected_profit_with_sku_sales_coverage",
@@ -338,15 +338,15 @@
       }
     },
     {
-      "name": "Canonical Profit Engine V4 - Daily AI Review - 23:00 BRT",
+      "name": "Canonical Profit Engine V4 - Daily Data Review - 23:00 BRT",
       "function": "runCanonicalDecisionCycle",
       "cron": "0 23 * * *",
       "payload": {
         "_service_role": true,
         "dry_run": false,
-        "daily_ai_review": true,
-        "weekly_ai_review": true,
-        "autonomous_adjustments": true,
+        "daily_ai_review": false,
+        "weekly_ai_review": false,
+        "autonomous_adjustments": false,
         "objective": "maximize_expected_profit",
         "secondary_objective": "sales_growth_with_positive_incremental_expected_profit",
         "product_level_objective": "generate_profitable_sales_for_every_eligible_sku",
@@ -377,7 +377,7 @@
         "no_decision_when_no_safe_alternative": true,
         "preserve_hard_guards": true,
         "confirmation_required": true,
-        "trigger_type": "v4_daily_ai_review"
+        "trigger_type": "v4_daily_data_review"
       }
     },
     {

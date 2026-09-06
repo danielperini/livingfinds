@@ -529,7 +529,7 @@ const V3_SCHEDULED_ACTIONS = [
   },
   {
     id: 'daily-ai-review',
-    label: 'Revisão diária IA + V4',
+    label: 'Revisão diária V4',
     time: '23:00',
     hour: 23,
     minute: 0,
@@ -777,7 +777,7 @@ function ScheduledV3Actions() {
           </span>
           <span>→</span>
           <span>
-            IA + V4
+            V4
           </span>
           <span>→</span>
           <span>
