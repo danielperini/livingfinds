@@ -2,7 +2,7 @@ name: Deploy para VPS
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/campaign-funnel-implementation]
   workflow_dispatch:
     inputs:
       run_post_deploy_amazon_automation:
