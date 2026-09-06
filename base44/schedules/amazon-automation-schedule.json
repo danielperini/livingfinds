@@ -338,6 +338,18 @@
       }
     },
     {
+      "name": "GPT read-only cross-module analysis - daily 22:55 BRT",
+      "function": "summarizeForAI",
+      "cron": "55 22 * * *",
+      "payload": {
+        "amazon_account_id": "6a40448b9af1241f356e9fcc",
+        "use_ai": true,
+        "_service_role": true,
+        "trigger_type": "gpt_read_only_v4_learning"
+      },
+      "enabled": true
+    },
+    {
       "name": "Canonical Profit Engine V4 - Daily Data Review - 23:00 BRT",
       "function": "runCanonicalDecisionCycle",
       "cron": "0 23 * * *",

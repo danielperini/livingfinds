@@ -319,11 +319,24 @@ Responda em JSON:
         model: 'gpt_4o_mini', // Modelo econômico
       });
 
+      // Persistência consultiva: o V4 pode aprender com o diagnóstico, mas
+      // nenhuma ação GPT entra diretamente na fila executável da Amazon.
+      await base44.asServiceRole.entities.LearningEvent.create({
+        amazon_account_id,
+        event_type: 'gpt_cross_module_metrics_analysis',
+        entity_type: 'account',
+        entity_id: amazon_account_id,
+        observation: JSON.stringify({ executive_summary: executiveSummary, analysis: llmResponse }).slice(0, 12000),
+        source: 'summarizeForAI_read_only',
+        recorded_at: new Date().toISOString(),
+      }).catch(() => null);
+
       return Response.json({
         ok: true,
         amazon_account_id,
         executive_summary: executiveSummary,
         ai_prioritization: llmResponse,
+        execution_mode: 'READ_ONLY_V4_LEARNING_INPUT',
         message: 'Resumo consolidado + priorização por IA (1 chamada)',
       });
     }
