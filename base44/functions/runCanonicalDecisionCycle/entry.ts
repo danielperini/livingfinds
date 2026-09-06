@@ -51,13 +51,32 @@ Deno.serve(async(request)=>{
 
             _service_role:true,
 
+            // Contrato soberano V4. O executor já revalida estes campos contra
+            // Amazon Truth; ausência ou inconsistência resulta em HOLD.
+            _decision_authority:
+              'CANONICAL_PROFIT_ENGINE_V4',
+
+            objective_mode:
+              'maximize_profitable_sales_bounded_loss',
+
+            required_economic_context:[
+              'price','product_cost','amazon_fees','margin','inventory',
+              'buyability','conversion_rate','break_even_acos','safe_max_cpc'
+            ],
+
+            missing_or_unsafe_context_action:
+              'HOLD',
+
+            require_positive_expected_profit_or_sales_gain:
+              true,
+
             correlation_id:
               body.correlation_id ||
               crypto.randomUUID(),
 
             trigger_type:
               body.trigger_type ||
-              'canonical_decision_cycle_v3'
+              'canonical_decision_cycle_v4'
           }
         );
 
@@ -73,7 +92,13 @@ Deno.serve(async(request)=>{
         'runCanonicalDecisionCycle',
 
       unique_engine:
-        'runCanonicalProfitEngineV3'
+        'CANONICAL_PROFIT_ENGINE_V4',
+
+      decision_contract:{
+        objective:'maximize_profitable_sales_bounded_loss',
+        missing_context:'HOLD',
+        amazon_confirmation_required:true
+      }
     });
 
   }catch(error:any){

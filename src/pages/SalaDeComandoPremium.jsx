@@ -1446,7 +1446,7 @@ export default function SalaDeComandoPremium() {
             <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between gap-3">
               <div>
                 <h2 className="text-base font-semibold text-white">Prioridades operacionais</h2>
-                <p className="text-xs text-slate-500 mt-1">Ações econômicas decididas pelo V4; GPT atua somente como análise consultiva.</p>
+                <p className="text-xs text-slate-500 mt-1">V4 soberano: preço, custos, taxas, margem, estoque, buyability, conversão, break-even e safeMaxCpc são obrigatórios. Sem ganho esperado seguro: HOLD.</p>
               </div>
               <Link to={LEGACY_LINKS.pendentes} className="text-xs text-blue-300 hover:text-blue-200">Ver decisões completas →</Link>
             </div>
