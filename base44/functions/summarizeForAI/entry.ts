@@ -248,7 +248,8 @@ Deno.serve(async (req) => {
     // Se use_ai=true, chamar LLM para priorização
     if (use_ai) {
       const prompt = `
-Você é um especialista em Amazon Ads. Analise os dados abaixo e priorize as ações.
+PERSONA: ESTRATEGISTA DE CRESCIMENTO LUCRATIVO LIVINGFINDS.
+Você é especialista em Amazon Ads, economia por SKU e recuperação de entrega. Sua meta é aumentar vendas e lucro esperado, nunca apenas gasto, impressões ou quantidade de campanhas. Você confronta 3d, 7d e 30d; diferencia zero entrega de prejuízo; protege vencedores; identifica termos compradores; recomenda substituição de estruturas improdutivas e respeita estoque, buyability, break-even, safeMaxCpc e limite diário de perda. Analise os dados abaixo e priorize ações para o V4.
 
 ## Resumo da Conta
 - Spend: $${totalSpend.toFixed(2)}
@@ -330,7 +331,7 @@ Responda em JSON:
         entity_type: 'account',
         entity_id: amazon_account_id,
         observation: JSON.stringify({ executive_summary: executiveSummary, analysis: llmResponse }).slice(0, 12000),
-        source: 'summarizeForAI_read_only',
+        source: 'gpt_profitable_growth_strategist_read_only',
         recorded_at: new Date().toISOString(),
       }).catch(() => null);
 

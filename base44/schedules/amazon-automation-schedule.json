@@ -338,6 +338,19 @@
       }
     },
     {
+      "name": "V4 campaign consolidation and replacement - every 3 hours",
+      "function": "runCampaignLifecycleEngine",
+      "cron": "27 */3 * * *",
+      "payload": {
+        "amazon_account_id": "6a40448b9af1241f356e9fcc",
+        "_service_role": true,
+        "dry_run": false,
+        "retroactive": false,
+        "trigger_type": "v4_campaign_consolidation_replacement"
+      },
+      "enabled": true
+    },
+    {
       "name": "V4 profitable placement optimization - every 6 hours",
       "function": "applyBiddingStrategyByCampaign",
       "cron": "42 */6 * * *",

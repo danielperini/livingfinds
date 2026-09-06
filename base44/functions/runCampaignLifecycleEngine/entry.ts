@@ -66,7 +66,7 @@ Deno.serve(async(req)=>{
       _service_role:true,
 
       _canonical_orchestrator:
-        'runCampaignLifecycleEngine',
+        'runUnifiedDecisionEngine',
 
       dry_run:
         body.dry_run===true,
