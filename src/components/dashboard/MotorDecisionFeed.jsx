@@ -104,6 +104,8 @@ function formatBidChange(raw) {
 function isCurrentOperationalDecision(item) {
   const raw = item?.raw || {};
 
+  if (raw.hide_from_live_operational_feed === true) return false;
+
   const visibility =
     String(
       raw.operational_visibility || ''
@@ -135,7 +137,10 @@ function isCurrentOperationalDecision(item) {
       'expired',
       'cancelled',
       'canceled',
-      'skipped'
+      'skipped',
+      'failed',
+      'failed_final',
+      'error'
     ].includes(status)
   ) {
     return false;

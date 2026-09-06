@@ -64,7 +64,7 @@ function AttentionCard({ alert, onResolve, resolving }) {
   );
 }
 
-function AttentionPanel({ accountId }) {
+function AttentionPanel({ accountId, decisions = [] }) {
   const [alerts, setAlerts] = useState(null);
   const [loading, setLoading] = useState(true);
   const [resolvingId, setResolvingId] = useState(null);
@@ -116,6 +116,29 @@ function AttentionPanel({ accountId }) {
     return (
       <div className="flex items-center justify-center py-6">
         <Loader2 className="w-4 h-4 text-slate-400 animate-spin" />
+      </div>
+    );
+  }
+  const now = Date.now();
+  const recentFailures = decisions.filter(item => {
+    const status = String(item?.status || item?.queue_status || '').toLowerCase();
+    const timestamp = new Date(item?.updated_at || item?.created_at || 0).getTime();
+    return ['failed', 'failed_final', 'error'].includes(status) && now - timestamp < 86400000;
+  });
+  const stalePending = decisions.filter(item => {
+    const status = String(item?.status || item?.queue_status || '').toLowerCase();
+    const timestamp = new Date(item?.updated_at || item?.created_at || 0).getTime();
+    return ['executing', 'confirming', 'awaiting_confirmation', 'scheduled'].includes(status)
+      && now - timestamp > 20 * 60000;
+  });
+  if ((!alerts || alerts.length === 0) && (recentFailures.length > 0 || stalePending.length > 0)) {
+    return (
+      <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+        <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0" />
+        <div>
+          <p className="text-sm font-semibold text-amber-800">Atenção operacional</p>
+          <p className="text-xs text-amber-700 mt-0.5">{recentFailures.length} falha(s) recente(s) · {stalePending.length} confirmação(ões) atrasada(s).</p>
+        </div>
       </div>
     );
   }
@@ -326,7 +349,7 @@ export default function DecisionalOverview({
           <h2 className="text-sm font-bold text-theme-primary">Atenção necessária</h2>
           <p className="text-[11px] text-theme-muted hidden sm:block">Alertas ativos de alta severidade e críticos.</p>
         </div>
-        <AttentionPanel accountId={account?.id} />
+        <AttentionPanel accountId={account?.id} decisions={decisions} />
       </div>
 
       {/* ════ O que o Motor está fazendo agora — card dedicado, ao final ════ */}

@@ -6,6 +6,8 @@ const CAMPAIGN_DEPENDENT = new Set([
   'reduce_bid', 'bid_change', 'bid_increase', 'bid_decrease',
 ]);
 const OPEN = ['planned', 'proposed', 'pending', 'approved', 'queued', 'scheduled', 'waiting_retry', 'blocked'];
+const ACTIVE_MUTATION = new Set([...OPEN, 'executing', 'confirming', 'awaiting_confirmation', 'propagating']);
+const BID_ACTIONS = new Set(['set_bid', 'update_bid', 'increase_bid', 'reduce_bid', 'bid_change', 'bid_increase', 'bid_decrease']);
 const campaignId = (row: any) => String(row?.amazon_campaign_id || row?.campaign_id || '').trim();
 const asinOf = (row: any) => String(row?.asin || row?.advertised_asin || '').trim().toUpperCase();
 
@@ -43,7 +45,7 @@ Deno.serve(async (request) => {
         byAsin.get(asin)!.set(id, campaign);
       }
 
-      let resolved = 0, missing = 0, ambiguous = 0;
+      let resolved = 0, missing = 0, ambiguous = 0, duplicatesClosed = 0, failuresClosed = 0;
       for (const decision of decisions) {
         const status = String(decision.status || decision.queue_status || '').toLowerCase();
         const action = String(decision.action || decision.decision_type || '').toLowerCase();
@@ -69,7 +71,56 @@ Deno.serve(async (request) => {
           matches.length === 0 ? missing++ : ambiguous++;
         }
       }
-      results.push({ amazon_account_id: aid, resolved, missing, ambiguous });
+
+      // Uma única mutação aberta por entidade. Prioriza o que já chegou à
+      // Amazon; propostas duplicadas são encerradas antes do executor.
+      const rank: Record<string, number> = { confirming: 0, awaiting_confirmation: 0, propagating: 0, executing: 1, approved: 2, pending: 3, queued: 3, scheduled: 4, waiting_retry: 4, proposed: 5, planned: 6, blocked: 7 };
+      const groups = new Map<string, any[]>();
+      for (const decision of decisions) {
+        const status = String(decision.status || decision.queue_status || '').toLowerCase();
+        const action = String(decision.action || decision.decision_type || '').toLowerCase();
+        if (!ACTIVE_MUTATION.has(status)) continue;
+        let key = '';
+        if (action === 'pause_campaign') key = `pause|${campaignId(decision) || asinOf(decision)}`;
+        else if (BID_ACTIONS.has(action)) {
+          const entity = String(decision.keyword_id || decision.target_id || decision.ad_group_id || decision.entity_id || '').trim();
+          key = entity ? `bid|${String(decision.entity_type || 'keyword').toLowerCase()}|${entity}` : '';
+        }
+        if (!key || key.endsWith('|')) continue;
+        groups.set(key, [...(groups.get(key) || []), decision]);
+      }
+      for (const rows of groups.values()) {
+        if (rows.length < 2) continue;
+        rows.sort((a: any, b: any) => (rank[String(a.status || a.queue_status || '').toLowerCase()] ?? 9)
+          - (rank[String(b.status || b.queue_status || '').toLowerCase()] ?? 9)
+          || new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime());
+        const keeper = rows[0];
+        for (const duplicate of rows.slice(1)) {
+          await client.asServiceRole.entities.OptimizationDecision.update(duplicate.id, {
+            status: 'superseded', queue_status: 'closed', approval_status: 'superseded_duplicate_v4',
+            confirmation_status: 'not_applicable', confirmation_required: false,
+            reason_code: 'NO_DECISION_DUPLICATE_ACTIVE_MUTATION',
+            error_message: `Duplicada; decisão canônica ativa ${keeper.id} preservada.`,
+            hide_from_live_operational_feed: true, updated_at: new Date().toISOString(),
+          }).catch(() => {});
+          duplicatesClosed++;
+        }
+      }
+
+      // Falhas continuam no histórico, mas não fingem ser atividade atual.
+      for (const decision of decisions) {
+        const status = String(decision.status || decision.queue_status || '').toLowerCase();
+        if (!['failed', 'failed_final', 'error'].includes(status)) continue;
+        const message = String(decision.error_message || decision.confirmation_error || '');
+        const obsolete = /entity.?not.?found|keyword.*(not found|does not exist)|invalid keywordid|404/i.test(message);
+        await client.asServiceRole.entities.OptimizationDecision.update(decision.id, obsolete ? {
+          status: 'cancelled', queue_status: 'closed', confirmation_status: 'not_applicable',
+          confirmation_required: false, reason_code: 'NO_DECISION_ENTITY_NOT_FOUND',
+          hide_from_live_operational_feed: true, updated_at: new Date().toISOString(),
+        } : { hide_from_live_operational_feed: true, updated_at: new Date().toISOString() }).catch(() => {});
+        failuresClosed++;
+      }
+      results.push({ amazon_account_id: aid, resolved, missing, ambiguous, duplicates_closed: duplicatesClosed, failures_closed_from_live_feed: failuresClosed });
     }
     return Response.json({ ok: true, engine: 'CANONICAL_PROFIT_ENGINE_V4', results });
   } catch (error: any) {
