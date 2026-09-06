@@ -1,7 +1,7 @@
 /**
  * runTermBankToCampaigns
  *
- * Lê termos do TermBank com classification='winner' ou confidence >= 85
+ * Lê termos do TermBank com classification='winner' ou confidence >= 70
  * que ainda não têm campanha manual canônica criada (promotion_status != 'promoted_to_manual')
  * e cria uma campanha MANUAL EXACT para cada um via createManualCampaignV2.
  *
@@ -18,8 +18,9 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 
 const DEFAULT_MAX_PER_RUN  = 10;
 const DEFAULT_MAX_PER_ASIN = 15; // ASINs com muitos termos winners no TermBank
-const DEFAULT_MIN_BID      = 0.50;
-const DEFAULT_BUDGET       = 15;
+const DEFAULT_MIN_BID      = 0.25;
+const DEFAULT_BUDGET       = 5;
+const MIN_CONFIDENCE       = 70;
 const COOLDOWN_HOURS       = 24; // aguardar entre tentativas para o mesmo ASIN+termo
 
 function safeFloat(v: any, fallback = 0): number {
@@ -87,7 +88,7 @@ Deno.serve(async (req) => {
 
       // Apenas termos com boa classificação ou alta confiança
       const isWinner     = t.classification === 'winner';
-      const highConfidence = safeFloat(t.confidence) >= 85;
+      const highConfidence = safeFloat(t.confidence) >= MIN_CONFIDENCE;
       if (!isWinner && !highConfidence) return false;
 
       // Produto deve existir e ter estoque
@@ -140,7 +141,7 @@ Deno.serve(async (req) => {
       // Calcular bid inicial
       const bidCurrent = safeFloat(term.bid_current, 0);
       const cpc        = safeFloat(term.cpc, 0);
-      const bid        = Math.max(DEFAULT_MIN_BID, Math.min(2.50, bidCurrent > 0 ? bidCurrent : (cpc > 0 ? cpc : DEFAULT_MIN_BID)));
+      const bid        = Math.max(DEFAULT_MIN_BID, Math.min(0.70, bidCurrent > 0 ? bidCurrent : (cpc > 0 ? cpc : DEFAULT_MIN_BID)));
 
       if (dryRun) {
         created.push({
