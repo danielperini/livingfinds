@@ -241,7 +241,7 @@ Deno.serve(async (req) => {
         total: decisions.length,
         by_type: decisionCounts,
       },
-      top_problems,
+      top_problems: topProblems,
       opportunities,
     };
 
@@ -281,6 +281,9 @@ ${opportunities.map(o => `- ${o.type}: ${o.count} ocorrências`).join('\n')}
 2. Para cada ação, explique o PORQUÊ (impacto esperado).
 3. Identifique conflitos (ex: aumentar budget em campanha com ACoS alto).
 4. Sugira ações de baixo risco que podem ser automatizadas.
+5. Detecte campanhas gastando acima do esperado ou do limite econômico e recomende proteção contra prejuízo.
+6. Detecte campanhas sem gasto/entrega e avalie CREATE, PAUSE, HOLD ou aumento de bid limitado pelo safeMaxCpc.
+7. Não execute ações: entregue evidências e recomendações para decisão determinística do V4.
 
 Responda em JSON:
 {

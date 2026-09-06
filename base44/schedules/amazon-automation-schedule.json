@@ -338,9 +338,9 @@
       }
     },
     {
-      "name": "GPT read-only cross-module analysis - daily 22:55 BRT",
+      "name": "GPT read-only cross-module analysis - 3x daily BRT",
       "function": "summarizeForAI",
-      "cron": "55 22 * * *",
+      "cron": "55 6,14,22 * * *",
       "payload": {
         "amazon_account_id": "6a40448b9af1241f356e9fcc",
         "use_ai": true,
