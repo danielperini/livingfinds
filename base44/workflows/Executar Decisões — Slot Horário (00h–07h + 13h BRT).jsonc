@@ -1,0 +1,44 @@
+{
+  "name": "Executar Decis\u00f5es \u2014 Slot Hor\u00e1rio (00h\u201307h + 13h BRT)",
+  "description": "Processa decis\u00f5es distribu\u00eddas no slot hor\u00e1rio atual. Roda a cada hora e executa at\u00e9 8 decis\u00f5es por vez com 14s de intervalo entre chamadas Amazon (rate limit). Janela: 00h\u201307h BRT (madrugada) e 13h BRT (tarde).",
+  "trigger": {
+    "condition": null,
+    "config": {
+      "trigger_type": "scheduled",
+      "events": [],
+      "schedule_mode": "interval",
+      "cron_expression": null,
+      "one_time_date": null,
+      "timezone": "UTC",
+      "interval_value": 1,
+      "interval_unit": "hours",
+      "interval_anchor": "2026-07-10T13:42:31.009000",
+      "ends_type": "never",
+      "ends_on_date": null,
+      "ends_after_count": null
+    }
+  },
+  "definition": {
+    "document": {
+      "dsl": "1.0.0",
+      "name": "executar_decis_es_slot_hor_rio_00h_07h_13h_brt",
+      "version": "1.0",
+      "namespace": "base44"
+    },
+    "do": [
+      {
+        "run_function": {
+          "call": "invoke_backend_function",
+          "with": {
+            "function_name": "runDecisionSlot",
+            "args": {}
+          },
+          "then": "end"
+        }
+      }
+    ]
+  },
+  "x-base44-migrated-from-automation": {
+    "legacy_payload_function": "runDecisionSlot"
+  }
+}

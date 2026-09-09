@@ -1,0 +1,46 @@
+{
+  "name": "Budget Pacing Engine \u2014 Reset Meia-noite",
+  "description": "Fecha ledger do dia anterior, reseta Kill Switch, calcula HOUR_VALUE_SCORE, BUDGET_PACING_CURVE, ELITE_RESERVE e reativa campanhas pausadas pelo Hard Cap.",
+  "trigger": {
+    "condition": null,
+    "config": {
+      "trigger_type": "scheduled",
+      "events": [],
+      "schedule_mode": "recurring",
+      "cron_expression": "5 3 * * *",
+      "one_time_date": null,
+      "timezone": "UTC",
+      "interval_value": null,
+      "interval_unit": null,
+      "interval_anchor": null,
+      "ends_type": "never",
+      "ends_on_date": null,
+      "ends_after_count": null
+    }
+  },
+  "definition": {
+    "document": {
+      "dsl": "1.0.0",
+      "name": "budget_pacing_engine_reset_meia_noite",
+      "version": "1.0",
+      "namespace": "base44"
+    },
+    "do": [
+      {
+        "run_function": {
+          "call": "invoke_backend_function",
+          "with": {
+            "function_name": "runDailyBudgetPacingEngine",
+            "args": {
+              "dry_run": false
+            }
+          },
+          "then": "end"
+        }
+      }
+    ]
+  },
+  "x-base44-migrated-from-automation": {
+    "legacy_payload_function": "runDailyBudgetPacingEngine"
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "name": "Modo Limpeza Mensal \u2014 Arquivamento de Campanhas",
+  "description": "Arquiva mensalmente campanhas pausadas h\u00e1 mais de 90 dias sem atividade, e campanhas incompletas com defeito h\u00e1 mais de 30 dias.",
+  "trigger": {
+    "condition": null,
+    "config": {
+      "trigger_type": "scheduled",
+      "events": [],
+      "schedule_mode": "recurring",
+      "cron_expression": "0 6 1 * *",
+      "one_time_date": null,
+      "timezone": "UTC",
+      "interval_value": null,
+      "interval_unit": null,
+      "interval_anchor": null,
+      "ends_type": "never",
+      "ends_on_date": null,
+      "ends_after_count": null
+    }
+  },
+  "definition": {
+    "document": {
+      "dsl": "1.0.0",
+      "name": "modo_limpeza_mensal_arquivamento_de_campanhas",
+      "version": "1.0",
+      "namespace": "base44"
+    },
+    "do": [
+      {
+        "run_function": {
+          "call": "invoke_backend_function",
+          "with": {
+            "function_name": "runMonthlyCampaignCleanup",
+            "args": {
+              "_service_role": true
+            }
+          },
+          "then": "end"
+        }
+      }
+    ]
+  },
+  "x-base44-migrated-from-automation": {
+    "legacy_payload_function": "runMonthlyCampaignCleanup"
+  }
+}

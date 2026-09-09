@@ -1,0 +1,44 @@
+{
+  "name": "Dayparting Budget Optimizer \u2014 08h BRT",
+  "description": "Executa diariamente \u00e0s 08h BRT para reduzir lances em hor\u00e1rios fracos antes do teto di\u00e1rio ser atingido. Analisa hist\u00f3rico de kill switch e HourlySalesPattern para preservar budget nos picos noturnos.",
+  "trigger": {
+    "condition": null,
+    "config": {
+      "trigger_type": "scheduled",
+      "events": [],
+      "schedule_mode": "recurring",
+      "cron_expression": "0 11 * * *",
+      "one_time_date": null,
+      "timezone": "UTC",
+      "interval_value": null,
+      "interval_unit": null,
+      "interval_anchor": null,
+      "ends_type": "never",
+      "ends_on_date": null,
+      "ends_after_count": null
+    }
+  },
+  "definition": {
+    "document": {
+      "dsl": "1.0.0",
+      "name": "dayparting_budget_optimizer_08h_brt",
+      "version": "1.0",
+      "namespace": "base44"
+    },
+    "do": [
+      {
+        "run_function": {
+          "call": "invoke_backend_function",
+          "with": {
+            "function_name": "runDaypartingBudgetOptimizer",
+            "args": {}
+          },
+          "then": "end"
+        }
+      }
+    ]
+  },
+  "x-base44-migrated-from-automation": {
+    "legacy_payload_function": "runDaypartingBudgetOptimizer"
+  }
+}

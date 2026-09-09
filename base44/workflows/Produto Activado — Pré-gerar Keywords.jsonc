@@ -1,0 +1,38 @@
+{
+  "name": "Produto Activado \u2014 Pr\u00e9-gerar Keywords",
+  "description": "{\n  \"amazon_account_id\": \"{{product.amazon_account_id}}\",\n  \"asin\": \"{{product.asin}}\",\n  \"sku\": \"{{product.sku}}\",\n  \"product_name\": \"{{product.title}}\"\n}",
+  "trigger": {
+    "condition": "${ (.trigger.data.asin != null) }",
+    "config": {
+      "trigger_type": "entity",
+      "events": [
+        "create",
+        "update"
+      ],
+      "entity_name": "Product"
+    }
+  },
+  "definition": {
+    "document": {
+      "dsl": "1.0.0",
+      "name": "produto_activado_pr_gerar_keywords",
+      "version": "1.0",
+      "namespace": "base44"
+    },
+    "do": [
+      {
+        "run_function": {
+          "call": "invoke_backend_function",
+          "with": {
+            "function_name": "suggestProductKeywordsWithAI",
+            "args": {}
+          },
+          "then": "end"
+        }
+      }
+    ]
+  },
+  "x-base44-migrated-from-automation": {
+    "legacy_payload_function": "suggestProductKeywordsWithAI"
+  }
+}

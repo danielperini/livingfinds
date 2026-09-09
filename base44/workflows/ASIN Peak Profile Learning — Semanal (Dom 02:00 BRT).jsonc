@@ -1,0 +1,44 @@
+{
+  "name": "ASIN Peak Profile Learning \u2014 Semanal (Dom 02:00 BRT)",
+  "description": "Aprende o perfil hor\u00e1rio de pico por ASIN a partir de UnifiedAdsMetricsHourly. Identifica janelas de pico, neutro e baixa individualizadas por produto. Executa domingo 02:00 BRT (05:00 UTC).",
+  "trigger": {
+    "condition": null,
+    "config": {
+      "trigger_type": "scheduled",
+      "events": [],
+      "schedule_mode": "recurring",
+      "cron_expression": "0 5 * * 0",
+      "one_time_date": null,
+      "timezone": "UTC",
+      "interval_value": null,
+      "interval_unit": null,
+      "interval_anchor": null,
+      "ends_type": "never",
+      "ends_on_date": null,
+      "ends_after_count": null
+    }
+  },
+  "definition": {
+    "document": {
+      "dsl": "1.0.0",
+      "name": "asin_peak_profile_learning_semanal_dom_02_00_brt",
+      "version": "1.0",
+      "namespace": "base44"
+    },
+    "do": [
+      {
+        "run_function": {
+          "call": "invoke_backend_function",
+          "with": {
+            "function_name": "runAsinPeakProfileLearning",
+            "args": {}
+          },
+          "then": "end"
+        }
+      }
+    ]
+  },
+  "x-base44-migrated-from-automation": {
+    "legacy_payload_function": "runAsinPeakProfileLearning"
+  }
+}

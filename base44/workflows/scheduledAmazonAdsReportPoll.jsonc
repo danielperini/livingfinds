@@ -1,0 +1,44 @@
+{
+  "name": "scheduledAmazonAdsReportPoll",
+  "description": "Verifica status dos relat\u00f3rios Amazon Ads pendentes e baixa/processa quando conclu\u00eddos. Roda a cada 10 minutos com backoff autom\u00e1tico.",
+  "trigger": {
+    "condition": null,
+    "config": {
+      "trigger_type": "scheduled",
+      "events": [],
+      "schedule_mode": "interval",
+      "cron_expression": null,
+      "one_time_date": null,
+      "timezone": "UTC",
+      "interval_value": 10,
+      "interval_unit": "minutes",
+      "interval_anchor": "2026-07-10T14:34:31.332000",
+      "ends_type": "never",
+      "ends_on_date": null,
+      "ends_after_count": null
+    }
+  },
+  "definition": {
+    "document": {
+      "dsl": "1.0.0",
+      "name": "scheduledamazonadsreportpoll",
+      "version": "1.0",
+      "namespace": "base44"
+    },
+    "do": [
+      {
+        "run_function": {
+          "call": "invoke_backend_function",
+          "with": {
+            "function_name": "pollAmazonAdsReportJobs",
+            "args": {}
+          },
+          "then": "end"
+        }
+      }
+    ]
+  },
+  "x-base44-migrated-from-automation": {
+    "legacy_payload_function": "pollAmazonAdsReportJobs"
+  }
+}

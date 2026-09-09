@@ -1,0 +1,44 @@
+{
+  "name": "Weekly TermBank Promotion \u2014 Sexta 06h BRT",
+  "description": "Varredura semanal do TermBank: para cada produto ativo com estoque, cria at\u00e9 2 campanhas EXACT in\u00e9ditas com confidence >= 95%. Tamb\u00e9m sincroniza pausas pendentes com a Amazon API.",
+  "trigger": {
+    "condition": null,
+    "config": {
+      "trigger_type": "scheduled",
+      "events": [],
+      "schedule_mode": "recurring",
+      "cron_expression": "0 12 * * 5",
+      "one_time_date": null,
+      "timezone": "UTC",
+      "interval_value": null,
+      "interval_unit": null,
+      "interval_anchor": null,
+      "ends_type": "never",
+      "ends_on_date": null,
+      "ends_after_count": null
+    }
+  },
+  "definition": {
+    "document": {
+      "dsl": "1.0.0",
+      "name": "weekly_termbank_promotion_sexta_06h_brt",
+      "version": "1.0",
+      "namespace": "base44"
+    },
+    "do": [
+      {
+        "run_function": {
+          "call": "invoke_backend_function",
+          "with": {
+            "function_name": "runWeeklyTermBankPromotion",
+            "args": {}
+          },
+          "then": "end"
+        }
+      }
+    ]
+  },
+  "x-base44-migrated-from-automation": {
+    "legacy_payload_function": "runWeeklyTermBankPromotion"
+  }
+}

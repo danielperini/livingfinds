@@ -1,0 +1,44 @@
+{
+  "name": "Keep Amazon Connected \u2014 Sync Di\u00e1rio Token",
+  "description": "Sincroniza token ADS_REFRESH_TOKEN (secret \u2192 entidade) 1x/dia. Zero chamadas de API externa. Valide manualmente com force_validate=true quando necess\u00e1rio.",
+  "trigger": {
+    "condition": null,
+    "config": {
+      "trigger_type": "scheduled",
+      "events": [],
+      "schedule_mode": "recurring",
+      "cron_expression": "30 8 * * *",
+      "one_time_date": null,
+      "timezone": "UTC",
+      "interval_value": null,
+      "interval_unit": null,
+      "interval_anchor": null,
+      "ends_type": "never",
+      "ends_on_date": null,
+      "ends_after_count": null
+    }
+  },
+  "definition": {
+    "document": {
+      "dsl": "1.0.0",
+      "name": "keep_amazon_connected_sync_di_rio_token",
+      "version": "1.0",
+      "namespace": "base44"
+    },
+    "do": [
+      {
+        "run_function": {
+          "call": "invoke_backend_function",
+          "with": {
+            "function_name": "keepAmazonConnected",
+            "args": {}
+          },
+          "then": "end"
+        }
+      }
+    ]
+  },
+  "x-base44-migrated-from-automation": {
+    "legacy_payload_function": "keepAmazonConnected"
+  }
+}

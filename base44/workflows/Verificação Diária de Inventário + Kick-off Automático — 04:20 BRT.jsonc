@@ -1,0 +1,44 @@
+{
+  "name": "Verifica\u00e7\u00e3o Di\u00e1ria de Invent\u00e1rio + Kick-off Autom\u00e1tico \u2014 04:20 BRT",
+  "description": "Sincroniza cat\u00e1logo, detecta produtos novos/reabastecidos e agenda kick-off. 04:00 BRT.",
+  "trigger": {
+    "condition": null,
+    "config": {
+      "trigger_type": "scheduled",
+      "events": [],
+      "schedule_mode": "recurring",
+      "cron_expression": "0 7 * * *",
+      "one_time_date": null,
+      "timezone": "UTC",
+      "interval_value": null,
+      "interval_unit": null,
+      "interval_anchor": null,
+      "ends_type": "never",
+      "ends_on_date": null,
+      "ends_after_count": null
+    }
+  },
+  "definition": {
+    "document": {
+      "dsl": "1.0.0",
+      "name": "verifica_o_di_ria_de_invent_rio_kick_off_autom_tico_04_20_brt",
+      "version": "1.0",
+      "namespace": "base44"
+    },
+    "do": [
+      {
+        "run_function": {
+          "call": "invoke_backend_function",
+          "with": {
+            "function_name": "checkInventoryChangesAndKickoff",
+            "args": {}
+          },
+          "then": "end"
+        }
+      }
+    ]
+  },
+  "x-base44-migrated-from-automation": {
+    "legacy_payload_function": "checkInventoryChangesAndKickoff"
+  }
+}

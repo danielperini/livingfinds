@@ -1,0 +1,44 @@
+{
+  "name": "Dayparting Autom\u00e1tico Di\u00e1rio \u2014 14h BRT",
+  "description": "Analisa dados hor\u00e1rios de campanhas com \u226530 dias. Aplica automaticamente ajustes de bid por hor\u00e1rio (dayparting) quando confian\u00e7a \u2265 90%. Oportunidades abaixo de 90% ficam pendentes para revis\u00e3o humana.",
+  "trigger": {
+    "condition": null,
+    "config": {
+      "trigger_type": "scheduled",
+      "events": [],
+      "schedule_mode": "recurring",
+      "cron_expression": "0 17 * * *",
+      "one_time_date": null,
+      "timezone": "UTC",
+      "interval_value": null,
+      "interval_unit": null,
+      "interval_anchor": null,
+      "ends_type": "never",
+      "ends_on_date": null,
+      "ends_after_count": null
+    }
+  },
+  "definition": {
+    "document": {
+      "dsl": "1.0.0",
+      "name": "dayparting_autom_tico_di_rio_14h_brt",
+      "version": "1.0",
+      "namespace": "base44"
+    },
+    "do": [
+      {
+        "run_function": {
+          "call": "invoke_backend_function",
+          "with": {
+            "function_name": "runDailyDayparting",
+            "args": {}
+          },
+          "then": "end"
+        }
+      }
+    ]
+  },
+  "x-base44-migrated-from-automation": {
+    "legacy_payload_function": "runDailyDayparting"
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "name": "Rec\u00e1lculo Semanal \u2014 Budget Sugerido",
+  "description": "Calcula o budget di\u00e1rio sugerido via f\u00f3rmula oficial (floor=50, ceiling=130, utilization_score) e salva em BudgetConfiguration e AutopilotConfig.",
+  "trigger": {
+    "condition": null,
+    "config": {
+      "trigger_type": "scheduled",
+      "events": [],
+      "schedule_mode": "recurring",
+      "cron_expression": "30 6 * * 5",
+      "one_time_date": null,
+      "timezone": "UTC",
+      "interval_value": null,
+      "interval_unit": null,
+      "interval_anchor": null,
+      "ends_type": "never",
+      "ends_on_date": null,
+      "ends_after_count": null
+    }
+  },
+  "definition": {
+    "document": {
+      "dsl": "1.0.0",
+      "name": "rec_lculo_semanal_budget_sugerido",
+      "version": "1.0",
+      "namespace": "base44"
+    },
+    "do": [
+      {
+        "run_function": {
+          "call": "invoke_backend_function",
+          "with": {
+            "function_name": "recalculateSuggestedBudgetWeekly",
+            "args": {}
+          },
+          "then": "end"
+        }
+      }
+    ]
+  },
+  "x-base44-migrated-from-automation": {
+    "legacy_payload_function": "recalculateSuggestedBudgetWeekly"
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "name": "Auto-Ativar Campanhas de Sugest\u00f5es (95% confian\u00e7a)",
+  "description": "Diariamente \u00e0s 17h BRT (20h UTC): ranking determin\u00edstico TermBank + Amazon Suggestions (conf >= 95%) \u2192 at\u00e9 4 campanhas EXACT/TARGET por ASIN \u2192 negativa na AUTO. Janela de escrita Amazon 16h\u201318h BRT.",
+  "trigger": {
+    "condition": null,
+    "config": {
+      "trigger_type": "scheduled",
+      "events": [],
+      "schedule_mode": "recurring",
+      "cron_expression": "0 23 * * *",
+      "one_time_date": null,
+      "timezone": "UTC",
+      "interval_value": null,
+      "interval_unit": null,
+      "interval_anchor": null,
+      "ends_type": "never",
+      "ends_on_date": null,
+      "ends_after_count": null
+    }
+  },
+  "definition": {
+    "document": {
+      "dsl": "1.0.0",
+      "name": "auto_ativar_campanhas_de_sugest_es_95_confian_a",
+      "version": "1.0",
+      "namespace": "base44"
+    },
+    "do": [
+      {
+        "run_function": {
+          "call": "invoke_backend_function",
+          "with": {
+            "function_name": "autoActivateCampaignsFromSuggestions",
+            "args": {}
+          },
+          "then": "end"
+        }
+      }
+    ]
+  },
+  "x-base44-migrated-from-automation": {
+    "legacy_payload_function": "autoActivateCampaignsFromSuggestions"
+  }
+}

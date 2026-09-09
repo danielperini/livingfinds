@@ -1,0 +1,46 @@
+{
+  "name": "Auto Pause/Reativa Campanhas sem Estoque",
+  "description": "A cada hora: pausa campanhas AUTO sem estoque/kickoff, reativa quando estoque volta, arquiva duplicatas por ASIN.",
+  "trigger": {
+    "condition": null,
+    "config": {
+      "trigger_type": "scheduled",
+      "events": [],
+      "schedule_mode": "interval",
+      "cron_expression": null,
+      "one_time_date": null,
+      "timezone": "UTC",
+      "interval_value": 1,
+      "interval_unit": "hours",
+      "interval_anchor": "2026-07-12T08:18:34.574000",
+      "ends_type": "never",
+      "ends_on_date": null,
+      "ends_after_count": null
+    }
+  },
+  "definition": {
+    "document": {
+      "dsl": "1.0.0",
+      "name": "auto_pause_reativa_campanhas_sem_estoque",
+      "version": "1.0",
+      "namespace": "base44"
+    },
+    "do": [
+      {
+        "run_function": {
+          "call": "invoke_backend_function",
+          "with": {
+            "function_name": "pauseAutoCampaignsNoStock",
+            "args": {
+              "amazon_account_id": "6a40448b9af1241f356e9fcc"
+            }
+          },
+          "then": "end"
+        }
+      }
+    ]
+  },
+  "x-base44-migrated-from-automation": {
+    "legacy_payload_function": "pauseAutoCampaignsNoStock"
+  }
+}

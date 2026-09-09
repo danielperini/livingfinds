@@ -1,0 +1,48 @@
+{
+  "name": "processBidDecisionQueue - 23h BRT",
+  "description": "Executa a fila de decis\u00f5es de bid (reduce/increase) todos os dias \u00e0s 23h BRT",
+  "trigger": {
+    "condition": null,
+    "config": {
+      "trigger_type": "scheduled",
+      "events": [],
+      "schedule_mode": "recurring",
+      "cron_expression": "10 2 * * *",
+      "one_time_date": null,
+      "timezone": "UTC",
+      "interval_value": null,
+      "interval_unit": null,
+      "interval_anchor": null,
+      "ends_type": "never",
+      "ends_on_date": null,
+      "ends_after_count": null
+    }
+  },
+  "definition": {
+    "document": {
+      "dsl": "1.0.0",
+      "name": "processbiddecisionqueue_23h_brt",
+      "version": "1.0",
+      "namespace": "base44"
+    },
+    "do": [
+      {
+        "run_function": {
+          "call": "invoke_backend_function",
+          "with": {
+            "function_name": "processBidDecisionQueue",
+            "args": {
+              "_service_role": true,
+              "max_runtime_ms": 240000,
+              "spacing_ms": 2500
+            }
+          },
+          "then": "end"
+        }
+      }
+    ]
+  },
+  "x-base44-migrated-from-automation": {
+    "legacy_payload_function": "processBidDecisionQueue"
+  }
+}

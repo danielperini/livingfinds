@@ -1,0 +1,46 @@
+{
+  "name": "Cross-ASIN Transfer \u2014 Semanal",
+  "description": "Identifica keywords vencedoras e calcula relev\u00e2ncia para transfer\u00eancia entre ASINs. Usa heur\u00edstica + LLM na zona cinzenta 70-95%.",
+  "trigger": {
+    "condition": null,
+    "config": {
+      "trigger_type": "scheduled",
+      "events": [],
+      "schedule_mode": "recurring",
+      "cron_expression": "0 8 * * 1",
+      "one_time_date": null,
+      "timezone": "UTC",
+      "interval_value": null,
+      "interval_unit": null,
+      "interval_anchor": null,
+      "ends_type": "never",
+      "ends_on_date": null,
+      "ends_after_count": null
+    }
+  },
+  "definition": {
+    "document": {
+      "dsl": "1.0.0",
+      "name": "cross_asin_transfer_semanal",
+      "version": "1.0",
+      "namespace": "base44"
+    },
+    "do": [
+      {
+        "run_function": {
+          "call": "invoke_backend_function",
+          "with": {
+            "function_name": "runCrossAsinTransfer",
+            "args": {
+              "dry_run": false
+            }
+          },
+          "then": "end"
+        }
+      }
+    ]
+  },
+  "x-base44-migrated-from-automation": {
+    "legacy_payload_function": "runCrossAsinTransfer"
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "name": "AI Engine Full \u2014 05:00 BRT",
+  "description": "Motor de IA \u00fanico consolidado: autopilot + smart_bid + calibrate_bids + harvest + mine_opportunities. Executa \u00e0s 05h BRT (08h UTC). Fonte can\u00f4nica de toda intelig\u00eancia do sistema.",
+  "trigger": {
+    "condition": null,
+    "config": {
+      "trigger_type": "scheduled",
+      "events": [],
+      "schedule_mode": "recurring",
+      "cron_expression": "0 8 * * *",
+      "one_time_date": null,
+      "timezone": "UTC",
+      "interval_value": null,
+      "interval_unit": null,
+      "interval_anchor": null,
+      "ends_type": "never",
+      "ends_on_date": null,
+      "ends_after_count": null
+    }
+  },
+  "definition": {
+    "document": {
+      "dsl": "1.0.0",
+      "name": "ai_engine_full_05_00_brt",
+      "version": "1.0",
+      "namespace": "base44"
+    },
+    "do": [
+      {
+        "run_function": {
+          "call": "invoke_backend_function",
+          "with": {
+            "function_name": "aiEngine",
+            "args": {}
+          },
+          "then": "end"
+        }
+      }
+    ]
+  },
+  "x-base44-migrated-from-automation": {
+    "legacy_payload_function": "aiEngine"
+  }
+}

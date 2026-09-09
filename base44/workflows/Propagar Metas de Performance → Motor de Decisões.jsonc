@@ -1,0 +1,37 @@
+{
+  "name": "Propagar Metas de Performance \u2192 Motor de Decis\u00f5es",
+  "description": "Sempre que as Metas de Performance forem alteradas, dispara o motor unificado imediatamente para propagar os novos par\u00e2metros. Entrada can\u00f4nica \u00fanica: runUnifiedDecisionEngine \u2192 runDeterministicDecisionEngine.",
+  "trigger": {
+    "condition": null,
+    "config": {
+      "trigger_type": "entity",
+      "events": [
+        "update"
+      ],
+      "entity_name": "PerformanceSettings"
+    }
+  },
+  "definition": {
+    "document": {
+      "dsl": "1.0.0",
+      "name": "propagar_metas_de_performance_motor_de_decis_es",
+      "version": "1.0",
+      "namespace": "base44"
+    },
+    "do": [
+      {
+        "run_function": {
+          "call": "invoke_backend_function",
+          "with": {
+            "function_name": "runUnifiedDecisionEngine",
+            "args": {}
+          },
+          "then": "end"
+        }
+      }
+    ]
+  },
+  "x-base44-migrated-from-automation": {
+    "legacy_payload_function": "runUnifiedDecisionEngine"
+  }
+}
