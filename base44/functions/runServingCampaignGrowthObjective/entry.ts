@@ -304,7 +304,7 @@ Deno.serve(async (request) => {
           assessment?.maximum_profitable_cpa ?? econ?.maximum_profitable_ad_spend ?? econ?.contribution_margin_amount,
         ));
         const calculatedLossBudget = maximumProfitableSpend > 0
-          ? clamp(maximumProfitableSpend * 0.25, 2.50, 15)
+          ? clamp(maximumProfitableSpend * 0.25, 2.50, 5)
           : 0;
         const campaignLossLimit = Math.max(0, finite(campaign?.motor_daily_loss_limit));
         const lossBudget = positiveMinimum([campaignLossLimit, calculatedLossBudget], 0);

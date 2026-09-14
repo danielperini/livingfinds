@@ -1,0 +1,68 @@
+name: Proactive campaign growth cycle
+
+on:
+  schedule:
+    # 07:15 and 15:15 America/Sao_Paulo (UTC-3).  GitHub Actions cron is UTC.
+    - cron: '15 10,18 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: proactive-campaign-growth-cycle
+  cancel-in-progress: false
+
+jobs:
+  grow:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare secure VPS connection
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: Run the canonical growth cycle and confirm Amazon
+        env:
+          TARGET: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
+          VPS_PATH: ${{ secrets.VPS_PATH }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 "$TARGET" "cd '$VPS_PATH' && docker compose -f server/docker-compose.yml exec -T app deno eval '
+            const token = Deno.env.get(\"API_TOKEN\") || Deno.env.get(\"ADMIN_PASSWORD\") || \"\";
+            const call = async (name, payload) => {
+              const response = await fetch(\"http://127.0.0.1:8000/functions/\" + name, {
+                method: \"POST\",
+                headers: { \"content-type\": \"application/json\", \"x-api-token\": token },
+                body: JSON.stringify(payload),
+              });
+              const data = await response.json().catch(() => ({}));
+              if (!response.ok || data.ok === false) throw new Error(name + \": \" + (data.error || response.status));
+              return data;
+            };
+            const common = { _service_role: true, _canonical_orchestrator: \"runUnifiedDecisionEngine\", dry_run: false };
+            const engine = await call(\"runUnifiedDecisionEngine\", {
+              ...common,
+              force_campaign_lifecycle: true,
+              serving_campaign_growth_target_pct: 40,
+              max_new_exact_per_run: 10,
+              max_auto_budget_expansions: 5,
+              trigger_type: \"scheduled_twice_daily_proactive_growth\",
+            });
+            const execution = await call(\"executeApprovedDecisionQueue\", {
+              _service_role: true, max_decisions: 50,
+              trigger_type: \"scheduled_twice_daily_proactive_growth\",
+            });
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            const confirmation = await call(\"confirmExecutedDecisions\", {
+              _service_role: true, trigger_type: \"scheduled_twice_daily_proactive_growth\",
+            });
+            console.log(\"PROACTIVE_GROWTH=\" + JSON.stringify({
+              engine: engine.engine_version || engine.engine,
+              lifecycle_due: engine.campaign_lifecycle?.due,
+              growth_goal: engine.serving_campaign_growth_goal,
+              promotions: engine.stages?.campaignLifecycle?.results?.[0]?.stages?.harvesting?.promoted ?? null,
+              executed: execution.executed ?? 0,
+              remaining: execution.remaining ?? 0,
+              confirmed: confirmation.confirmed ?? 0,
+              divergences: confirmation.divergences ?? 0,
+              note: \"No eligible economic opportunity is a valid outcome; the cycle must not manufacture bids or campaigns.\",
+            }));
+          ' </dev/null"

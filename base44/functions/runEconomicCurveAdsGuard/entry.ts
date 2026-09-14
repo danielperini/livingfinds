@@ -215,7 +215,9 @@ Deno.serve(async (request) => {
         const economicsComplete = low(econ?.economics_status) === 'complete' || econ?.economic_data_complete === true || product.cost_confirmed === true;
         const noAdCapacity = economicsComplete && margin <= 0 && maxProfitableSpend <= 0;
 
-        const baseLossBudget = noAdCapacity ? MIN_BID : clamp((maxProfitableSpend || margin || 5) * 0.25, 2.50, 15.00);
+        // Teto absoluto de perda diária por campanha/ASIN. A redução ocorre no
+        // termo/target responsável antes de qualquer pausa de campanha.
+        const baseLossBudget = noAdCapacity ? MIN_BID : clamp((maxProfitableSpend || margin || 5) * 0.25, 2.50, 5.00);
         const lossBudget = r2(Math.max(MIN_BID, baseLossBudget * riskFactor(curveState) * merFactor));
         const allowedSpend = adsSales * safeAcos / 100;
         const loss = Math.max(0, spend - allowedSpend);

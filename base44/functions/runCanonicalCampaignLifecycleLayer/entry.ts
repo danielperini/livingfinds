@@ -61,7 +61,12 @@ Deno.serve(async (request) => {
       const minBid = finite(settings.min_bid || 0.2);
       const maxBid = finite(settings.max_bid || 3);
       const increment = finite(settings.bid_increment || settings.allowed_increment || 0.1);
-      const maxSpendWithoutSale = finite(settings.max_spend_without_sale || Math.max(5, globalBudget * 0.05));
+      // Guardrail de perda intradiária: nenhum teste sem venda recebe mais de
+      // R$ 5,00 de exposição. Isso é um limite de perda, não um motivo para
+      // pausar a campanha inteira: o motor reduz/negativa somente a entidade
+      // responsável e preserva a descoberta dos demais termos.
+      const configuredNoSaleLimit = finite(settings.max_spend_without_sale || 5);
+      const maxSpendWithoutSale = Math.min(5, Math.max(minBid, configuredNoSaleLimit));
 
       const productByAsin = new Map(products.filter((p: any) => p.asin).map((p: any) => [upper(p.asin), p]));
       const eligibilityByAsin = new Map([...productByAsin.entries()].map(([asin, product]) => [asin, productAdsEligibility(product)]));
