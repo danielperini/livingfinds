@@ -121,6 +121,9 @@ export function getAmazonConfirmationStatus(item) {
   if (decisionStatus === 'pending_approval') {
     return { label: 'Aguardando aprovação', tone: 'amber', symbol: '⏳' };
   }
+  if (decisionStatus === 'waiting_retry' || queueStatus === 'scheduled') {
+    return { label: 'Nova tentativa agendada', tone: 'amber', symbol: '⏳' };
+  }
   if (['executing', 'confirming', 'awaiting_confirmation', 'conflict_reconciling'].includes(decisionStatus) || queueStatus === 'processing') {
     return hasAmazonAttempt
       ? { label: 'Aguardando confirmação', tone: 'amber', symbol: '⏳' }
@@ -129,11 +132,8 @@ export function getAmazonConfirmationStatus(item) {
   if (confirmationStatus === 'pending' && hasAmazonAttempt) {
     return { label: 'Aguardando confirmação', tone: 'amber', symbol: '⏳' };
   }
-  if (decisionStatus === 'scheduled' || queueStatus === 'scheduled') {
-    return { label: 'Agendado na fila local', tone: 'amber', symbol: '⏳' };
-  }
   if (['pending', 'proposed', 'approved'].includes(decisionStatus) || ['pending', 'queued'].includes(queueStatus)) {
-    return { label: 'Na fila local', tone: 'amber', symbol: '⏳' };
+    return { label: decisionStatus === 'approved' ? 'Pronta para envio à Amazon' : 'Na fila local', tone: 'amber', symbol: '⏳' };
   }
   if (['failed', 'failed_final', 'error', 'rolled_back'].includes(decisionStatus) || queueStatus === 'failed') {
     return hasAmazonAttempt
