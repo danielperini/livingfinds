@@ -68,7 +68,14 @@ async function fetchWithRetry(url: string, opts: RequestInit, maxRetries = 2, de
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const res = await fetch(url, opts);
     if (res.status !== 429) return res;
-    if (attempt < maxRetries) await new Promise(r => setTimeout(r, delayMs * (attempt + 1)));
+    // A Amazon informa a janela real de recuperação quando disponível. Não
+    // continuar em rajada reduz respostas 429 e evita que uma conta deixe de
+    // receber sugestões recentes por esgotar a quota durante o ciclo.
+    const retryAfterSeconds = Number(res.headers.get('retry-after'));
+    const waitMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+      ? retryAfterSeconds * 1000
+      : delayMs * (attempt + 1);
+    if (attempt < maxRetries) await new Promise(r => setTimeout(r, waitMs));
   }
   return fetch(url, opts); // last attempt
 }
@@ -76,11 +83,15 @@ async function fetchWithRetry(url: string, opts: RequestInit, maxRetries = 2, de
 Deno.serve(async (req) => {
   const now = new Date().toISOString();
   try {
-    const base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
-    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-
     const body = await req.json().catch(() => ({}));
+    const base44 = createClientFromRequest(req);
+    // Esta função é chamada pelo pipeline canônico usando service role. Exigir
+    // exclusivamente uma sessão de navegador fazia a coleta falhar em todos os
+    // ciclos agendados, deixando KeywordSuggestion desatualizada.
+    const authenticated = await base44.auth.isAuthenticated().catch(() => false);
+    if (!authenticated && !body._service_role) {
+      return Response.json({ error: 'Unauthorized' }, { status: 401 });
+    }
     const {
       amazon_account_id,
       asin,
