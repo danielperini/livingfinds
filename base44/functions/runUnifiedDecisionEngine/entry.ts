@@ -100,7 +100,7 @@ Deno.serve(async (request) => {
     // mantendo o ciclo intradiário barato e sem criar decisões paralelas.
     // Qualquer recomendação continua sujeita aos mesmos guardrails econômicos,
     // de estoque, atribuição e confirmação Amazon deste orquestrador.
-    const aiOperationalReview = body.skip_ai_review === true
+    const aiOperationalReviewResult = body.skip_ai_review === true
       ? { ok: true, skipped: true, reason: 'disabled_by_request' }
       : await invoke(base44, 'runDailyConsolidatedAI', {
           ...common,
@@ -108,6 +108,15 @@ Deno.serve(async (request) => {
           advisory_only: true,
           snapshot_run_id: snapshotRunId,
         });
+    // A indisponibilidade de uma camada consultiva não pode paralisar a
+    // recuperação de relatórios nem os guardrails determinísticos do ciclo.
+    const aiOperationalReview = aiOperationalReviewResult?.ok === false
+      ? {
+          ok: true,
+          advisory_unavailable: true,
+          error: aiOperationalReviewResult.error || 'AI review unavailable',
+        }
+      : aiOperationalReviewResult;
 
     const salesRecovery = body.skip_sales_recovery === true || dailyClose
       ? { ok: true, skipped: true }
