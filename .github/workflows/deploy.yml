@@ -129,6 +129,32 @@ jobs:
               echo '--- rotinas Amazon pós-deploy ignoradas; exigem workflow_dispatch explícito ---'
               exit 0
             fi
+            # O deploy nunca executa especialistas de Ads diretamente. Isso
+            # duplicava decisões de bid/orçamento com o ciclo permanente e
+            # permitia que uma publicação alterasse a Amazon fora da política
+            # central. Toda ação mutável passa pelo único orquestrador.
+            echo '--- ciclo Amazon pós-deploy: somente motor unificado ---'
+            docker compose -f server/docker-compose.yml exec -T app deno eval '
+              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
+              const response = await fetch("http://127.0.0.1:8000/functions/runUnifiedDecisionEngine", {
+                method: "POST",
+                headers: { "content-type": "application/json", "x-api-token": token },
+                body: JSON.stringify({
+                  _service_role: true,
+                  bootstrap: true,
+                  daily_close: true,
+                  full_repricing_evaluation: true,
+                  dry_run: false,
+                  trigger_type: "deploy_canonical_engine_only"
+                })
+              });
+              const data = await response.json().catch(() => ({}));
+              console.log("CANONICAL_POST_DEPLOY_HTTP=" + response.status + "|OK=" + data.ok + "|SNAPSHOT_RUN=" + (data.snapshot_run_id || "unknown"));
+              if (!response.ok || data.ok === false) throw new Error(data.error || "canonical post-deploy engine failed");
+            ' </dev/null
+            # Os blocos legados abaixo são mantidos apenas para histórico do
+            # workflow e não podem disparar ações concorrentes.
+            exit 0
             # Mantém o agrupamento original das verificações e rotinas seguintes.
             if true; then
             echo '--- validar credencial e extração Zyte sem revelar o segredo ---'
