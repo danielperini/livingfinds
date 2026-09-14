@@ -8,6 +8,7 @@
  *     → zerar next_poll_at e forçar poll imediatamente
  *  3. Nenhum job do dia atual (BRT) → disparar runDailyFullReportPipeline com force:true
  *  4. Após pipeline, aguardar 5min, forçar poll, e disparar SP-API + motor
+ *     unificado. O watchdog não toma decisões de Ads por conta própria.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 
@@ -214,12 +215,15 @@ Deno.serve(async (req) => {
         db.functions.invoke('syncSalesDailyFromReports', { amazon_account_id: aid, _service_role: true }).catch(() => {}),
       ]);
 
-      console.log('[watchdog] Disparando motor determinístico de decisão...');
-      await db.functions.invoke('runDeterministicDecisionEngine', {
-        amazon_account_id: aid, auto_approve: true, skip_approval: true, _service_role: true,
-      }).catch(() => {});
-      await db.functions.invoke('executeApprovedDecisionQueue', {
-        amazon_account_id: aid, auto_execute: true, requires_approval: false, _service_role: true,
+      // O Watchdog recupera dados; a interpretação e qualquer ação de Ads são
+      // exclusividade do orquestrador. Chamar o motor determinístico e o
+      // executor diretamente aqui criava um segundo caminho de decisão.
+      console.log('[watchdog] Disparando motor unificado após recuperação de dados...');
+      await db.functions.invoke('runUnifiedDecisionEngine', {
+        amazon_account_id: aid,
+        _service_role: true,
+        _canonical_orchestrator: 'runUnifiedDecisionEngine',
+        trigger_type: 'watchdog_report_recovery',
       }).catch(() => {});
     }
 
@@ -232,7 +236,7 @@ Deno.serve(async (req) => {
       completed_at: new Date().toISOString(),
       duration_ms: Date.now() - t0,
       result_summary: pipelineOk
-        ? 'Pipeline completa: ADS + SP-API + motor decisão disparados'
+        ? 'Pipeline completa: ADS + SP-API + motor unificado disparado'
         : `Falhou após ${MAX_RETRIES} tentativas: ${lastError}`,
     }).catch(() => {});
 
