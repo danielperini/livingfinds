@@ -95,6 +95,19 @@ Deno.serve(async (request) => {
       snapshot_run_id: snapshotRunId,
     });
     const decisionV3Shadow = await invoke(base44, 'runDecisionArbiterV3', common);
+    // A IA é uma camada de revisão e explicação, não um segundo executor. O
+    // gatekeeper reutiliza o resultado diário quando nada material mudou,
+    // mantendo o ciclo intradiário barato e sem criar decisões paralelas.
+    // Qualquer recomendação continua sujeita aos mesmos guardrails econômicos,
+    // de estoque, atribuição e confirmação Amazon deste orquestrador.
+    const aiOperationalReview = body.skip_ai_review === true
+      ? { ok: true, skipped: true, reason: 'disabled_by_request' }
+      : await invoke(base44, 'runDailyConsolidatedAI', {
+          ...common,
+          trigger_type: dailyClose ? 'unified_daily_ai_review' : 'unified_intraday_ai_review',
+          advisory_only: true,
+          snapshot_run_id: snapshotRunId,
+        });
 
     const salesRecovery = body.skip_sales_recovery === true || dailyClose
       ? { ok: true, skipped: true }
@@ -205,7 +218,7 @@ Deno.serve(async (request) => {
 
     const stages = {
       reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit,
-      manualStructureAudit, economicCurveAdsGuard, deterministic, decisionV3Shadow,
+      manualStructureAudit, economicCurveAdsGuard, deterministic, decisionV3Shadow, aiOperationalReview,
       salesRecovery, asinDiversification, campaignLifecycle, economicBalancer,
       servingGrowth, deliveryHealth, daypartConfiguration, daypartBudgetRestore,
       scheduledCampaignState, scheduledBidDaypart, repricing, scopeAfter,
@@ -291,6 +304,13 @@ Deno.serve(async (request) => {
         serving_growth_stage: 'runServingCampaignGrowthObjective',
         today_evidence_requested_growth: growthRecommendedByToday,
         growth_contract: 'Auto de descoberta, Harvest Auto/Manual→Exact e expansão só para estoque, economia e entrega confirmados; perda local não bloqueia vencedores independentes.',
+      },
+      ai_review: {
+        function: 'runDailyConsolidatedAI',
+        integrated_in_canonical_engine: true,
+        role: 'revisão consultiva de anomalias e priorização; não executa nem cria uma fila paralela',
+        frequency: 'avaliada a cada ciclo; aiGatekeeper limita a inferência nova e reutiliza cache válido',
+        execution_boundary: 'somente candidatos aceitos pelos guardrails e pela fila canônica podem seguir para executeApprovedDecisionQueue e confirmação Amazon',
       },
       asin_portfolio: {
         automatic: true,
