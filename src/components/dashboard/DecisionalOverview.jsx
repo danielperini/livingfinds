@@ -66,7 +66,7 @@ function AttentionCard({ alert, onResolve, resolving }) {
   );
 }
 
-function AttentionPanel({ accountId }) {
+function AttentionPanel({ accountId, decisions = [] }) {
   const [alerts, setAlerts] = useState(null);
   const [loading, setLoading] = useState(true);
   const [resolvingId, setResolvingId] = useState(null);
@@ -121,7 +121,17 @@ function AttentionPanel({ accountId }) {
       </div>
     );
   }
-  if (!alerts || alerts.length === 0) {
+  const overdueQueue = (decisions || []).filter((decision) => {
+    const status = String(decision?.status || '').toLowerCase();
+    const queueStatus = String(decision?.queue_status || '').toLowerCase();
+    const created = new Date(decision?.created_at || decision?.created_date || 0).getTime();
+    const ageMinutes = created ? (Date.now() - created) / 60000 : 0;
+    return ageMinutes >= 15 && (
+      ['approved', 'waiting_retry', 'scheduled', 'pending'].includes(status) ||
+      ['scheduled', 'pending', 'queued'].includes(queueStatus)
+    );
+  });
+  if ((!alerts || alerts.length === 0) && overdueQueue.length === 0) {
     return (
       <div className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
         <CheckCircle2 className="w-5 h-5 text-emerald-500 flex-shrink-0" />
@@ -136,6 +146,19 @@ function AttentionPanel({ accountId }) {
     <>
       {resolveError && <p className="mb-3 text-xs text-red-600">{resolveError}</p>}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {overdueQueue.length > 0 && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-theme-primary">Fila Amazon atrasada</p>
+                <p className="text-xs text-theme-secondary mt-1 leading-relaxed">
+                  {overdueQueue.length} decisão(ões) aguardam envio ou nova tentativa há mais de 15 minutos. O motor deve revalidar e reenviar somente as decisões ainda elegíveis.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
         {alerts.slice(0, 6).map(a => (
           <AttentionCard
             key={a.id}
@@ -290,9 +313,9 @@ export default function DecisionalOverview({
       <div className="rounded-2xl border border-[var(--border-color)] bg-theme-card p-5 shadow-card">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-bold text-theme-primary">Atenção necessária</h2>
-          <p className="text-[11px] text-theme-muted hidden sm:block">Alertas ativos de alta severidade e críticos.</p>
+          <p className="text-[11px] text-theme-muted hidden sm:block">Alertas críticos, alta severidade e fila Amazon atrasada.</p>
         </div>
-        <AttentionPanel accountId={account?.id} />
+        <AttentionPanel accountId={account?.id} decisions={decisions} />
       </div>
 
       {/* ════ O que o Motor está fazendo agora — card dedicado, ao final ════ */}
@@ -301,7 +324,7 @@ export default function DecisionalOverview({
           <h2 className="text-sm font-bold text-theme-primary">O que o Motor está fazendo agora</h2>
           <p className="text-[11px] text-theme-muted hidden sm:block">Toque na seta para abrir o colóquio da decisão.</p>
         </div>
-        <MotorDecisionFeed decisions={decisions} bidChanges={bidChanges} />
+        <MotorDecisionFeed decisions={decisions} bidChanges={bidChanges} accountId={account?.id} />
       </div>
     </div>
   );
