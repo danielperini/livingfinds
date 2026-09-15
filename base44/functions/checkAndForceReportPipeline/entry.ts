@@ -20,6 +20,40 @@ async function sleep(ms: number) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+// O watchdog não cria regras nem escreve diretamente na Amazon. Ele apenas
+// garante que o único ciclo canônico seja executado e que a fila canônica
+// tenha oportunidade de enviar e confirmar decisões já aprovadas.
+async function runCanonicalOperationalCycle(db: any, amazon_account_id: string, trigger_type: string) {
+  const engineRes = await db.functions.invoke('runUnifiedDecisionEngine', {
+    amazon_account_id,
+    _service_role: true,
+    _canonical_orchestrator: 'runUnifiedDecisionEngine',
+    trigger_type,
+  }).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
+  const engine = (engineRes as any)?.data || engineRes || {};
+
+  // A execução permanece protegida por status, idempotency_key, cooldown e
+  // guardrails econômicos dentro da fila. Um ciclo sem decisão elegível é um
+  // resultado válido; não fabricamos mudanças apenas para cumprir frequência.
+  const queueRes = await db.functions.invoke('executeApprovedDecisionQueue', {
+    amazon_account_id,
+    _service_role: true,
+    max_decisions: 25,
+    trigger_type,
+  }).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
+  const execution = (queueRes as any)?.data || queueRes || {};
+
+  if (Number(execution.executed || 0) > 0) await sleep(5000);
+  const confirmationRes = await db.functions.invoke('confirmExecutedDecisions', {
+    amazon_account_id,
+    _service_role: true,
+    trigger_type,
+  }).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
+  const confirmation = (confirmationRes as any)?.data || confirmationRes || {};
+
+  return { engine, execution, confirmation };
+}
+
 Deno.serve(async (req) => {
   const t0 = Date.now();
   const startAt = new Date().toISOString();
@@ -58,17 +92,29 @@ Deno.serve(async (req) => {
     });
 
     if (hasProcessedRecent) {
+      // Um relatório recente resolve a etapa de coleta, mas não substitui a
+      // avaliação operacional. Antes este retorno encerrava o watchdog e
+      // impedia decisões por até 26h mesmo com Ads ativos.
+      const cycle = await runCanonicalOperationalCycle(db, aid, 'scheduled_two_hour_healthy_data_cycle');
       await db.entities.SyncExecutionLog.create({
         amazon_account_id: aid,
         operation: 'watchdog_report_pipeline',
         trigger_type: 'automatic',
-        status: 'skipped',
+        status: cycle.engine?.ok === false || cycle.execution?.ok === false ? 'warning' : 'success',
         started_at: startAt,
         completed_at: new Date().toISOString(),
         duration_ms: Date.now() - t0,
-        result_summary: 'Skipped: relatório já processado (processed_at) nas últimas 26h',
+        result_summary: `Relatório recente: motor canônico executado; fila executou ${Number(cycle.execution?.executed || 0)}; confirmadas ${Number(cycle.confirmation?.confirmed || 0)}`,
       }).catch(() => {});
-      return Response.json({ ok: true, action: 'skipped', reason: 'already_processed', duration_ms: Date.now() - t0 });
+      return Response.json({
+        ok: cycle.engine?.ok !== false && cycle.execution?.ok !== false,
+        action: 'healthy_data_cycle_executed',
+        reason: 'already_processed_engine_evaluated',
+        engine: cycle.engine,
+        execution: cycle.execution,
+        confirmation: cycle.confirmation,
+        duration_ms: Date.now() - t0,
+      });
     }
 
     // ── 2. Detectar jobs orphaned/travados (poll_attempts=0) ──
@@ -215,16 +261,8 @@ Deno.serve(async (req) => {
         db.functions.invoke('syncSalesDailyFromReports', { amazon_account_id: aid, _service_role: true }).catch(() => {}),
       ]);
 
-      // O Watchdog recupera dados; a interpretação e qualquer ação de Ads são
-      // exclusividade do orquestrador. Chamar o motor determinístico e o
-      // executor diretamente aqui criava um segundo caminho de decisão.
-      console.log('[watchdog] Disparando motor unificado após recuperação de dados...');
-      await db.functions.invoke('runUnifiedDecisionEngine', {
-        amazon_account_id: aid,
-        _service_role: true,
-        _canonical_orchestrator: 'runUnifiedDecisionEngine',
-        trigger_type: 'watchdog_report_recovery',
-      }).catch(() => {});
+      console.log('[watchdog] Executando ciclo canônico após recuperação de dados...');
+      await runCanonicalOperationalCycle(db, aid, 'watchdog_report_recovery');
     }
 
     await db.entities.SyncExecutionLog.create({
