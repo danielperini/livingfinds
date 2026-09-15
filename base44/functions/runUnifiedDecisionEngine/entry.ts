@@ -95,6 +95,28 @@ Deno.serve(async (request) => {
       snapshot_run_id: snapshotRunId,
     });
     const decisionV3Shadow = await invoke(base44, 'runDecisionArbiterV3', common);
+    // A IA é uma camada de revisão e explicação, não um segundo executor. O
+    // gatekeeper reutiliza o resultado diário quando nada material mudou,
+    // mantendo o ciclo intradiário barato e sem criar decisões paralelas.
+    // Qualquer recomendação continua sujeita aos mesmos guardrails econômicos,
+    // de estoque, atribuição e confirmação Amazon deste orquestrador.
+    const aiOperationalReviewResult = body.skip_ai_review === true
+      ? { ok: true, skipped: true, reason: 'disabled_by_request' }
+      : await invoke(base44, 'runDailyConsolidatedAI', {
+          ...common,
+          trigger_type: dailyClose ? 'unified_daily_ai_review' : 'unified_intraday_ai_review',
+          advisory_only: true,
+          snapshot_run_id: snapshotRunId,
+        });
+    // A indisponibilidade de uma camada consultiva não pode paralisar a
+    // recuperação de relatórios nem os guardrails determinísticos do ciclo.
+    const aiOperationalReview = aiOperationalReviewResult?.ok === false
+      ? {
+          ok: true,
+          advisory_unavailable: true,
+          error: aiOperationalReviewResult.error || 'AI review unavailable',
+        }
+      : aiOperationalReviewResult;
 
     const salesRecovery = body.skip_sales_recovery === true || dailyClose
       ? { ok: true, skipped: true }
@@ -135,14 +157,14 @@ Deno.serve(async (request) => {
         });
 
     const growthRecommendedByToday = salesRecovery?.serving_growth?.recommended === true;
-    const servingGrowth = body.skip_serving_campaign_growth === true
+    const servingGrowth = body.skip_serving_campaign_growth === true || (!lifecycleWindow && !growthRecommendedByToday)
       ? { ok: true, skipped: true }
       : await invoke(base44, 'runServingCampaignGrowthObjective', {
           ...common,
           snapshot_run_id: snapshotRunId,
           serving_campaign_growth_target_pct: servingCampaignGrowthTargetPct,
-          max_auto_budget_expansions: body.max_auto_budget_expansions ?? 6,
-          max_new_exact_per_run: body.max_new_exact_per_run ?? 6,
+          max_auto_budget_expansions: body.max_auto_budget_expansions ?? 2,
+          max_new_exact_per_run: body.max_new_exact_per_run ?? 2,
           delivery_lookback_days: 7,
           trigger_type: dailyClose ? 'unified_daily_serving_growth_v18' : growthRecommendedByToday ? 'unified_intraday_growth_recommendation' : 'unified_intraday_serving_growth_v18',
         });
@@ -162,8 +184,8 @@ Deno.serve(async (request) => {
           prioritize_zero_delivery_rotation: true,
           delivery_lookback_days: 7,
           max_replacements_per_run: replacementCapacity,
-          max_structure_repairs_per_run: body.max_structure_repairs_per_run ?? 5,
-          max_bid_recoveries_per_run: body.max_bid_recoveries_per_run ?? 8,
+          max_structure_repairs_per_run: body.max_structure_repairs_per_run ?? 3,
+          max_bid_recoveries_per_run: body.max_bid_recoveries_per_run ?? 3,
         });
 
     const daypartConfiguration = body.skip_scheduled_daypart === true || !daypartWindow
@@ -205,7 +227,7 @@ Deno.serve(async (request) => {
 
     const stages = {
       reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit,
-      manualStructureAudit, economicCurveAdsGuard, deterministic, decisionV3Shadow,
+      manualStructureAudit, economicCurveAdsGuard, deterministic, decisionV3Shadow, aiOperationalReview,
       salesRecovery, asinDiversification, campaignLifecycle, economicBalancer,
       servingGrowth, deliveryHealth, daypartConfiguration, daypartBudgetRestore,
       scheduledCampaignState, scheduledBidDaypart, repricing, scopeAfter,
@@ -269,8 +291,8 @@ Deno.serve(async (request) => {
         zero_delivery_test_hours: 72,
         max_bid_recovery_attempts: 2,
         max_replacements_per_run: replacementCapacity,
-        max_structure_repairs_per_run: body.max_structure_repairs_per_run ?? 5,
-        max_bid_recoveries_per_run: body.max_bid_recoveries_per_run ?? 8,
+        max_structure_repairs_per_run: body.max_structure_repairs_per_run ?? 3,
+        max_bid_recoveries_per_run: body.max_bid_recoveries_per_run ?? 3,
         economic_bid_cap: true,
         trusted_bootstrap_economics: 'somente custo confirmado, preço, break-even e safe_max_cpc explícitos',
         asin_zero_sale_spend_cap: 'clamp(4 x safe_max_cpc, R$2,50, R$5,00)',
@@ -291,6 +313,13 @@ Deno.serve(async (request) => {
         serving_growth_stage: 'runServingCampaignGrowthObjective',
         today_evidence_requested_growth: growthRecommendedByToday,
         growth_contract: 'Auto de descoberta, Harvest Auto/Manual→Exact e expansão só para estoque, economia e entrega confirmados; perda local não bloqueia vencedores independentes.',
+      },
+      ai_review: {
+        function: 'runDailyConsolidatedAI',
+        integrated_in_canonical_engine: true,
+        role: 'revisão consultiva de anomalias e priorização; não executa nem cria uma fila paralela',
+        frequency: 'avaliada a cada ciclo; aiGatekeeper limita a inferência nova e reutiliza cache válido',
+        execution_boundary: 'somente candidatos aceitos pelos guardrails e pela fila canônica podem seguir para executeApprovedDecisionQueue e confirmação Amazon',
       },
       asin_portfolio: {
         automatic: true,

@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
+import { secrets } from 'base44:runtime';
 
 /**
  * refreshProductMarketPrice v2 — Amazon SP-API (Product Pricing)
@@ -17,14 +18,6 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 const CACHE_DAYS = 7;
 const LOCK_MINUTES = 10;
 const SP_API_BASE = 'https://sellingpartnerapi-na.amazon.com';
-
-function env(...names: string[]): string {
-  for (const name of names) {
-    const value = Deno.env.get(name)?.trim();
-    if (value) return value;
-  }
-  return '';
-}
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
@@ -59,9 +52,9 @@ function calcStats(prices: number[]) {
 
 async function getSpApiToken(): Promise<string> {
   // AMAZON_* secrets são os válidos — têm prioridade sobre os legados SP_*
-  const refreshToken = env('AMAZON_SP_REFRESH_TOKEN', 'SP_REFRESH_TOKEN');
-  const clientId = env('AMAZON_LWA_CLIENT_ID', 'SP_CLIENT_ID');
-  const clientSecret = env('AMAZON_LWA_CLIENT_SECRET', 'SP_CLIENT_SECRET');
+  const refreshToken = secrets.get('AMAZON_SP_REFRESH_TOKEN') || secrets.get('SP_REFRESH_TOKEN');
+  const clientId = secrets.get('AMAZON_LWA_CLIENT_ID') || secrets.get('SP_CLIENT_ID');
+  const clientSecret = secrets.get('AMAZON_LWA_CLIENT_SECRET') || secrets.get('SP_CLIENT_SECRET');
 
   if (!refreshToken || !clientId || !clientSecret) {
     throw new Error('SP-API credentials not configured (SP_REFRESH_TOKEN, SP_CLIENT_ID, SP_CLIENT_SECRET)');
@@ -202,7 +195,7 @@ export default async function handler(req: Request): Promise<Response> {
     }
 
     const asin = String(product.asin).trim().toUpperCase();
-    const marketplaceId = env('AMAZON_MARKETPLACE_ID') || 'A2Q3Y263D00KWC'; // BR fallback
+    const marketplaceId = secrets.get('AMAZON_MARKETPLACE_ID') || 'A2Q3Y263D00KWC'; // BR fallback
 
     // ── Cache ─────────────────────────────────────────────────────────────────
     if (!force && product.market_price_status === 'success' && product.market_price_last_checked_at) {

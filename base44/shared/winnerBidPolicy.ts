@@ -3,17 +3,13 @@ import { AMAZON_BID_CEILING_BRL, AMAZON_WINNER_BID_CEILING_BRL } from './amazonB
 const n = (value: any) => Number.isFinite(Number(value)) ? Number(value) : 0;
 
 export function keywordIdsAboveEconomicCeiling(payload: any): string[] {
-  const rows: any[] = Array.isArray(payload) ? payload
+  const rows = Array.isArray(payload) ? payload
     : Array.isArray(payload?.keywords) ? payload.keywords
     : [];
-  const ids: string[] = rows
-    .filter((row: any) => {
-      const bid = row?.bid && typeof row.bid === 'object' ? row.bid.value : row?.bid;
-      return n(bid) > AMAZON_BID_CEILING_BRL;
-    })
-    .map((row: any): string => String(row?.keywordId || ''))
-    .filter((id: string) => Boolean(id));
-  return Array.from(new Set<string>(ids));
+  return [...new Set(rows.filter((row: any) => {
+    const bid = row?.bid && typeof row.bid === 'object' ? row.bid.value : row?.bid;
+    return n(bid) > AMAZON_BID_CEILING_BRL;
+  }).map((row: any) => String(row?.keywordId || '')).filter(Boolean))];
 }
 
 export function normalizedAcosPercent(value: any, targetAcos: any): number {

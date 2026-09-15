@@ -1,6 +1,6 @@
 /**
  * pauseCampaign — Pausa campanhas SP via Amazon Ads API v3
- * Usa PUT /sp/campaigns (v3), o endpoint de atualização em lote confirmado pelo projeto.
+ * Usa PATCH /sp/campaigns (v3) que é o endpoint correto para atualizar state.
  * Centraliza autenticação via secret ADS_REFRESH_TOKEN (fonte primária).
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
@@ -54,9 +54,8 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const { amazon_account_id, campaign_id, asin, sku } = body;
+    const pauseAllRelated = body.pause_all_related === true && body.confirm_bulk_pause === true;
     const lockProductPaused = body.lock_product_paused === true;
-    const explicitProductPause = lockProductPaused && body.pause_source === 'user_manual';
-    const pauseAllRelated = explicitProductPause || (body.pause_all_related === true && body.confirm_bulk_pause === true);
 
     if (!amazon_account_id || (!campaign_id && !asin && !sku)) {
       return Response.json({ ok: false, error: 'amazon_account_id + (campaign_id | asin | sku) obrigatórios' }, { status: 400 });
@@ -120,7 +119,7 @@ Deno.serve(async (req) => {
 
       for (const batch of chunks(campaignIds, 100)) {
         const response = await fetch(`${baseUrl}/sp/campaigns`, {
-          method: 'PUT',
+          method: 'PATCH',
           headers: {
             'Authorization': `Bearer ${token}`,
             'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
@@ -142,7 +141,6 @@ Deno.serve(async (req) => {
           if (id) pausedIds.push(String(id));
         }
         for (const e of errors) failedItems.push(e);
-        if (response.ok && successes.length === 0 && errors.length === 0) pausedIds.push(...batch);
 
         if (!response.ok && !successes.length) {
           if (response.status === 401 || response.status === 403) {
@@ -165,7 +163,7 @@ Deno.serve(async (req) => {
         const CT2 = 'application/vnd.spCampaign.v3+json';
         for (const batch of chunks(campaignIds, 100)) {
           const resp2 = await fetch(`${baseUrl2}/sp/campaigns`, {
-            method: 'PUT',
+            method: 'PATCH',
             headers: {
               'Authorization': `Bearer ${token2}`,
               'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
@@ -181,8 +179,6 @@ Deno.serve(async (req) => {
             const id = s?.campaignId || s?.campaign?.campaignId;
             if (id) pausedIds.push(String(id));
           }
-          const errors2 = data2?.campaigns?.error || data2?.error || [];
-          if (resp2.ok && successes2.length === 0 && errors2.length === 0) pausedIds.push(...batch);
         }
         if (pausedIds.length) apiErrorMsg = '';
       } catch { /* ignora — continua com pausa local */ }
@@ -190,7 +186,7 @@ Deno.serve(async (req) => {
 
     // ── Confirmação pós-pausa: verificar estado real na Amazon antes de persistir ─
     const now = new Date().toISOString();
-    let confirmedIds: string[] = [];
+    let confirmedIds = pausedIds.length ? unique(pausedIds) : campaignIds;
 
     if (pausedIds.length > 0) {
       // Aguardar 1.5s e confirmar estado real (polling simples: 1 tentativa imediata)
@@ -219,8 +215,7 @@ Deno.serve(async (req) => {
         const stillEnabled: string[] = [];
         for (const id of pausedIds) {
           const state = realStates.get(id);
-          if (state === 'PAUSED') confirmedIds.push(id);
-          else stillEnabled.push(id);
+          if (state === 'ENABLED') stillEnabled.push(id);
         }
 
         if (stillEnabled.length > 0) {
@@ -228,7 +223,7 @@ Deno.serve(async (req) => {
           await new Promise(r => setTimeout(r, 3000));
           // Tentativa de re-pausa
           const retryRes = await fetch(`${baseUrl2}/sp/campaigns`, {
-            method: 'PUT',
+            method: 'PATCH',
             headers: {
               'Authorization': `Bearer ${token2}`,
               'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
@@ -239,42 +234,20 @@ Deno.serve(async (req) => {
             body: JSON.stringify({ campaigns: stillEnabled.map(id => ({ campaignId: id, state: 'PAUSED' })) }),
           }).catch(() => null);
 
-          if (retryRes?.ok) {
-            await new Promise(r => setTimeout(r, 1500));
-            const retryConfirmRes = await fetch(`${baseUrl2}/sp/campaigns/list`, {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${token2}`,
-                'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
-                'Amazon-Advertising-API-Scope': String(profileId),
-                'Content-Type': CT,
-                'Accept': CT,
-              },
-              body: JSON.stringify({ campaignIdFilter: { include: stillEnabled }, maxResults: stillEnabled.length }),
-            }).catch(() => null);
-            const retryConfirmData = await retryConfirmRes?.json().catch(() => ({})) || {};
-            for (const campaign of (retryConfirmData?.campaigns || [])) {
-              if (String(campaign?.state || '').toUpperCase() === 'PAUSED' && campaign?.campaignId) {
-                confirmedIds.push(String(campaign.campaignId));
-              }
-            }
-          }
-
           // Marcar campanhas que ainda não confirmaram como requires_attention
           for (const campaign of related) {
-            if (stillEnabled.includes(String(campaign.campaign_id)) && !confirmedIds.includes(String(campaign.campaign_id))) {
+            if (stillEnabled.includes(String(campaign.campaign_id))) {
               await base44.asServiceRole.entities.Campaign.update(campaign.id, {
                 requires_attention: true,
                 amazon_status: 'enabled', // ainda não confirmado como paused
               }).catch(() => {});
             }
           }
-          const retryUnconfirmed = stillEnabled.filter(id => !confirmedIds.includes(id));
-          if (retryUnconfirmed.length) apiErrorMsg = apiErrorMsg || `${retryUnconfirmed.length} campanha(s) ainda não confirmada(s) após a segunda pausa.`;
+          apiErrorMsg = apiErrorMsg || `${stillEnabled.length} campanha(s) ainda ENABLED após pausa — marcadas para atenção`;
         }
 
         // Atualizar amazon_status apenas para as confirmadas como PAUSED
-        for (const id of confirmedIds) {
+        for (const id of pausedIds) {
           if (!stillEnabled.includes(id)) {
             const campaign = related.find(c => String(c.campaign_id) === id);
             if (campaign) {
@@ -301,10 +274,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    const unconfirmedIds = campaignIds.filter(id => !confirmedIds.includes(id));
-
-    // O produto somente aparece pausado quando todas as campanhas relacionadas
-    // foram confirmadas como PAUSED pela Amazon.
+    // Resetar produtos para estado de kick-off
     let relatedProducts: any[] = [];
     if (targetAsin) {
       relatedProducts = await base44.asServiceRole.entities.Product.filter({ amazon_account_id, asin: targetAsin });
@@ -314,7 +284,7 @@ Deno.serve(async (req) => {
       relatedProducts = await base44.asServiceRole.entities.Product.filter({ amazon_account_id, linked_campaign_id: String(campaign_id) });
     }
 
-    if (unconfirmedIds.length === 0) for (const product of relatedProducts) {
+    for (const product of relatedProducts) {
       await base44.asServiceRole.entities.Product.update(product.id, {
         has_campaign: true, campaign_status: 'paused',
         ads_paused_at: now,
@@ -344,8 +314,8 @@ Deno.serve(async (req) => {
     }
 
     // Enfileirar ação de pausa para retry via API quando o token for renovado
-    if (unconfirmedIds.length > 0) {
-      for (const cid of unconfirmedIds) {
+    if (apiErrorMsg && !pausedIds.length) {
+      for (const cid of campaignIds) {
         await base44.asServiceRole.entities.AmazonActionQueue.create({
           amazon_account_id,
           action_type: 'pause_campaign',
@@ -362,21 +332,19 @@ Deno.serve(async (req) => {
     }
 
     return Response.json({
-      ok: unconfirmedIds.length === 0,
-      error: unconfirmedIds.length === 0 ? null : 'Nem todas as campanhas relacionadas foram confirmadas como pausadas na Amazon.',
+      ok: true,
       asin: targetAsin,
       sku: targetSku,
       requested: campaignIds.length,
       paused: confirmedIds.length,
       paused_campaign_ids: confirmedIds,
-      unconfirmed_campaign_ids: unconfirmedIds,
       failed: failedItems,
       product_reset_to_kickoff: true,
       api_synced: pausedIds.length > 0,
       api_warning: apiErrorMsg || null,
-      message: unconfirmedIds.length === 0
-        ? `${confirmedIds.length} campanhas relacionadas pausadas e confirmadas na Amazon.`
-        : `${confirmedIds.length} de ${campaignIds.length} campanhas confirmadas; o produto permanece ativo até concluir todas as pausas.`,
+      message: pausedIds.length > 0
+        ? `${confirmedIds.length} campanhas pausadas com sucesso.`
+        : `${confirmedIds.length} campanhas pausadas localmente. A sincronização com a Amazon ocorrerá automaticamente.`,
     });
 
   } catch (error: any) {

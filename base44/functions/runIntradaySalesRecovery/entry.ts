@@ -4,12 +4,12 @@ import { canonicalAccountSalesByDate } from '../../shared/salesDailyIntegrity.ts
 
 const SOURCE = 'runIntradaySalesRecovery';
 const MIN_BID = 0.25;
-const MAX_BID_STEP = 0.15;
-const MAX_BUDGET_STEP = 0.15;
-const MAX_ACTIONS = 18;
+const MAX_BID_STEP = 0.08;
+const MAX_BUDGET_STEP = 0.10;
+const MAX_ACTIONS = 10;
 const FRESHNESS_MINUTES = 45;
-const COMPETITIVE_BID_STEP = 0.10;
-const COMPETITIVE_FLOOR_OF_SAFE_CPC = 0.90;
+const COMPETITIVE_BID_STEP = 0.05;
+const COMPETITIVE_FLOOR_OF_SAFE_CPC = 0.80;
 const ECONOMIC_CACHE_MAX_MINUTES = 7 * 24 * 60;
 
 const n = (v: unknown, f = 0) => Number.isFinite(Number(v)) ? Number(v) : f;
@@ -146,7 +146,7 @@ Deno.serve(async (request) => {
         .filter((value) => value > 0);
       const baselineRevenue = median(closedRevenue);
       const elapsedFraction = clamp((hour + minuteBrt() / 60) / 24, 0, 1);
-      const expectedFloor = baselineRevenue * elapsedFraction * 0.75;
+      const expectedFloor = baselineRevenue * elapsedFraction * 0.60;
       const revenueRatio = expectedFloor > 0 ? revenueToday / expectedFloor : 1;
 
       const campaigns = dedupeCampaigns(campaignRows).filter((row: any) => active(row) && upper(row.campaign_type || 'SP') === 'SP');
@@ -177,7 +177,7 @@ Deno.serve(async (request) => {
       const observedRevenueToday = Math.max(revenueToday, adsSalesToday);
       const tacos = observedRevenueToday > 0 ? spendToday / observedRevenueToday : null;
       const recoveryActive = intradayDataFresh && baselineRevenue > 0 && expectedFloor > 0 && observedRevenueToday < expectedFloor && spendToday > 0;
-      const growthAllowed = recoveryActive && tacos !== null && tacos <= Math.max(0.25, merTarget * 5);
+      const growthAllowed = recoveryActive && tacos !== null && tacos <= Math.max(0.20, merTarget * 4);
       // Coverage is intentionally evaluated in every hour and every weekday.
       // It does not create a blanket bid increase: it only restores an
       // economically validated entity that is failing to reach the auction.
@@ -340,7 +340,7 @@ Deno.serve(async (request) => {
               ...admission,
             },
           }),
-          source_function: SOURCE, model_version: 'sales-recovery-v1.4-sales-volume',
+          source_function: SOURCE, model_version: 'sales-recovery-v1.3-competitive-cache-recovery',
           created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
         });
       };
@@ -424,7 +424,7 @@ Deno.serve(async (request) => {
             if (kw) {
               const keywordId = s(kw.keyword_id || kw.id);
               const currentBid = n(kw.current_bid ?? kw.bid);
-              const step = winner.todayWinner ? MAX_BID_STEP : 0.10;
+              const step = winner.todayWinner ? MAX_BID_STEP : 0.05;
               const nextBid = r2(Math.min(maxBid, Math.max(MIN_BID, currentBid * (1 + step))));
               const key = `SALES_RECOVERY|${aid}|${keywordId}|INCREASE_BID|${hourKey}|${nextBid.toFixed(2)}`;
               if (keywordId && currentBid > 0 && nextBid > currentBid + 0.009 && !activeKeys.has(key)) {
@@ -476,7 +476,7 @@ Deno.serve(async (request) => {
       // through the same canonical queue and Amazon confirmation as every
       // other bid decision, so it cannot bypass margin, cap or cooldown rules.
       if (competitiveCoverageActive && body.dry_run !== true) {
-        for (const candidate of competitiveCandidates.slice(0, 10)) {
+        for (const candidate of competitiveCandidates.slice(0, 5)) {
           if (queued.length >= MAX_ACTIONS) break;
           const campaignKeywords = keywords
             .filter((kw: any) => active(kw) && s(kw.campaign_id || kw.amazon_campaign_id) === candidate.id)
@@ -522,7 +522,7 @@ Deno.serve(async (request) => {
       // Growth is owned exclusively by runUnifiedDecisionEngine. Recovery may
       // recommend expansion from today's evidence, but never invokes a second
       // campaign-growth pass with an independent correlation/idempotency scope.
-      const servingGrowth = growthAllowed && revenueRatio < 0.70
+      const servingGrowth = growthAllowed && revenueRatio < 0.40
         ? { ok: true, recommended: true, owner: 'runUnifiedDecisionEngine', reason: 'revenue_below_intraday_floor' }
         : { ok: true, skipped: true, owner: 'runUnifiedDecisionEngine' };
 
@@ -545,7 +545,7 @@ Deno.serve(async (request) => {
         winners: winners.map((x) => ({ campaign_id: x.id, asin: x.asin, orders_14d: x.hist.orders, acos_14d: x.histAcos == null ? null : r2(x.histAcos), orders_today: x.todayM.orders, acos_today: x.todayAcos == null ? null : r2(x.todayAcos) })),
         competitive_candidates: competitiveCandidates.map((x) => ({ campaign_id: x.id, asin: x.asin, clicks_today: x.todayM.clicks, spend_today: r2(x.todayM.spend), safe_max_cpc: r2(x.safeMaxCpc), hour_impressions: x.currentHourImpressions, expected_hour_impressions: r2(x.expectedHourImpressions), hour_impression_gap: x.hourlyImpressionGap, campaign_distribution_gap: x.campaignDistributionGap, economics_cache_usable: x.economicsCacheUsable })),
         queued, serving_growth: servingGrowth,
-        policy: { canonical_sales_only: true, intraday_ads_sales_avoids_stale_zero: true, hourly_impression_baseline_days: 14, hourly_campaign_distribution_guard: true, economic_cache_max_hours: ECONOMIC_CACHE_MAX_MINUTES / 60, dedupe_campaigns: true, global_spend_increase_only_with_v18_guardrails: true, reallocate_from_losers_to_winners: true, bid_step_max_pct: 15, competitive_coverage_bid_step_pct: COMPETITIVE_BID_STEP * 100, competitive_floor_of_safe_cpc_pct: COMPETITIVE_FLOOR_OF_SAFE_CPC * 100, all_hours_all_days: true, budget_step_max_pct: 10, top_of_search_change: false, amazon_confirmation_required: true },
+        policy: { canonical_sales_only: true, intraday_ads_sales_avoids_stale_zero: true, hourly_impression_baseline_days: 14, hourly_campaign_distribution_guard: true, economic_cache_max_hours: ECONOMIC_CACHE_MAX_MINUTES / 60, dedupe_campaigns: true, global_spend_increase_only_with_v18_guardrails: true, reallocate_from_losers_to_winners: true, bid_step_max_pct: 8, competitive_coverage_bid_step_pct: COMPETITIVE_BID_STEP * 100, competitive_floor_of_safe_cpc_pct: COMPETITIVE_FLOOR_OF_SAFE_CPC * 100, all_hours_all_days: true, budget_step_max_pct: 10, top_of_search_change: false, amazon_confirmation_required: true },
       });
     }
 

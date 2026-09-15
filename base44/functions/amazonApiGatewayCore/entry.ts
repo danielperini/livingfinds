@@ -2,8 +2,8 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { enforceBidCeilingOnPayload } from '../../shared/amazonBidCeiling.ts';
 import { resolveWinnerKeywordCeilings } from '../../shared/winnerBidPolicy.ts';
 import { loadConfiguredBidPolicy } from '../../shared/configuredBidPolicy.ts';
-import { getSpApiAccessToken, hasManagedSpApiCredentials, invalidateSpApiAccessToken, isSpApiHost } from '../../shared/spApiLwa.ts';
 
+// parseAmazonApiResponse — inlinado (imports locais não funcionam em Deno serverless)
 async function parseAmazonApiResponse(response: Response): Promise<any> {
   const status = response.status;
   const requestId = response.headers.get('x-amzn-RequestId') || response.headers.get('x-amz-request-id') || null;
@@ -50,44 +50,12 @@ function retryDelay(attempt: number, retryAfter: number | null): number {
   return Math.min(base + Math.floor(Math.random() * Math.max(500, base)), 60000);
 }
 
-function hasHeader(headers: Record<string, any>, name: string): boolean {
-  const wanted = name.toLowerCase();
-  return Object.keys(headers || {}).some((key) => key.toLowerCase() === wanted && String(headers[key] || '').trim());
-}
-
-function setHeader(headers: Record<string, any>, name: string, value: string): void {
-  const wanted = name.toLowerCase();
-  for (const key of Object.keys(headers || {})) {
-    if (key.toLowerCase() === wanted) delete headers[key];
-  }
-  headers[name] = value;
-}
-
-function normalizeExpectedStatuses(value: any): Set<number> {
-  const rows = Array.isArray(value) ? value : value == null ? [] : [value];
-  return new Set(rows.map((item) => Number(item)).filter((item) => Number.isInteger(item) && item >= 100 && item <= 599));
-}
-
-function applyExpectedStatus(parsed: any, expectedStatuses: Set<number>) {
-  if (!parsed || !expectedStatuses.has(Number(parsed.status))) return parsed;
-  return {
-    ...parsed,
-    ok: true,
-    expected_status: true,
-    retryable: false,
-    errors: [],
-    raw: null,
-  };
-}
-
 Deno.serve(async (request) => {
   const startedAt = new Date().toISOString();
   const startedMs = Date.now();
   let base44: any = null;
   let body: any = {};
   let attemptsUsed = 0;
-  let authRefreshUsed = false;
-  let authMode = 'caller_headers';
 
   try {
     base44 = createClientFromRequest(request);
@@ -96,10 +64,9 @@ Deno.serve(async (request) => {
 
     const endpoint = String(body.endpoint || '');
     const method = String(body.method || 'GET').toUpperCase();
-    const headers: Record<string, any> = { ...(body.headers || {}) };
+    const headers = body.headers || {};
     const rawPayload = body.payload ?? null;
     const maxAttempts = Math.max(1, Math.min(Number(body.max_attempts || 5), 5));
-    const expectedStatuses = normalizeExpectedStatuses(body.expected_statuses);
 
     if (!endpoint) return Response.json({ ok: false, error: 'endpoint obrigatório' }, { status: 400 });
     if (!ALLOWED_METHODS.has(method)) return Response.json({ ok: false, error: 'Método não permitido' }, { status: 400 });
@@ -111,52 +78,6 @@ Deno.serve(async (request) => {
     if (url.protocol !== 'https:' || !ALLOWED_HOSTS.has(url.hostname)) {
       return Response.json({ ok: false, error: 'Host Amazon não permitido' }, { status: 403 });
     }
-
-    const isSpRequest = isSpApiHost(url.hostname);
-    const managedSpAuth = isSpRequest && hasManagedSpApiCredentials();
-    if (managedSpAuth) {
-      try {
-        setHeader(headers, 'x-amz-access-token', await getSpApiAccessToken(false));
-        authMode = 'managed_lwa';
-      } catch (error: any) {
-        const message = String(error?.message || error || 'Falha ao preparar autenticação SP-API');
-        const completedAt = new Date().toISOString();
-        await base44.asServiceRole.entities.SyncExecutionLog.create({
-          amazon_account_id: body.amazon_account_id || null,
-          operation: `amazon_api:${String(body.operation || url.pathname)}`,
-          status: 'error',
-          trigger_type: body.queue_type || 'gateway',
-          started_at: startedAt,
-          completed_at: completedAt,
-          records_processed: 0,
-          result_summary: JSON.stringify({ status: 401, auth_mode: 'managed_lwa', auth_refresh_used: false, duration_ms: Date.now() - startedMs }),
-          error_message: message.slice(0, 1000),
-        }).catch(() => {});
-        return Response.json({
-          ok: false,
-          status: 401,
-          retryable: false,
-          auth_error: true,
-          reauthorization_required: message.includes('SP_API_REAUTHORIZATION_REQUIRED'),
-          errors: [{ code: message.split(':')[0], message }],
-          attempts: 0,
-          started_at: startedAt,
-          completed_at: completedAt,
-        });
-      }
-    } else if (isSpRequest && !hasHeader(headers, 'x-amz-access-token')) {
-      return Response.json({
-        ok: false,
-        status: 401,
-        retryable: false,
-        auth_error: true,
-        errors: [{ code: 'SP_API_LWA_NOT_CONFIGURED', message: 'SP-API sem x-amz-access-token e sem credenciais LWA configuradas no backend.' }],
-        attempts: 0,
-        started_at: startedAt,
-        completed_at: new Date().toISOString(),
-      });
-    }
-
     const isAdsRequest = url.hostname.startsWith('advertising-api');
     const isBidMutation = isAdsRequest && ['POST', 'PUT'].includes(method) &&
       ['/sp/keywords', '/sp/adGroups', 'targets'].some((segment) => url.pathname.includes(segment));
@@ -197,53 +118,15 @@ Deno.serve(async (request) => {
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       attemptsUsed = attempt + 1;
       try {
-        const executeRequest = async () => {
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), Math.max(5000, Number(body.timeout_ms || 30000)));
-          try {
-            return await fetch(url.toString(), {
-              method,
-              headers,
-              signal: controller.signal,
-              body: payload == null || method === 'GET' || method === 'HEAD' ? undefined : JSON.stringify(payload),
-            });
-          } finally {
-            clearTimeout(timeout);
-          }
-        };
-
-        let response = await executeRequest();
-        parsed = applyExpectedStatus(await parseAmazonApiResponse(response), expectedStatuses);
-
-        // Um 401/403 da SP-API pode ser access token expirado entre a obtenção e o uso.
-        // Renova uma única vez e repete a mesma chamada, sem expor credenciais em logs.
-        if (managedSpAuth && !authRefreshUsed && !parsed.expected_status && (parsed.status === 401 || parsed.status === 403)) {
-          authRefreshUsed = true;
-          invalidateSpApiAccessToken();
-          try {
-            setHeader(headers, 'x-amz-access-token', await getSpApiAccessToken(true));
-            response = await executeRequest();
-            parsed = applyExpectedStatus(await parseAmazonApiResponse(response), expectedStatuses);
-          } catch (error: any) {
-            const message = String(error?.message || error || 'Falha ao renovar autenticação SP-API');
-            parsed = {
-              ok: false,
-              status: 401,
-              payload: null,
-              errors: [{ code: message.split(':')[0], message }],
-              request_id: null,
-              trace_id: null,
-              rate_limit: null,
-              retry_after: null,
-              retryable: false,
-              partial: false,
-              raw: null,
-              auth_error: true,
-              reauthorization_required: message.includes('SP_API_REAUTHORIZATION_REQUIRED'),
-            };
-          }
-        }
-
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), Math.max(5000, Number(body.timeout_ms || 30000)));
+        const response = await fetch(url.toString(), {
+          method,
+          headers,
+          signal: controller.signal,
+          body: payload == null || method === 'GET' || method === 'HEAD' ? undefined : JSON.stringify(payload),
+        }).finally(() => clearTimeout(timeout));
+        parsed = await parseAmazonApiResponse(response);
         if (parsed.ok || !parsed.retryable || attempt === maxAttempts - 1) break;
         await wait(retryDelay(attempt, parsed.retry_after));
       } catch (error: any) {
@@ -267,33 +150,13 @@ Deno.serve(async (request) => {
       started_at: startedAt,
       completed_at: completedAt,
       records_processed: parsed?.ok ? 1 : 0,
-      result_summary: JSON.stringify({
-        status: parsed?.status,
-        expected_status: parsed?.expected_status === true,
-        request_id: parsed?.request_id,
-        rate_limit: parsed?.rate_limit,
-        attempts: attemptsUsed,
-        auth_mode: isSpRequest ? authMode : undefined,
-        auth_refresh_used: authRefreshUsed,
-        winner_bid_exceptions: winnerBid.evidence,
-        configured_bid_ceiling: configuredBid.ceiling,
-        settings_source: configuredBid.source,
-        duration_ms: Date.now() - startedMs,
-      }),
+      result_summary: JSON.stringify({ status: parsed?.status, request_id: parsed?.request_id, rate_limit: parsed?.rate_limit, attempts: attemptsUsed, winner_bid_exceptions: winnerBid.evidence, configured_bid_ceiling: configuredBid.ceiling, settings_source: configuredBid.source, duration_ms: Date.now() - startedMs }),
       error_message: parsed?.ok ? null : String(parsed?.errors?.[0]?.message || 'Falha Amazon').slice(0, 1000),
     }).catch(() => {});
 
-    return Response.json({
-      ...parsed,
-      auth_mode: isSpRequest ? authMode : undefined,
-      auth_refresh_used: authRefreshUsed,
-      winner_bid_exceptions: winnerBid.evidence,
-      configured_bid_ceiling: configuredBid.ceiling,
-      settings_source: configuredBid.source,
-      attempts: attemptsUsed,
-      started_at: startedAt,
-      completed_at: completedAt,
-    });
+    // Sempre retorna HTTP 200 para evitar que o SDK lance exceção por status não-2xx.
+    // O status real da Amazon fica em parsed.status para que o chamador decida.
+    return Response.json({ ...parsed, winner_bid_exceptions: winnerBid.evidence, configured_bid_ceiling: configuredBid.ceiling, settings_source: configuredBid.source, attempts: attemptsUsed, started_at: startedAt, completed_at: completedAt });
   } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || 'Erro no gateway Amazon', attempts: attemptsUsed, started_at: startedAt, completed_at: new Date().toISOString() }, { status: 500 });
   }

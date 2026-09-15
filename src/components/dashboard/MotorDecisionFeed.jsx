@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
-import { base44 } from '@/api/base44Client';
 import {
-  ChevronRight, Bot, Download, Trash2, Loader2,
+  ChevronRight, Bot,
 } from 'lucide-react';
 import DataFreshnessBadge from '@/components/ui/DataFreshnessBadge';
 import DecisionColloquy from '@/components/dashboard/DecisionColloquy';
@@ -11,9 +10,6 @@ import {
 
 const PAGE_SIZE = 10;
 const CURRENT_WINDOW_MS = 24 * 60 * 60 * 1000;
-const MAX_CLEANUP_ROUNDS = 6;
-const CLEANUP_BATCH_SIZE = 1000;
-const LOCAL_NO_EXECUTION_STATUSES = new Set(['blocked', 'cancelled', 'canceled', 'skipped', 'superseded', 'expired', 'rejected']);
 
 function fmtDateKey(iso) {
   if (!iso) return null;
@@ -55,25 +51,6 @@ function historicalDedupeKey(item) {
   return [item.source, raw.rule_key, raw.amazon_account_id, raw.entity_id || raw.campaign_id, raw.asin, raw.action].join('|');
 }
 
-function hasRealAmazonAttempt(raw) {
-  return Boolean(
-    raw?.amazon_request_id || raw?.amazon_response || raw?.executed_at || Number(raw?.attempt_count || 0) > 0
-  );
-}
-
-function isLiveOperationalItem(item) {
-  const raw = item?.raw || {};
-  const status = String(raw.status || '').toLowerCase();
-  const confirmation = String(raw.amazon_confirmation_status || raw.confirmation_status || '').toLowerCase();
-
-  // O painel “agora” é de atividade operacional real. Hard guards/no-ops que
-  // impediram qualquer chamada à Amazon permanecem auditáveis no histórico/CSV,
-  // mas não são apresentados como se o motor tivesse executado algo.
-  if (LOCAL_NO_EXECUTION_STATUSES.has(status) && !hasRealAmazonAttempt(raw)) return false;
-  if (confirmation === 'not_applicable' && !hasRealAmazonAttempt(raw)) return false;
-  return true;
-}
-
 function toneBadge(tone) {
   const tones = {
     blue: 'bg-blue-50 text-blue-700 border-blue-200',
@@ -84,43 +61,6 @@ function toneBadge(tone) {
     slate: 'bg-slate-100 text-slate-600 border-slate-200',
   };
   return tones[tone] || tones.slate;
-}
-
-function csvCell(value) {
-  if (value === null || value === undefined) return '';
-  const text = typeof value === 'object' ? JSON.stringify(value) : String(value);
-  return `"${text.replace(/"/g, '""').replace(/\r?\n/g, ' ')}"`;
-}
-
-function buildHistoryCsv(items) {
-  const columns = [
-    ['data_hora', item => item.timestamp],
-    ['fonte', item => item.source],
-    ['titulo', item => deriveTitle(item.raw)],
-    ['asin', item => item.raw?.asin],
-    ['sku', item => item.raw?.sku],
-    ['campaign_id', item => item.raw?.campaign_id || item.raw?.amazon_campaign_id],
-    ['campaign_name', item => item.raw?.campaign_name],
-    ['keyword_id', item => item.raw?.keyword_id],
-    ['keyword_text', item => item.raw?.keyword_text],
-    ['decision_type', item => item.raw?.decision_type],
-    ['action', item => item.raw?.action],
-    ['status', item => item.raw?.status],
-    ['queue_status', item => item.raw?.queue_status],
-    ['confirmation_status', item => item.raw?.amazon_confirmation_status || item.raw?.confirmation_status],
-    ['risk', item => item.raw?.risk],
-    ['confidence', item => item.raw?.confidence],
-    ['value_before', item => item.raw?.value_before],
-    ['value_after', item => item.raw?.value_after],
-    ['change_pct', item => item.raw?.change_pct ?? item.raw?.bid_change_pct],
-    ['reason_code', item => item.raw?.reason_code],
-    ['rule_key', item => item.raw?.rule_key],
-    ['rationale', item => item.raw?.rationale || item.raw?.reason],
-    ['id', item => item.raw?.id || item.id],
-  ];
-  const header = columns.map(([name]) => csvCell(name)).join(';');
-  const rows = items.map(item => columns.map(([, getter]) => csvCell(getter(item))).join(';'));
-  return `\uFEFF${[header, ...rows].join('\n')}`;
 }
 
 function ConfirmationPill({ status }) {
@@ -215,16 +155,20 @@ function AccordionItem({ item, isOpen, onToggle }) {
 
 /**
  * MotorDecisionFeed — "O que o Motor está fazendo agora".
- * O recorte de 24h exibe apenas atividade operacional real. Decisões barradas
- * antes de qualquer envio à Amazon ficam preservadas no histórico/CSV para
- * auditoria, sem poluir o painel operacional.
+ * Lista de accordions (um por decisão / alteração de bid). Cada accordion mostra
+ * título + badge de ação + tempo relativo + badge de status; ao abrir, revela o
+ * DecisionColloquy completo (lazy render). Vários accordions podem ficar abertos
+ * simultaneamente; paginação e agrupamento por data permanecem.
+ *
+ * Props:
+ *   decisions   — OptimizationDecision[] (opcional)
+ *   bidChanges  — AdsBidChangeLog[] (opcional)
+ *   accountId   — string (legacy, não usado mais para fetch interno)
  */
 export default function MotorDecisionFeed({ decisions, bidChanges, accountId }) {
   const [page, setPage] = useState(1);
   const [openSet, setOpenSet] = useState(() => new Set());
   const [showHistory, setShowHistory] = useState(false);
-  const [cleaning, setCleaning] = useState(false);
-  const [historyMessage, setHistoryMessage] = useState('');
 
   const merged = useMemo(() => {
     const out = [];
@@ -245,11 +189,11 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId }) 
     });
   }, [decisions, bidChanges]);
 
+  // O card é operacional: por padrão não mistura decisões antigas com o que o
+  // motor está fazendo agora. O histórico continua disponível sob demanda.
   const recent = useMemo(() => merged.filter((item) => {
     const timestamp = new Date(item.timestamp || 0).getTime();
-    return Number.isFinite(timestamp)
-      && timestamp >= Date.now() - CURRENT_WINDOW_MS
-      && isLiveOperationalItem(item);
+    return Number.isFinite(timestamp) && timestamp >= Date.now() - CURRENT_WINDOW_MS;
   }), [merged]);
   const visibleItems = showHistory ? merged : recent;
   const totalItems = visibleItems.length;
@@ -276,6 +220,7 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId }) 
     });
   };
 
+  // Quando a página muda, recolhe tudo para o novo conjunto de itens
   const handlePageChange = (next) => {
     setOpenSet(new Set());
     setPage(next);
@@ -287,100 +232,16 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId }) 
     setOpenSet(new Set());
   };
 
-  const exportHistoryCsv = () => {
-    if (!merged.length) return;
-    const csv = buildHistoryCsv(merged);
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    const date = new Date().toISOString().slice(0, 10);
-    link.href = url;
-    link.download = `livingfinds-historico-motor-${date}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-    setHistoryMessage(`${merged.length} registro(s) exportados para CSV.`);
-  };
-
-  const cleanupHistory = async () => {
-    if (cleaning) return;
-    const confirmed = window.confirm(
-      'Limpar o histórico do motor?\n\nSerão preservadas decisões abertas e execuções efetivas/confirmadas de produtos ativos. Registros cancelados, bloqueados, falhos, rejeitados e vínculos com produtos inativos ou não resolvidos serão removidos.\n\nSe quiser guardar uma cópia completa, use “Exportar CSV” antes.'
-    );
-    if (!confirmed) return;
-
-    setCleaning(true);
-    setHistoryMessage('Limpando histórico com a política canônica…');
-    let removed = 0;
-    let rounds = 0;
-    let lastRemoved = CLEANUP_BATCH_SIZE;
-
-    try {
-      while (rounds < MAX_CLEANUP_ROUNDS && lastRemoved >= CLEANUP_BATCH_SIZE) {
-        rounds += 1;
-        const response = await base44.functions.invoke('pruneMotorDecisionHistory', {
-          amazon_account_id: accountId || null,
-          dry_run: false,
-          max_delete: CLEANUP_BATCH_SIZE,
-          trigger_type: 'dashboard_manual_history_cleanup',
-        });
-        const data = response?.data || response || {};
-        if (data?.ok === false) throw new Error(data.error || 'Falha ao limpar o histórico.');
-        const totals = data?.totals || {};
-        lastRemoved = Number(totals.removed_non_effective || 0)
-          + Number(totals.removed_inactive_product || 0)
-          + Number(totals.removed_unresolved_product || 0);
-        removed += lastRemoved;
-        setHistoryMessage(`Limpeza em andamento: ${removed} registro(s) removido(s)…`);
-        if (lastRemoved < CLEANUP_BATCH_SIZE) break;
-      }
-
-      setHistoryMessage(`Limpeza concluída: ${removed} registro(s) descartáveis removido(s). Atualizando a tela…`);
-      setTimeout(() => window.location.reload(), 900);
-    } catch (error) {
-      setHistoryMessage(error?.message || 'Não foi possível limpar o histórico.');
-      setCleaning(false);
-    }
-  };
-
-  const HistoryActions = () => (
-    <div className="flex items-center gap-2 flex-wrap justify-end">
-      <button
-        type="button"
-        onClick={exportHistoryCsv}
-        disabled={!merged.length || cleaning}
-        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[var(--border-color)] bg-theme-card text-[11px] font-semibold text-theme-secondary hover:bg-theme-card-2 disabled:opacity-40"
-      >
-        <Download className="w-3.5 h-3.5" />
-        Exportar CSV
-      </button>
-      <button
-        type="button"
-        onClick={cleanupHistory}
-        disabled={!merged.length || cleaning}
-        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-red-200 bg-red-50 text-[11px] font-semibold text-red-700 hover:bg-red-100 disabled:opacity-40"
-      >
-        {cleaning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-        {cleaning ? 'Limpando…' : 'Limpar histórico'}
-      </button>
-    </div>
-  );
-
   if (totalItems === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-8 text-center">
         <Bot className="w-7 h-7 text-theme-muted mb-2" />
         <p className="text-sm text-theme-secondary font-medium">Motor em repouso nas últimas 24h</p>
-        <p className="text-xs text-theme-muted mt-1">Nenhuma decisão nova exige execução agora. Bloqueios locais continuam disponíveis no histórico para auditoria.</p>
+        <p className="text-xs text-theme-muted mt-1">Nenhuma decisão nova exige execução agora. Bloqueios antigos ficam no histórico.</p>
         {merged.length > 0 && (
-          <>
-            <button type="button" onClick={toggleHistory} className="mt-3 text-xs font-semibold text-blue-600 hover:text-blue-700">
-              Ver histórico ({merged.length})
-            </button>
-            <div className="mt-3"><HistoryActions /></div>
-            {historyMessage && <p className="text-[11px] text-theme-muted mt-2">{historyMessage}</p>}
-          </>
+          <button type="button" onClick={toggleHistory} className="mt-3 text-xs font-semibold text-blue-600 hover:text-blue-700">
+            Ver histórico ({merged.length})
+          </button>
         )}
       </div>
     );
@@ -388,21 +249,15 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId }) 
 
   return (
     <div className="space-y-4">
-      <div className="flex items-start justify-between gap-3 px-1 flex-wrap">
-        <div>
-          <p className="text-[11px] text-theme-muted">
-            {showHistory ? `Histórico completo: ${merged.length} registros.` : `Atividade operacional das últimas 24h: ${recent.length} registro(s).`}
-          </p>
-          {historyMessage && <p className="text-[10px] text-theme-muted mt-1">{historyMessage}</p>}
-        </div>
-        <div className="flex items-center gap-2 flex-wrap justify-end">
-          {merged.length > recent.length && (
-            <button type="button" onClick={toggleHistory} disabled={cleaning} className="text-[11px] font-semibold text-blue-600 hover:text-blue-700 whitespace-nowrap disabled:opacity-40">
-              {showHistory ? 'Voltar ao agora' : `Ver histórico (${merged.length})`}
-            </button>
-          )}
-          <HistoryActions />
-        </div>
+      <div className="flex items-center justify-between gap-3 px-1">
+        <p className="text-[11px] text-theme-muted">
+          {showHistory ? `Histórico completo: ${merged.length} registros.` : `Atividade operacional das últimas 24h: ${recent.length} registro(s).`}
+        </p>
+        {merged.length > recent.length && (
+          <button type="button" onClick={toggleHistory} className="text-[11px] font-semibold text-blue-600 hover:text-blue-700 whitespace-nowrap">
+            {showHistory ? 'Voltar ao agora' : `Ver histórico (${merged.length})`}
+          </button>
+        )}
       </div>
       {pageItems.map(([dateKey, items]) => (
         <div key={dateKey}>
@@ -425,7 +280,7 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId }) 
           <button
             type="button"
             onClick={() => handlePageChange(Math.max(1, safePage - 1))}
-            disabled={safePage === 1 || cleaning}
+            disabled={safePage === 1}
             className="px-3 py-1.5 text-xs rounded-lg border border-[var(--border-color)] bg-theme-card text-theme-secondary hover:bg-theme-card-2 disabled:opacity-40 transition-colors"
           >
             ← Anterior
@@ -434,7 +289,7 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId }) 
           <button
             type="button"
             onClick={() => handlePageChange(Math.min(totalPages, safePage + 1))}
-            disabled={safePage === totalPages || cleaning}
+            disabled={safePage === totalPages}
             className="px-3 py-1.5 text-xs rounded-lg border border-[var(--border-color)] bg-theme-card text-theme-secondary hover:bg-theme-card-2 disabled:opacity-40 transition-colors"
           >
             Próxima →

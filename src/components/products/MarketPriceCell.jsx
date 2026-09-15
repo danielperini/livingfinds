@@ -44,9 +44,8 @@ export default function MarketPriceCell({ product, accountId, onPriceUpdated }) 
   const priceError = product?.market_price_error;
 
   const isAuthError = (data, e) => {
-    const responseData = e?.response?.data;
-    const msg = (data?.error || data?.message || responseData?.error || responseData?.message || e?.message || '').toLowerCase();
-    const code = String(data?.http_status || data?.status_code || e?.response?.status || '');
+    const msg = (data?.error || data?.message || e?.message || '').toLowerCase();
+    const code = String(data?.http_status || data?.status_code || '');
     return code === '401' || msg.includes('401') || msg.includes('unauthorized') || msg.includes('auth_error') || msg.includes('invalid_client') || msg.includes('access denied');
   };
 
@@ -81,10 +80,7 @@ export default function MarketPriceCell({ product, accountId, onPriceUpdated }) 
       if (isAuthError(null, e)) {
         setError('auth_error');
       } else {
-        const responseData = e?.response?.data;
-        const statusCode = e?.response?.status;
-        const detail = responseData?.error || responseData?.message || e?.message || 'Falha na consulta';
-        setError(statusCode ? `HTTP ${statusCode}: ${detail}` : detail);
+        setError(e?.message || 'Falha na consulta');
       }
     } finally {
       setLoading(false);

@@ -452,6 +452,10 @@ export default function Products({ externalRefreshTrigger }) {
     if (!account) return;
     const active = isCampaignActiveFn(product);
     setActionLoading(product.id);
+    const optimisticStatus = active ? 'paused' : 'active';
+    setProducts(cur => cur.map(p =>
+      p.id === product.id ? { ...p, campaign_status: optimisticStatus, has_campaign: true } : p
+    ));
     const { ok, classified } = await amazonPropagate(
       product.id,
       active ? 'pause_campaign_user_action' : 'enable_campaign_user_action',
@@ -460,8 +464,6 @@ export default function Products({ externalRefreshTrigger }) {
           const payload = { amazon_account_id: product.amazon_account_id || account.id };
           payload.lock_product_paused = true;
           payload.pause_source = 'user_manual';
-          payload.pause_all_related = true;
-          payload.confirm_bulk_pause = true;
           if (campaignId) payload.campaign_id = campaignId;
           if (product.asin) payload.asin = product.asin;
           if (product.sku) payload.sku = product.sku;
@@ -484,6 +486,9 @@ export default function Products({ externalRefreshTrigger }) {
       }
     );
     if (!ok) {
+      setProducts(cur => cur.map(p =>
+        p.id === product.id ? { ...p, campaign_status: active ? 'active' : 'paused' } : p
+      ));
       if (classified?.code === 'auth') {
         setActionMsg({ type: 'error', text: 'Token expirado — reconecte em Configurações' });
         setTimeout(() => setActionMsg(null), 8000);
@@ -555,8 +560,6 @@ export default function Products({ externalRefreshTrigger }) {
         const pausePayload = { amazon_account_id: product.amazon_account_id || account.id };
         pausePayload.lock_product_paused = true;
         pausePayload.pause_source = 'user_manual';
-        pausePayload.pause_all_related = true;
-        pausePayload.confirm_bulk_pause = true;
         const cid = campaignIdOf(product);
         if (cid) pausePayload.campaign_id = cid;
         if (product.asin) pausePayload.asin = product.asin;
