@@ -7,6 +7,8 @@
  * CPC econômico seguro. Todas as chaves são ASIN + termo normalizado.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
+import { hasFreshAdsInventory } from '../../shared/stockAdsPolicy.ts';
+import { campaignCoverageEligible } from '../../shared/campaignCoverageEligibility.ts';
 import {
   aggregateSearchTerms,
   calculateSafeHarvestBid,
@@ -261,7 +263,8 @@ Deno.serve(async (request) => {
         // a mera origem MANUAL EXACT não transforma uma variação em duplicata.
         const evaluation = evaluateHarvestCandidate({
           aggregate,
-          inStock: Boolean(product && availableInventory(product) > 0),
+          inStock: campaignCoverageEligible(product)
+            && (body.require_fresh_inventory !== true || hasFreshAdsInventory(product)),
           economicsActionable: economicsAreActionable(econ, assessment),
           breakEvenAcos: numberValue(policy.break_even_acos, 0) || null,
           safeBid,

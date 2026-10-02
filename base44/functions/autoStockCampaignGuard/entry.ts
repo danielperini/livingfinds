@@ -1,3 +1,4 @@
+import { campaignStateConfirmed, isStockCampaignPause } from '../../shared/inventorySyncPolicy.ts';
 // autoStockCampaignGuard
 // 1. Sincroniza o estado REAL de cada campanha direto na Amazon API
 // 2. Pausa campanhas ativas de produtos sem estoque
@@ -10,7 +11,7 @@ import {
   manualPauseLockPatch,
   productOfferEligibility,
 } from '../../shared/productCampaignPauseGuard.ts';
-import { availableAdsStock, stockAdsDecision } from '../../shared/stockAdsPolicy.ts';
+import { availableAdsStock, stockAdsDecision, hasFreshAdsInventory } from '../../shared/stockAdsPolicy.ts';
 
 function adsBase(region) {
   const r = String(region || 'NA').toUpperCase();
@@ -53,7 +54,7 @@ async function fetchCampaignStates(token, profileId, region) {
         },
         body: JSON.stringify(body),
       });
-      if (!res.ok) { console.warn(`[guard] Amazon list ${stateFilter} HTTP ${res.status}`); break; }
+      if (!res.ok) throw new Error(`Amazon list ${stateFilter} HTTP ${res.status}`);
       const payload = await res.json().catch(() => ({}));
       for (const c of (payload.campaigns || [])) {
         stateMap.set(String(c.campaignId), stateFilter.toLowerCase());
@@ -82,7 +83,7 @@ async function sendCampaignStateChange(token, profileId, region, campaignId, tar
     body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
-  const success = res.ok || (data.campaigns?.[0]?.code === 'SUCCESS');
+  const success = campaignStateConfirmed(res.status, data, String(campaignId));
   return { ok: success, status: res.status, body: data };
 }
 
@@ -149,7 +150,7 @@ Deno.serve(async (req) => {
         const pauseReason = String(product.pause_reason || '');
         const amazonId = product.linked_campaign_id || product.campaign_id || null;
 
-        const hasCampaign = Boolean(amazonId || product.has_campaign || ['active', 'enabled', 'paused'].includes(campStatus));
+        const hasCampaign = Boolean(localCampaigns.some(c => campaignMatchesProduct(c, product)) || amazonId || product.has_campaign || ['active', 'enabled', 'paused'].includes(campStatus));
         if (!hasCampaign) continue;
 
         // REGRA SOBERANA: produto pausado manualmente permanece pausado.
@@ -160,7 +161,8 @@ Deno.serve(async (req) => {
           for (const lc of lockedCampaigns) {
             const aid = lc.amazon_campaign_id || lc.campaign_id;
             if (!aid || String(lc.state || '').toLowerCase() === 'archived') continue;
-            const realState = amazonStates.get(String(aid)) || String(lc.state || lc.status || '').toLowerCase();
+            const realState = amazonStates.get(String(aid));
+            if (!realState) continue;
             try {
               if (realState === 'enabled') {
                 const pauseResult = await sendCampaignStateChange(token, profileId, region, aid, 'PAUSED');
@@ -196,7 +198,8 @@ Deno.serve(async (req) => {
           for (const lc of linkedCampaigns) {
             const aid = lc.amazon_campaign_id || lc.campaign_id;
             if (!aid || String(lc.state || lc.status || '').toLowerCase() === 'archived') continue;
-            const realState = amazonStates.get(String(aid)) || String(lc.state || lc.status || '').toLowerCase();
+            const realState = amazonStates.get(String(aid));
+            if (!realState) continue;
             try {
               if (realState === 'enabled') {
                 const pauseResult = await sendCampaignStateChange(token, profileId, region, aid, 'PAUSED');
@@ -225,7 +228,8 @@ Deno.serve(async (req) => {
 
         const isOneUnit = fba === 1;
         const stockDecision = stockAdsDecision(product);
-        const isOutOfStock = invStatus === 'out_of_stock' || stockDecision === 'pause';
+        if (stockDecision === 'unknown') continue;
+        const isOutOfStock = stockDecision === 'pause';
         const isPausedByStock = pauseReason === 'out_of_stock_confirmed' || pauseReason.includes('stock');
 
         // Um SKU pode ter AUTO e MANUAL. A decisao de estoque deve considerar
@@ -233,9 +237,9 @@ Deno.serve(async (req) => {
         const linkedCampaigns = localCampaigns.filter(c => campaignMatchesProduct(c, product));
         const linkedStates = linkedCampaigns.map(c => {
           const id = c.amazon_campaign_id || c.campaign_id;
-          return String(amazonStates.get(String(id)) || c.state || c.status || '').toLowerCase();
+          return String(amazonStates.get(String(id)) || '').toLowerCase();
         });
-        const isReallyActive = linkedStates.includes('enabled') || (linkedStates.length === 0 && campStatus === 'enabled');
+        const isReallyActive = linkedStates.includes('enabled');
         const isReallyPaused = linkedStates.length > 0
           ? linkedStates.every(state => state === 'paused' || state === 'archived')
           : campStatus === 'paused';
@@ -250,8 +254,10 @@ Deno.serve(async (req) => {
             for (const lc of linkedCampaigns) {
               const aid = lc.amazon_campaign_id || lc.campaign_id;
               if (!aid) continue;
-              await sendCampaignStateChange(token, profileId, region, aid, 'PAUSED');
-              await db.entities.Campaign.update(lc.id, { state: 'paused', status: 'paused', amazon_status: 'paused', is_operational: false });
+              if (!aid || amazonStates.get(String(aid)) !== 'enabled') continue;
+              const change = await sendCampaignStateChange(token, profileId, region, aid, 'PAUSED');
+              if (!change.ok) throw new Error(`Amazon did not confirm campaign ${aid}`);
+              await db.entities.Campaign.update(lc.id, { state: 'paused', status: 'paused', amazon_status: 'paused', is_operational: false, last_pause_reason: 'out_of_stock_confirmed' });
             }
             const stockReason = isOneUnit ? 'low_stock_one_unit' : 'out_of_stock_confirmed';
             await db.entities.Product.update(product.id, {
@@ -268,14 +274,18 @@ Deno.serve(async (req) => {
         }
 
         // CASO B: tem estoque, pause_reason=stock, mas campanha pausada → reativar
-        if (offer.eligible && !isOutOfStock && fba > 0 && isPausedByStock && isReallyPaused) {
+        if (offer.eligible && !isOutOfStock && fba > 0 && hasFreshAdsInventory(product) && linkedCampaigns.some(c => isStockCampaignPause(c))) {
           try {
+            let resumed = 0;
             for (const lc of linkedCampaigns) {
               const aid = lc.amazon_campaign_id || lc.campaign_id;
-              if (!aid) continue;
-              await sendCampaignStateChange(token, profileId, region, aid, 'ENABLED');
-              await db.entities.Campaign.update(lc.id, { state: 'enabled', status: 'enabled', amazon_status: 'enabled', is_operational: true });
+              if (!isStockCampaignPause(lc) || !aid || amazonStates.get(String(aid)) !== 'paused') continue;
+              const change = await sendCampaignStateChange(token, profileId, region, aid, 'ENABLED');
+              if (!change.ok) throw new Error(`Amazon did not confirm campaign ${aid}`);
+              await db.entities.Campaign.update(lc.id, { state: 'enabled', status: 'enabled', amazon_status: 'enabled', is_operational: true, last_pause_reason: null });
+              resumed++;
             }
+            if (!resumed) continue;
             await db.entities.Product.update(product.id, { campaign_status: 'active', pause_reason: null });
             accountLog.activated++;
             console.log(`[guard] ACTIVATED asin=${product.asin} fba=${fba}`);
@@ -307,7 +317,7 @@ Deno.serve(async (req) => {
       unlocked: acc.unlocked + r.unlocked,
     }), { paused: 0, paused_one_unit: 0, activated: 0, synced: 0, unlocked: 0 });
 
-    return Response.json({ ok: true, ...totals, accounts: results });
+    return Response.json({ ok: results.every(r => r.errors.length === 0), ...totals, accounts: results });
   } catch (error) {
     console.error('[guard] erro crítico:', error?.message);
     return Response.json({ error: error.message }, { status: 500 });

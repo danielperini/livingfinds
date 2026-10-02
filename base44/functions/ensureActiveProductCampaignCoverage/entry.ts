@@ -1,3 +1,4 @@
+import { hasFreshAdsInventory } from '../../shared/stockAdsPolicy.ts';
 /**
  * ensureActiveProductCampaignCoverage
  *
@@ -74,7 +75,7 @@ Deno.serve(async (req) => {
       }
 
       const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, '-updated_date', 2000);
-      const eligible = products.filter(campaignCoverageEligible);
+      const eligible = products.filter(p => hasFreshAdsInventory(p) && campaignCoverageEligible(p));
       const limitedEligible = eligible.slice(0, maxProducts);
       const seenAsins = new Set<string>();
       const rows: any[] = [];

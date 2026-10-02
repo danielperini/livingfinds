@@ -55,8 +55,15 @@ Deno.serve(async (request) => {
       dry_run: dryRun,
     };
 
+    const inventoryKickoff = await invoke(base44, 'checkInventoryChangesAndKickoff', common);
     const reportRequest = dailyClose && !body.skip_sync
       ? await invoke(base44, 'ensureDailyReportsCurrent', common)
+      : { ok: true, skipped: true };
+    const dailyWinners = dailyClose && inventoryKickoff.ok === true && reportRequest.ok === true
+      ? await invoke(base44, 'runImmediateSameSkuSearchTermHarvest', {
+          ...common, lookback_days: 30, max_promotions: 2, require_fresh_inventory: true,
+          trigger_type: 'canonical_daily_same_sku_winners',
+        })
       : { ok: true, skipped: true };
     const scopeBefore = await invoke(base44, 'reconcileManualBidCycleScope', { ...common, skip_sync: body.skip_sync === true });
     const snapshots = await invoke(base44, 'buildCanonicalMarketplaceSnapshots', {
@@ -204,6 +211,7 @@ Deno.serve(async (request) => {
     const scopeAfter = await invoke(base44, 'reconcileManualBidCycleScope', { ...common, skip_sync: true });
 
     const stages = {
+      inventoryKickoff, dailyWinners,
       reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit,
       manualStructureAudit, economicCurveAdsGuard, deterministic, decisionV3Shadow,
       salesRecovery, asinDiversification, campaignLifecycle, economicBalancer,

@@ -1,56 +1,16 @@
-/**
- * checkInventoryChangesAndKickoff
- *
- * Executado DIARIAMENTE nas janelas Amazon (00h e 13h BRT).
- * Detecta três situações e age sobre cada uma:
- *
- * 1. PRODUTO NOVO — asin criado há ≤ 7 dias, com estoque, sem campanha
- *    → Agenda kick-off na ProductKickoffQueue
- *
- * 2. REABASTECIMENTO — produto que estava out_of_stock e voltou com qty > 0
- *    → Reativa campanhas pausadas por falta de estoque + agenda kick-off se não tiver campanha ativa
- *
- * 3. MUDANÇA SIGNIFICATIVA DE ESTOQUE — variação ≥ 20% em relação ao registro anterior
- *    → Atualiza Product.inventory_status e notifica via Alert
- *
- * SEGURO: nunca cria campanha diretamente. Apenas enfileira na ProductKickoffQueue
- * para ser processada por processProductKickoffQueueV2 na janela correta.
- */
+import { availableAdsStock, hasFreshAdsInventory } from '../../shared/stockAdsPolicy.ts';
+import { campaignCoverageEligible } from '../../shared/campaignCoverageEligibility.ts';
+/** Synchronize sellable stock, enforce stock pauses and process due kickoff jobs immediately. */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const RESTOCK_MIN_QTY = 1;           // unidades mínimas para considerar "voltou"
-const NEW_PRODUCT_DAYS = 7;          // produto novo se criado nos últimos N dias
 const STOCK_CHANGE_THRESHOLD = 0.20; // variação ≥ 20% = mudança significativa
-const KICKOFF_WINDOW_HOUR_BRT_1 = 1; // 01h BRT = dentro da janela 00-04
-const KICKOFF_WINDOW_HOUR_BRT_2 = 13; // 13h BRT = janela 13-14
-
 function nowIso() { return new Date().toISOString(); }
 
 function getBrtHour(): number {
   // BRT = UTC-3
   const brt = new Date(Date.now() - 3 * 3600000);
   return brt.getUTCHours();
-}
-
-function isInAmazonKickoffWindow(): boolean {
-  const h = getBrtHour();
-  return (h >= 0 && h < 4) || (h >= 13 && h < 14);
-}
-
-function nextKickoffWindow(): string {
-  // Retorna ISO do próximo horário de janela (01h BRT = 04h UTC)
-  const now = new Date();
-  const h = getBrtHour();
-  const candidate = new Date(now);
-  if (h < 1) {
-    candidate.setUTCHours(4, 0, 0, 0); // 01h BRT = 04h UTC hoje
-  } else if (h < 13) {
-    candidate.setUTCHours(16, 0, 0, 0); // 13h BRT = 16h UTC hoje
-  } else {
-    candidate.setDate(candidate.getDate() + 1);
-    candidate.setUTCHours(4, 0, 0, 0); // amanhã 01h BRT
-  }
-  return candidate.toISOString();
 }
 
 Deno.serve(async (req) => {
@@ -65,27 +25,36 @@ Deno.serve(async (req) => {
     } catch { /* automação */ }
 
     const body = await req.json().catch(() => ({}));
+    if (!userId && body._service_role !== true) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
     const dryRun = body.dry_run === true;
     const forceAccountId = body.amazon_account_id || null;
 
-    // ── Selecionar conta ──────────────────────────────────────────────────
-    let account: any = null;
-    if (forceAccountId) {
-      const rows = await base44.asServiceRole.entities.AmazonAccount.filter({ id: forceAccountId }, null, 1);
-      account = rows[0];
+    if (!forceAccountId) {
+      const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' });
+      const results = [];
+      for (const account of accounts) {
+        const result = await base44.asServiceRole.functions.invoke('checkInventoryChangesAndKickoff', {
+          ...body, amazon_account_id: account.id, _service_role: true,
+        });
+        results.push({ account_id: account.id, ...result.data });
+      }
+      return Response.json({ ok: results.every(r => r.ok === true), accounts: results });
     }
-    if (!account) {
-      const rows = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-created_date', 1);
-      account = rows[0];
-    }
-    if (!account) return Response.json({ ok: false, error: 'Conta Amazon não encontrada.' });
+    const rows = await base44.asServiceRole.entities.AmazonAccount.filter({ id: forceAccountId }, null, 1);
+    const account = rows[0];
+    if (!account) return Response.json({ ok: false, error: 'Conta Amazon não encontrada.' }, { status: 404 });
     const aid = account.id;
 
     // ── 1. Sincronizar catálogo (inventário atualizado antes de qualquer decisão) ──
     if (!dryRun) {
-      await base44.asServiceRole.functions.invoke('syncProductCatalogV2', {
+      const sync = await base44.asServiceRole.functions.invoke('syncProductCatalogV2', {
         amazon_account_id: aid, trigger_type: 'inventory_check', _service_role: true,
-      }).catch(e => console.warn('[checkInventory] syncProductCatalogV2 falhou:', e.message));
+      });
+      if (sync?.data?.ok !== true) return Response.json({ ok: false, error: 'Inventário não confirmado; kickoff bloqueado.' }, { status: 409 });
+      const guard = await base44.asServiceRole.functions.invoke('autoStockCampaignGuard', {
+        amazon_account_id: aid, _service_role: true,
+      });
+      if (guard?.data?.ok !== true) return Response.json({ ok: false, error: 'Pausas de estoque não confirmadas; kickoff bloqueado.' }, { status: 409 });
     }
 
     // ── 2. Carregar todos os produtos da conta ────────────────────────────
@@ -122,9 +91,8 @@ Deno.serve(async (req) => {
         .map((q: any) => q.asin)
     );
 
-    const sevenDaysAgo = new Date(Date.now() - NEW_PRODUCT_DAYS * 86400000).toISOString();
-    const inWindow = isInAmazonKickoffWindow();
-    const scheduledFor = nextKickoffWindow();
+    const inWindow = true; // Fresh inventory launches without a time-of-day wait.
+    const scheduledFor = nowIso();
 
     const stats = {
       total_scanned: allProducts.length,
@@ -143,12 +111,12 @@ Deno.serve(async (req) => {
       if (!asin || !product.sku) { stats.skipped++; continue; }
       if (product.status === 'archived') { stats.skipped++; continue; }
 
-      const qty = Number(product.fba_inventory || 0);
-      const prevQty = Number(product.previous_fba_inventory || product.fba_inventory || 0);
+      if (!hasFreshAdsInventory(product) || !campaignCoverageEligible(product)) { stats.skipped++; continue; }
+      const qty = availableAdsStock(product);
+      const prevQty = Number(product.previous_available_quantity ?? qty);
       const prevStatus = product.previous_inventory_status || product.inventory_status || 'unknown';
       const currentStatus = qty > 0 ? (qty > 5 ? 'in_stock' : 'low_stock') : 'out_of_stock';
 
-      const isNew = (product.created_date || product.created_at || '') > sevenDaysAgo;
       const justRestocked = prevStatus === 'out_of_stock' && qty >= RESTOCK_MIN_QTY;
       const stockChangedSignificantly = prevQty > 0 && Math.abs(qty - prevQty) / prevQty >= STOCK_CHANGE_THRESHOLD;
 
@@ -157,7 +125,7 @@ Deno.serve(async (req) => {
       const alreadyQueued = inQueueAsins.has(asin);
 
       // ── CASO 1: Produto novo com estoque, sem campanha ─────────────────
-      if (isNew && qty > 0 && !hasActiveCampaign && !alreadyQueued) {
+      if (qty > 0 && !hasActiveCampaign && !hasPausedCampaign && !alreadyQueued) {
         stats.new_products_found++;
         if (!dryRun) {
           await base44.asServiceRole.entities.ProductKickoffQueue.create({
@@ -172,7 +140,8 @@ Deno.serve(async (req) => {
             scheduled_at: inWindow ? nowIso() : scheduledFor,
             attempt_count: 0,
             max_attempts: 5,
-          }).catch(e => stats.errors.push(`Kickoff novo ${asin}: ${e.message}`));
+          });
+          inQueueAsins.add(asin);
           stats.kickoffs_queued++;
         }
         continue;
@@ -182,49 +151,7 @@ Deno.serve(async (req) => {
       if (justRestocked) {
         stats.restocked_found++;
 
-        // 2a. Reativar campanhas que estavam pausadas por falta de estoque
-        if (hasPausedCampaign && !dryRun) {
-          const pausedCamps = pausedCampaignsByAsin.get(asin) || [];
-          for (const camp of pausedCamps) {
-            const pauseReason = (camp.pause_reason || camp.paused_reason || '').toLowerCase();
-            const wasStockPause = pauseReason.includes('estoque') || pauseReason.includes('stock') || pauseReason.includes('inventory') || camp.auto_paused_by_stock === true;
-            if (wasStockPause || pausedCamps.length > 0) {
-              // Enfileirar reativação via AmazonActionQueue
-              await base44.asServiceRole.entities.AmazonActionQueue.create({
-                amazon_account_id: aid,
-                action_type: 'enable_campaign',
-                entity_id: camp.campaign_id || camp.amazon_campaign_id || camp.id,
-                payload: JSON.stringify({
-                  campaign_id: camp.campaign_id || camp.amazon_campaign_id,
-                  asin,
-                  reason: `Reabastecimento detectado: ${qty} unidades. Campanha reativada automaticamente.`,
-                  source: 'checkInventoryChangesAndKickoff',
-                }),
-                status: 'pending',
-                created_at: nowIso(),
-              }).catch(e => stats.errors.push(`Reativar camp ${camp.id}: ${e.message}`));
-              stats.campaigns_reactivated++;
-            }
-          }
-        }
-
-        // 2b. Se não tem nenhuma campanha, agendar kick-off
-        if (!hasActiveCampaign && !hasPausedCampaign && !alreadyQueued && !dryRun) {
-          await base44.asServiceRole.entities.ProductKickoffQueue.create({
-            amazon_account_id: aid,
-            asin,
-            sku: product.sku,
-            product_name: (product.product_name || product.display_name || asin).slice(0, 200),
-            mode: 'auto_plus_four',
-            status: 'scheduled',
-            queue_hour: inWindow ? getBrtHour() : parseInt(scheduledFor.slice(11, 13)),
-            queue_window: inWindow ? 'now' : 'next',
-            scheduled_at: inWindow ? nowIso() : scheduledFor,
-            attempt_count: 0,
-            max_attempts: 5,
-          }).catch(e => stats.errors.push(`Kickoff restock ${asin}: ${e.message}`));
-          stats.kickoffs_queued++;
-        }
+        // autoStockCampaignGuard owns stock-only reactivation, confirmed by Amazon.
 
         // 2c. Criar alerta de reabastecimento
         if (!dryRun) {
@@ -295,7 +222,7 @@ Deno.serve(async (req) => {
     for (const [asin, camps] of activeCampaignsByAsin.entries()) {
       const product = allProducts.find((p: any) => p.asin === asin);
       if (!product) continue;
-      const qty = Number(product.fba_inventory || 0);
+      const qty = availableAdsStock(product);
       if (qty === 0 && camps.length > 0) {
         oosCampaignsActive++;
         if (!dryRun) {
@@ -315,8 +242,14 @@ Deno.serve(async (req) => {
       }
     }
 
+    const kickoffExecution = dryRun ? { ok: true, skipped: true } :
+      (await base44.asServiceRole.functions.invoke('processProductKickoffQueueV2', {
+        amazon_account_id: aid, _service_role: true,
+      }))?.data;
+
     return Response.json({
-      ok: true,
+      ok: kickoffExecution?.ok === true && !(kickoffExecution?.results || []).some((r: any) => r.ok === false),
+      kickoff_execution: kickoffExecution,
       dry_run: dryRun,
       in_amazon_window: inWindow,
       scheduled_for: inWindow ? 'now' : scheduledFor,

@@ -2,6 +2,7 @@
   "name": "Campaign",
   "type": "object",
   "properties": {
+    "last_pause_reason": { "type": "string" },
     "amazon_account_id": {
       "type": "string"
     },

@@ -2,6 +2,7 @@
   "name": "Product",
   "type": "object",
   "properties": {
+    "previous_available_quantity": { "type": "number", "description": "Quantidade vendável na sincronização anterior, excluindo reservado e trânsito." },
     "amazon_account_id": {
       "type": "string"
     },

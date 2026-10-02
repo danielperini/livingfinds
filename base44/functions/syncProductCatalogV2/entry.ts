@@ -1,3 +1,4 @@
+import { inventoryAvailable } from '../../shared/inventorySyncPolicy.ts';
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { normalizeSku } from '../../shared/repricingPolicy.ts';
 
@@ -95,12 +96,19 @@ Deno.serve(async (req) => {
       const sku = item.sellerSku || null;
       const skuKey = normSku(sku);
       const details = item.inventoryDetails || {};
-      const available = num(details.fulfillableQuantity);
+      const available = inventoryAvailable(item);
       const total = num(item.totalQuantity);
       const skuMatches = skuKey ? bySku.get(skuKey) || [] : [];
       const asinMatches = byAsin.get(asin) || [];
-      if (skuMatches.length > 1) {
+      if (skuMatches.length > 1 || available === null) {
         mappingConflicts++;
+        for (const match of skuMatches.length ? skuMatches : asinMatches) {
+          seenProductIds.add(match.id);
+          await base44.asServiceRole.entities.Product.update(match.id, {
+            catalog_sync_status: skuMatches.length > 1 ? 'mapping_conflict' : 'invalid_inventory',
+            catalog_sync_error: 'Inventário sem quantidade vendável válida ou SKU ambíguo; saldo preservado.',
+          });
+        }
         continue;
       }
       // SKU do seller é a identidade canônica. ASIN só é fallback quando a
@@ -112,6 +120,7 @@ Deno.serve(async (req) => {
         asin, sku: sku || existing?.sku || null,
         previous_inventory_status: existing?.inventory_status || null,
         previous_fba_inventory: num(existing?.fba_inventory),
+        previous_available_quantity: existing?.available_quantity ?? null,
         fba_inventory: total,
         available_quantity: available,
         total_quantity: total,
@@ -156,11 +165,7 @@ Deno.serve(async (req) => {
       await base44.asServiceRole.entities.Product.update(product.id, {
         previous_inventory_status: product.inventory_status || null,
         previous_fba_inventory: num(product.fba_inventory),
-        fba_inventory: 0,
-        available_quantity: 0,
-        total_quantity: 0,
-        inventory_status: 'out_of_stock',
-        status: 'inactive',
+        // Absence is not an explicit sellable quantity of zero. Preserve balance.
         catalog_sync_status: 'not_found',
         catalog_sync_error: 'SKU ausente na resposta completa da FBA Inventory API.',
         synced_at: now,

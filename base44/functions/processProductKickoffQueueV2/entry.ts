@@ -1,3 +1,4 @@
+import { availableAdsStock, stockAdsDecision, hasFreshAdsInventory } from '../../shared/stockAdsPolicy.ts';
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -28,11 +29,11 @@ function errorText(data: any) {
 }
 
 function stockQuantity(product: any) {
-  return Number(product?.fba_inventory ?? product?.available_quantity ?? product?.fulfillable_quantity ?? 0);
+  return availableAdsStock(product);
 }
 
 function isOutOfStock(product: any) {
-  return !product || product?.inventory_status === 'out_of_stock' || stockQuantity(product) <= 0;
+  return !hasFreshAdsInventory(product) || stockAdsDecision(product) !== 'activate';
 }
 
 function classify(data: any) {
