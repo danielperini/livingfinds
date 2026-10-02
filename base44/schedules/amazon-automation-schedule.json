@@ -2,6 +2,13 @@
   "timezone": "America/Sao_Paulo",
   "jobs": [
     {
+      "name": "Sellable inventory kickoff and stock pauses - every 15 minutes",
+      "function": "checkInventoryChangesAndKickoff",
+      "cron": "3,18,33,48 * * * *",
+      "run_on_startup": true,
+      "payload": { "_service_role": true, "dry_run": false, "trigger_type": "scheduler_immediate_stock_kickoff" }
+    },
+    {
       "name": "Amazon Ads report polling - every 10 minutes",
       "function": "pollAmazonAdsReportJobs",
       "cron": "*/10 * * * *",
