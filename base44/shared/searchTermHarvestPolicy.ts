@@ -255,6 +255,7 @@ export function aggregateSearchTerms(rows: any[]): HarvestAggregate[] {
       haloOrders: numberValue(row.halo_orders),
       haloSales: numberValue(row.halo_sales),
       verified: row.same_sku_attribution_verified === true,
+      source: String(row.attribution_source || 'persisted_same_sku_attribution'),
     } : resolveSameSkuAttribution(row);
 
     current.impressions += numberValue(row.impressions);
