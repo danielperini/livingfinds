@@ -244,7 +244,7 @@ Deno.serve(async (req) => {
         // Respeitar ads_protected: só pausar se realmente sem estoque (fba=0)
         const linkedProtected = await db.entities.Campaign.filter({ amazon_account_id: account.id, campaign_id: amazonId }, null, 1)
           .then((r: any[]) => r[0]?.ads_protected === true).catch(() => false);
-        if (linkedProtected && fba > 1) continue;
+        if (linkedProtected && fba > 0) continue;
         if (isOutOfStock && isReallyActive) {
           try {
             for (const lc of linkedCampaigns) {
@@ -268,7 +268,7 @@ Deno.serve(async (req) => {
         }
 
         // CASO B: tem estoque, pause_reason=stock, mas campanha pausada → reativar
-        if (offer.eligible && !isOutOfStock && fba > 1 && isPausedByStock && isReallyPaused) {
+        if (offer.eligible && !isOutOfStock && fba > 0 && isPausedByStock && isReallyPaused) {
           try {
             for (const lc of linkedCampaigns) {
               const aid = lc.amazon_campaign_id || lc.campaign_id;
@@ -285,7 +285,7 @@ Deno.serve(async (req) => {
         }
 
         // CASO C: tem estoque, pause_reason=stock, mas campanha já está ativa na Amazon → desbloquear registro local
-        if (offer.eligible && !isOutOfStock && fba > 1 && isPausedByStock && isReallyActive) {
+        if (offer.eligible && !isOutOfStock && fba > 0 && isPausedByStock && isReallyActive) {
           try {
             await db.entities.Product.update(product.id, { campaign_status: 'active', pause_reason: null });
             accountLog.unlocked++;

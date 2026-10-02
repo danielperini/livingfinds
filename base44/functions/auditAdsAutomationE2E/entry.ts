@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
+import { campaignCoverageEligible } from '../../shared/campaignCoverageEligibility.ts';
 
 const MINUTE = 60_000;
 const isEnabled = (row: any) => ['enabled', 'active'].includes(String(row?.state || row?.status || '').toLowerCase());
@@ -37,12 +38,8 @@ Deno.serve(async (request) => {
     const autos = active.filter((c: any) => String(c.amazon_targeting_type || c.targeting_type || '').toUpperCase() === 'AUTO');
     const manuals = active.filter((c: any) => String(c.amazon_targeting_type || c.targeting_type || '').toUpperCase() === 'MANUAL');
     const activeKeywords = keywords.filter(isEnabled);
-    const eligibleAsins = [...new Set(products.filter((product: any) =>
-      product.status === 'active' &&
-      ['in_stock', 'low_stock'].includes(product.inventory_status) &&
-      Number(product.available_quantity || product.fba_inventory || 0) > 1 &&
-      product.asin
-    ).map((product: any) => product.asin))];
+    const eligibleAsins = [...new Set(products.filter(campaignCoverageEligible)
+      .map((product: any) => String(product.asin).trim().toUpperCase()))];
     const autoAsins = new Set(autos.map((campaign: any) => campaign.asin).filter(Boolean));
     const missingAutoAsins = eligibleAsins.filter((asin: string) => !autoAsins.has(asin));
     const recentDecisions = decisions.filter((d: any) => ageMinutes(d.evaluated_at || d.created_at) <= 45);

@@ -92,7 +92,7 @@ Deno.serve(async (req) => {
       const aid = account.id;
       const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, '-updated_date', 2000);
       const campaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, '-updated_date', 5000);
-      const eligible = products.filter((p: any) => availableAdsStock(p) > 1 && stockAdsDecision(p) === 'activate'
+      const eligible = products.filter((p: any) => availableAdsStock(p) > 0 && stockAdsDecision(p) === 'activate'
         && p.listing_suppressed !== true && String(p.sku || '').trim() && /^B0[A-Z0-9]{8}$/.test(String(p.asin || '').trim().toUpperCase()));
       const seen = new Set<string>();
 

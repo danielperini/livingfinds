@@ -35,7 +35,7 @@ Deno.serve(async (req) => {
 
     for (const account of connected) {
       const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: account.id }, '-updated_date', 2000);
-      const eligible = products.filter((p: any) => availableAdsStock(p) > 1 && stockAdsDecision(p) === 'activate'
+      const eligible = products.filter((p: any) => availableAdsStock(p) > 0 && stockAdsDecision(p) === 'activate'
         && p.listing_suppressed !== true && String(p.sku || '').trim() && /^B0[A-Z0-9]{8}$/.test(String(p.asin || '').trim().toUpperCase()));
       let remote = await listEnabled(base44, account.id);
       // A listagem da Amazon pode atrasar alguns segundos depois de PUT/POST.

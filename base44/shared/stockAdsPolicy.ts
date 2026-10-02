@@ -1,4 +1,4 @@
-export const MIN_ADVERTISING_STOCK = 2;
+export const MIN_ADVERTISING_STOCK = 1;
 
 export function availableAdsStock(product: any): number {
   const raw = product?.available_quantity ?? product?.fba_inventory;
