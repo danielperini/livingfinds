@@ -1,68 +1,19 @@
-name: Proactive campaign growth cycle
-
+name: Read-only ads delivery audit
 on:
-  schedule:
-    # 07:15 and 15:15 America/Sao_Paulo (UTC-3).  GitHub Actions cron is UTC.
-    - cron: '15 10,18 * * *'
   workflow_dispatch:
-
-concurrency:
-  group: proactive-campaign-growth-cycle
-  cancel-in-progress: false
-
 jobs:
-  grow:
+  audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - name: Prepare secure VPS connection
+      - name: Prepare SSH
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-
-      - name: Run the canonical growth cycle and confirm Amazon
+      - name: Read production state and simulate winner discovery
         env:
           TARGET: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
           VPS_PATH: ${{ secrets.VPS_PATH }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 "$TARGET" "cd '$VPS_PATH' && docker compose -f server/docker-compose.yml exec -T app deno eval '
-            const token = Deno.env.get(\"API_TOKEN\") || Deno.env.get(\"ADMIN_PASSWORD\") || \"\";
-            const call = async (name, payload) => {
-              const response = await fetch(\"http://127.0.0.1:8000/functions/\" + name, {
-                method: \"POST\",
-                headers: { \"content-type\": \"application/json\", \"x-api-token\": token },
-                body: JSON.stringify(payload),
-              });
-              const data = await response.json().catch(() => ({}));
-              if (!response.ok || data.ok === false) throw new Error(name + \": \" + (data.error || response.status));
-              return data;
-            };
-            const common = { _service_role: true, _canonical_orchestrator: \"runUnifiedDecisionEngine\", dry_run: false };
-            const engine = await call(\"runUnifiedDecisionEngine\", {
-              ...common,
-              force_campaign_lifecycle: true,
-              serving_campaign_growth_target_pct: 40,
-              max_new_exact_per_run: 10,
-              max_auto_budget_expansions: 5,
-              trigger_type: \"scheduled_twice_daily_proactive_growth\",
-            });
-            const execution = await call(\"executeApprovedDecisionQueue\", {
-              _service_role: true, max_decisions: 50,
-              trigger_type: \"scheduled_twice_daily_proactive_growth\",
-            });
-            await new Promise(resolve => setTimeout(resolve, 5000));
-            const confirmation = await call(\"confirmExecutedDecisions\", {
-              _service_role: true, trigger_type: \"scheduled_twice_daily_proactive_growth\",
-            });
-            console.log(\"PROACTIVE_GROWTH=\" + JSON.stringify({
-              engine: engine.engine_version || engine.engine,
-              lifecycle_due: engine.campaign_lifecycle?.due,
-              growth_goal: engine.serving_campaign_growth_goal,
-              promotions: engine.stages?.campaignLifecycle?.results?.[0]?.stages?.harvesting?.promoted ?? null,
-              executed: execution.executed ?? 0,
-              remaining: execution.remaining ?? 0,
-              confirmed: confirmation.confirmed ?? 0,
-              divergences: confirmation.divergences ?? 0,
-              note: \"No eligible economic opportunity is a valid outcome; the cycle must not manufacture bids or campaigns.\",
-            }));
-          ' </dev/null"
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 "$TARGET" "cd '$VPS_PATH' && docker compose -f server/docker-compose.yml exec -T app deno eval \"\$(printf %s 'Ly8gUmVhZC1vbmx5IHByb2R1Y3Rpb24gZGlhZ25vc2lzLiBOZXZlciB1cGRhdGVzIGJpZHMsIGNhbXBhaWducyBvciBwcm9kdWN0IHJlY29yZHMuCmltcG9ydCB7IHNxbCwgcXVlcnkgfSBmcm9tICJmaWxlOi8vL2FwcC9zZXJ2ZXIvc3JjL2RiLnRzIjsKY29uc3QgYXNpbnMgPSBbIkIwSEZCNzhETlAiLCJCMEhCTThWMkRQIiwiQjBESjNSR0hLNiIsIkIwR1I2R1hTMUIiLCJCMEdOVzFRNlYzIiwiQjBHSFA2ODEyMyIsIkIwR0hQOTU4TVYiLCJCMEdIUDlQUFdOIiwiQjBHRlE1WVQzSCIsIkIwR0ZRN1NZNVciLCJCMEZONFJDWFkyIiwiQjBGSFgxSFBNVCIsIkIwRjQ1SkcyN0wiXTsKY29uc3QgcGljayA9IChyb3csIGZpZWxkcykgPT4gT2JqZWN0LmZyb21FbnRyaWVzKGZpZWxkcy5tYXAoayA9PiBbayxyb3dba10gPz8gbnVsbF0pKTsKY29uc3QgbG9hZCA9IGFzeW5jIHRhYmxlID0+IChhd2FpdCBxdWVyeShgU0VMRUNUIGlkLCBjcmVhdGVkX2RhdGUsIHVwZGF0ZWRfZGF0ZSwgZGF0YSBGUk9NICR7dGFibGV9IE9SREVSIEJZIHVwZGF0ZWRfZGF0ZSBERVNDIExJTUlUIDEyMDAwYCkpLm1hcChyID0+ICh7Li4uci5kYXRhLGlkOnIuaWQsY3JlYXRlZF9kYXRlOnIuY3JlYXRlZF9kYXRlLHVwZGF0ZWRfZGF0ZTpyLnVwZGF0ZWRfZGF0ZX0pKTsKdHJ5IHsKICBjb25zdCBwcm9kdWN0cyA9IGF3YWl0IGxvYWQoInByb2R1Y3QiKSwgY2FtcGFpZ25zID0gYXdhaXQgbG9hZCgiY2FtcGFpZ24iKSwga2V5d29yZHMgPSBhd2FpdCBsb2FkKCJrZXl3b3JkIik7CiAgY29uc3QgZWNvbm9taWNzID0gYXdhaXQgbG9hZCgicHJvZHVjdF9lY29ub21pY3MiKSwgbG9ncyA9IGF3YWl0IGxvYWQoInN5bmNfZXhlY3V0aW9uX2xvZyIpOwogIGZvciAoY29uc3QgYXNpbiBvZiBhc2lucykgewogICAgY29uc3QgcHM9cHJvZHVjdHMuZmlsdGVyKHA9PnAuYXNpbj09PWFzaW4pLCBjcz1jYW1wYWlnbnMuZmlsdGVyKGM9PmMuYXNpbj09PWFzaW4pOwogICAgY29uc3QgaWRzPW5ldyBTZXQoY3MuZmxhdE1hcChjPT5bYy5pZCxjLmNhbXBhaWduX2lkLGMuYW1hem9uX2NhbXBhaWduX2lkXSkuZmlsdGVyKEJvb2xlYW4pKTsKICAgIGNvbnN0IGtzPWtleXdvcmRzLmZpbHRlcihrPT5pZHMuaGFzKGsuY2FtcGFpZ25faWQpKTsKICAgIGNvbnN0IGNvdW50cz1yb3dzPT5yb3dzLnJlZHVjZSgob3V0LHIpPT57Y29uc3Qgcz1TdHJpbmcoci5zdGF0ZXx8ci5zdGF0dXN8fCJ1bmtub3duIik7b3V0W3NdPShvdXRbc118fDApKzE7cmV0dXJuIG91dDt9LHt9KTsKICAgIGNvbnN0IGFjdGl2ZT1rcy5maWx0ZXIoaz0+WyJlbmFibGVkIiwiYWN0aXZlIl0uaW5jbHVkZXMoU3RyaW5nKGsuc3RhdGV8fGsuc3RhdHVzKS50b0xvd2VyQ2FzZSgpKSk7CiAgICBjb25zdCBiaWRzPWFjdGl2ZS5tYXAoaz0+TnVtYmVyKGsuYmlkKSkuZmlsdGVyKE51bWJlci5pc0Zpbml0ZSk7CiAgICBjb25zb2xlLmxvZygiUFJPRFVDVF9BVURJVD0iK0pTT04uc3RyaW5naWZ5KHthc2luLHByb2R1Y3RzOnBzLm1hcChwPT5waWNrKHAsWyJza3UiLCJhdmFpbGFibGVfcXVhbnRpdHkiLCJjYXRhbG9nX3N5bmNfc3RhdHVzIiwibGFzdF9jYXRhbG9nX3N5bmNfYXQiLCJjb3N0X2NvbmZpcm1lZCIsImFkc19zY29wZV9zdGF0dXMiLCJhZHNfZWxpZ2liaWxpdHlfc3RhdHVzIiwiY2FtcGFpZ25fcGF1c2VfbG9jayIsInBhdXNlX3JlYXNvbiJdKSksY2FtcGFpZ25zOmNvdW50cyhjcykscmVjZW50X2NhbXBhaWduczpjcy5maWx0ZXIoYz0+RGF0ZS5wYXJzZShjLmNyZWF0ZWRfZGF0ZSk+PURhdGUubm93KCktNCo4NjQwMDAwMCkubWFwKGM9PnBpY2soYyxbImNhbXBhaWduX2lkIiwic3RhdGUiLCJjcmVhdGVkX2RhdGUiXSkpLGtleXdvcmRzOmNvdW50cyhrcyksYWN0aXZlX2JpZF9yYW5nZTpiaWRzLmxlbmd0aD9bTWF0aC5taW4oLi4uYmlkcyksTWF0aC5tYXgoLi4uYmlkcyldOm51bGwsZWNvbm9taWNzOmVjb25vbWljcy5maWx0ZXIoZT0+ZS5hc2luPT09YXNpbikuc2xpY2UoMCwxKS5tYXAoZT0+cGljayhlLFsic2FmZV9tYXhfY3BjIiwiYnJlYWtfZXZlbl9hY29zIiwicHJvZml0X2FmdGVyX2FkcyIsImNvbnRyaWJ1dGlvbl9tYXJnaW5fYW1vdW50IiwidXBkYXRlZF9kYXRlIl0pKX0pKTsKICB9CiAgY29uc3QgcmVjZW50PWxvZ3MuZmlsdGVyKGw9PkRhdGUucGFyc2UobC51cGRhdGVkX2RhdGUpPj1EYXRlLm5vdygpLTIqODY0MDAwMDApOwogIGNvbnN0IG9wZXJhdGlvbnM9bmV3IFNldCgpOwogIGZvcihjb25zdCBsIG9mIHJlY2VudCkgewogICAgaWYob3BlcmF0aW9ucy5oYXMobC5vcGVyYXRpb24pfHwhLyh1bmlmaWVkfGtpY2tvZmZ8Y2F0YWxvZ3xoYXJ2ZXN0fHNhbGVzX21vZGV8Y2Fub25pY2FsKS9pLnRlc3QobC5vcGVyYXRpb258fCIiKSljb250aW51ZTsKICAgIG9wZXJhdGlvbnMuYWRkKGwub3BlcmF0aW9uKTsKICAgIGNvbnNvbGUubG9nKCJFTkdJTkVfTE9HPSIrSlNPTi5zdHJpbmdpZnkocGljayhsLFsib3BlcmF0aW9uIiwic3RhdHVzIiwic3RhcnRlZF9hdCIsImNvbXBsZXRlZF9hdCIsImVycm9yX21lc3NhZ2UiLCJyZXN1bHRfc3VtbWFyeSJdKSkuc2xpY2UoMCwyMDAwMCkpOwogIH0KfSBmaW5hbGx5IHsgYXdhaXQgc3FsLmVuZCgpOyB9CmNvbnN0IHRva2VuPURlbm8uZW52LmdldCgiQVBJX1RPS0VOIil8fERlbm8uZW52LmdldCgiQURNSU5fUEFTU1dPUkQiKXx8IiI7CmZvcihjb25zdCBuYW1lIG9mIFsidmVyaWZ5UmVtb3RlU2t1Q2FtcGFpZ25GbG9vciIsInJ1bkltbWVkaWF0ZVNhbWVTa3VTZWFyY2hUZXJtSGFydmVzdCJdKSB7CiAgY29uc3QgcmVzPWF3YWl0IGZldGNoKCJodHRwOi8vMTI3LjAuMC4xOjgwMDAvZnVuY3Rpb25zLyIrbmFtZSx7bWV0aG9kOiJQT1NUIixoZWFkZXJzOnsiY29udGVudC10eXBlIjoiYXBwbGljYXRpb24vanNvbiIsIngtYXBpLXRva2VuIjp0b2tlbn0sYm9keTpKU09OLnN0cmluZ2lmeSh7X3NlcnZpY2Vfcm9sZTp0cnVlLGRyeV9ydW46dHJ1ZSxwZXJzaXN0OmZhbHNlLGxvb2tiYWNrX2RheXM6MzAsbWF4X3Byb21vdGlvbnM6MixyZXF1aXJlX2ZyZXNoX2ludmVudG9yeTp0cnVlfSl9KTsKICBjb25zb2xlLmxvZygiTElWRV9DSEVDSz0iK0pTT04uc3RyaW5naWZ5KHtuYW1lLGh0dHA6cmVzLnN0YXR1cyxkYXRhOmF3YWl0IHJlcy5qc29uKCl9KS5zbGljZSgwLDM1MDAwKSk7Cn0K' | base64 -d)\"" </dev/null
