@@ -24,6 +24,7 @@ async function fetchListing(base44: any, account: any, endpoint: string, sellerI
     // listing no marketplace consultado. É estado de catálogo, não falha de sync.
     expected_statuses: [404],
     queue_type: 'READ',
+    skip_outside_window_delay: true,
     max_attempts: 5,
     _service_role: true,
   });

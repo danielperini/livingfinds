@@ -1,6 +1,7 @@
 export const MIN_ADVERTISING_STOCK = 1;
 
 export function availableAdsStock(product: any): number {
+  if (product?.status === 'archived' || product?.catalog_sync_status === 'duplicate') return -1;
   // fba_inventory is totalQuantity (reserved/inbound included), not sellable stock.
   if (['mapping_conflict', 'invalid_inventory', 'not_found'].includes(product?.catalog_sync_status)) return -1;
   const raw = product?.available_quantity ?? product?.fulfillable_quantity;
