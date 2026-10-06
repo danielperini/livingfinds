@@ -1,3 +1,4 @@
+import { recoveredOfferLockPatch } from '../../shared/catalogRecoveryPolicy.ts';
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { listingOfferStatus } from '../../shared/listingOfferStatus.ts';
 
@@ -100,7 +101,7 @@ Deno.serve(async (request) => {
       const now = new Date().toISOString();
       let verified = 0, unavailable = 0, failed = 0;
       for (const product of products as any[]) {
-        if (!product.sku) continue;
+        if (!product.sku || product.status === 'archived') continue;
         try {
           const listing = await fetchListing(base44, account, spBase(account.region), sellerId, product.sku, account.marketplace_id || MARKETPLACE_ID);
           const observed: any = listing.notFound
@@ -126,6 +127,7 @@ Deno.serve(async (request) => {
             : 'eligible';
           await base44.asServiceRole.entities.Product.update(product.id, {
             ...signal,
+            ...recoveredOfferLockPatch(product, observed),
             ...(signal.fulfillment_channel === 'MFN' ? {
               available_quantity: effectiveQuantity,
               fba_inventory: effectiveQuantity,

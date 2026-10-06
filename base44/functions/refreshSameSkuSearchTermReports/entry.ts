@@ -17,10 +17,10 @@ const REPORT_VARIANTS = [
     columns: [...BASE_COLUMNS,
       'purchases1d', 'purchases7d', 'purchases14d', 'purchases30d',
       'purchasesSameSku1d', 'purchasesSameSku7d', 'purchasesSameSku14d', 'purchasesSameSku30d',
-      'purchasesOtherSku1d', 'purchasesOtherSku7d', 'purchasesOtherSku14d', 'purchasesOtherSku30d',
+
       'sales1d', 'sales7d', 'sales14d', 'sales30d',
       'attributedSalesSameSku1d', 'attributedSalesSameSku7d', 'attributedSalesSameSku14d', 'attributedSalesSameSku30d',
-      'salesOtherSku1d', 'salesOtherSku7d', 'salesOtherSku14d', 'salesOtherSku30d',
+      'salesOtherSku7d',
       'acosClicks14d', 'roasClicks14d'],
   },
   {

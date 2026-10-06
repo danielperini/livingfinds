@@ -6,6 +6,23 @@ import { readFile } from 'node:fs/promises';
 import { registerHooks, stripTypeScriptTypes } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
+import { canonicalSkuRecord, recoveredOfferLockPatch } from '../base44/shared/catalogRecoveryPolicy.ts';
+import { campaignMatchesProduct } from '../base44/shared/productCampaignPauseGuard.ts';
+
+test('duplicate SKU recovery preserves confirmed cost record and rejects different ASIN', () => {
+  const a={id:'a',asin:'B0GNW1Q6V3',cost_confirmed:true}, b={id:'b',asin:a.asin};
+  assert.equal(canonicalSkuRecord([b,a],a.asin),a);
+  assert.equal(canonicalSkuRecord([a,{...b,asin:'B0HFB78DNP'}],a.asin),null);
+});
+test('confirmed buyable offer clears only migration-owned locks', () => {
+  const signal={listing_status_confirmed:true,listing_buyable:true,offer_active:true};
+  assert.equal(recoveredOfferLockPatch({campaign_pause_locked_by:'pause_guard_migration'},signal).campaign_pause_lock,false);
+  assert.deepEqual(recoveredOfferLockPatch({campaign_pause_locked_by:'authenticated_user'},signal),{});
+  assert.deepEqual(recoveredOfferLockPatch({campaign_pause_locked_by:'pause_guard_migration'},{...signal,listing_status_confirmed:false}),{});
+});
+test('another SKU on the same ASIN cannot pause a SKU-linked campaign', () => {
+  assert.equal(campaignMatchesProduct({asin:'B0GNW1Q6V3',sku:'SKU-002314V'},{asin:'B0GNW1Q6V3',sku:'SKU-002314'}),false);
+});
 
 registerHooks({ resolve(specifier, context, next) {
   if (specifier === 'jsr:@std/assert') return { url: 'data:text/javascript,export { deepStrictEqual as assertEquals } from "node:assert/strict";', shortCircuit: true };

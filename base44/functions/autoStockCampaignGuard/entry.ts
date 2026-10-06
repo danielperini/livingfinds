@@ -144,6 +144,9 @@ Deno.serve(async (req) => {
       const products = await db.entities.Product.filter({ amazon_account_id: account.id }, null, 2000).catch(() => []);
 
       for (const product of products) {
+        if (product.status === 'archived') continue;
+        if (product.ads_scope_status !== 'authorized' && products.some(p =>
+          p.asin === product.asin && p.status !== 'archived' && p.ads_scope_status === 'authorized')) continue;
         const fba = availableAdsStock(product);
         const invStatus = String(product.inventory_status || '').toLowerCase();
         const campStatus = String(product.campaign_status || '').toLowerCase();
@@ -274,12 +277,12 @@ Deno.serve(async (req) => {
         }
 
         // CASO B: tem estoque, pause_reason=stock, mas campanha pausada → reativar
-        if (offer.eligible && !isOutOfStock && fba > 0 && hasFreshAdsInventory(product) && linkedCampaigns.some(c => isStockCampaignPause(c))) {
+        if (offer.eligible && !isOutOfStock && fba > 0 && hasFreshAdsInventory(product) && linkedCampaigns.some(c => isStockCampaignPause(c) || (product.pause_reason === 'offer_recovered' && ['USER_MANUAL_PRODUCT_LOCK', 'OFFER_INACTIVE', 'LISTING_NOT_BUYABLE'].includes(c.last_pause_reason)))) {
           try {
             let resumed = 0;
             for (const lc of linkedCampaigns) {
               const aid = lc.amazon_campaign_id || lc.campaign_id;
-              if (!isStockCampaignPause(lc) || !aid || amazonStates.get(String(aid)) !== 'paused') continue;
+              if (!(isStockCampaignPause(lc) || (product.pause_reason === 'offer_recovered' && ['USER_MANUAL_PRODUCT_LOCK', 'OFFER_INACTIVE', 'LISTING_NOT_BUYABLE'].includes(lc.last_pause_reason))) || !aid || amazonStates.get(String(aid)) !== 'paused') continue;
               const change = await sendCampaignStateChange(token, profileId, region, aid, 'ENABLED');
               if (!change.ok) throw new Error(`Amazon did not confirm campaign ${aid}`);
               await db.entities.Campaign.update(lc.id, { state: 'enabled', status: 'enabled', amazon_status: 'enabled', is_operational: true, last_pause_reason: null });

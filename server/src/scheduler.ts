@@ -7,7 +7,7 @@
  */
 import { join } from 'jsr:@std/path@1';
 import { makeFunctions } from './sdk/functions.ts';
-import { sql } from './db.ts';
+import { schedulerSql } from './db.ts';
 
 // deno-lint-ignore no-explicit-any
 type Job = { name: string; function: string; cron: string; payload?: Record<string, any>; run_on_startup?: boolean };
@@ -153,7 +153,7 @@ export async function startScheduler(): Promise<void> {
       console.log(`[scheduler] disparando '${job.name}' -> ${job.function}`);
       (async () => {
         try {
-          await sql.begin(async (tx: any) => {
+          await schedulerSql.begin(async (tx: any) => {
             const [lock] = await tx`
               select pg_try_advisory_xact_lock(hashtextextended(${jobKey}, 0)) as acquired
             `;
@@ -162,7 +162,7 @@ export async function startScheduler(): Promise<void> {
               return;
             }
             const response = await service.invoke(job.function, job.payload ?? {});
-            if (response.ok) {
+            if (response.ok && response.data?.ok !== false) {
               schedulerHealth.last_success_at = new Date().toISOString();
               schedulerHealth.last_error = null;
             } else {
@@ -201,7 +201,7 @@ export async function startScheduler(): Promise<void> {
     service.invoke(job.function, { ...(job.payload ?? {}), _startup_execution: true })
       .then((response) => {
         const locked = response?.data?.results?.some?.((item: any) => item?.locked === true) === true;
-        if (response.ok) {
+        if (response.ok && response.data?.ok !== false) {
           schedulerHealth.last_success_at = new Date().toISOString();
           schedulerHealth.last_error = null;
         } else {

@@ -160,7 +160,7 @@ async function archiveKeywordsOnAmazon(base44: any, accountId: string, keywordId
       operation: 'archiveDuplicateCanonicalKeywords',
       method: 'PUT',
       path: '/sp/keywords',
-      payload: { keywords: ids.map((keywordId) => ({ keywordId, state: 'ARCHIVED' })) },
+      payload: { keywords: ids.map((keywordId) => ({ keywordId, state: 'PAUSED' })) },
       content_type: CT_KEYWORD,
       accept: CT_KEYWORD,
       _service_role: true,
@@ -438,7 +438,7 @@ Deno.serve(async (request) => {
       const apiKws = await fetchKeywordsFromAmazon(base44, accountId, item.cid);
       const exactApiKws = apiKws.filter((k: any) =>
         String(k.matchType || k.match_type || '').toLowerCase() === 'exact' &&
-        String(k.state || '').toUpperCase() !== 'ARCHIVED'
+        !k.canonical_dedupe_archived_at && String(k.state || '').toUpperCase() !== 'ARCHIVED'
       );
       if (exactApiKws.length >= 2) {
         // Converter keywords da API para formato local
@@ -592,7 +592,7 @@ Deno.serve(async (request) => {
             await Promise.all(exactKws
               .filter((kw: any) => extraIdSet.has(String(kw.keyword_id || '')) && kw.id)
               .map((kw: any) => base44.asServiceRole.entities.Keyword.update(kw.id, {
-                state: 'archived', status: 'archived', canonical_dedupe_archived_at: new Date().toISOString(),
+                state: 'paused', status: 'paused', canonical_dedupe_archived_at: new Date().toISOString(),
               }).catch(() => {})));
             await base44.asServiceRole.entities.Campaign.update(campaign.id, {
               keyword_count: 1,

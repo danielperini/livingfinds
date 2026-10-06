@@ -35,3 +35,9 @@ export async function healthcheck(): Promise<boolean> {
     return false;
   }
 }
+
+// Scheduler advisory locks must not occupy the pool used by the functions they invoke.
+export const schedulerSql = postgres(url ?? '', {
+  max: Number(Deno.env.get('SCHEDULER_DB_POOL_MAX') ?? 32),
+  idle_timeout: 30, connect_timeout: 15, onnotice: () => {},
+});

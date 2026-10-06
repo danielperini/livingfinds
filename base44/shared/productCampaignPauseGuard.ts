@@ -51,6 +51,7 @@ export function isProductCampaignPauseLocked(product: any): boolean {
 
 export function campaignMatchesProduct(campaign: any, product: any): boolean {
   if (!campaign || !product) return false;
+  if (campaign.sku && product.sku) return norm(campaign.sku) === norm(product.sku);
   const campaignIds = [
     campaign.id,
     campaign.campaign_id,

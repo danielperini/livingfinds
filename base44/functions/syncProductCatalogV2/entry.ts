@@ -1,3 +1,4 @@
+import { canonicalSkuRecord } from '../../shared/catalogRecoveryPolicy.ts';
 import { inventoryAvailable } from '../../shared/inventorySyncPolicy.ts';
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { normalizeSku } from '../../shared/repricingPolicy.ts';
@@ -81,6 +82,7 @@ Deno.serve(async (req) => {
     const byAsin = new Map<string, any[]>();
     const bySku = new Map<string, any[]>();
     for (const product of products) {
+      if (product.status === 'archived') continue;
       const asinKey = String(product.asin || '').trim().toUpperCase();
       const skuKey = normSku(product.sku);
       if (asinKey) byAsin.set(asinKey, [...(byAsin.get(asinKey) || []), product]);
@@ -100,7 +102,18 @@ Deno.serve(async (req) => {
       const total = num(item.totalQuantity);
       const skuMatches = skuKey ? bySku.get(skuKey) || [] : [];
       const asinMatches = byAsin.get(asin) || [];
-      if (skuMatches.length > 1 || available === null) {
+      const canonical = canonicalSkuRecord(skuMatches, asin);
+      if (skuMatches.length > 1 && canonical && available !== null) {
+        for (const duplicate of skuMatches.filter(p => p.id !== canonical.id)) {
+          seenProductIds.add(duplicate.id);
+          await base44.asServiceRole.entities.Product.update(duplicate.id, {
+            status: 'archived', catalog_sync_status: 'duplicate',
+            catalog_sync_error: `Duplicate SKU; canonical product ${canonical.id}`,
+          });
+        }
+        bySku.set(skuKey, [canonical]);
+      }
+      if ((skuMatches.length > 1 && !canonical) || available === null) {
         mappingConflicts++;
         for (const match of skuMatches.length ? skuMatches : asinMatches) {
           seenProductIds.add(match.id);
@@ -113,7 +126,7 @@ Deno.serve(async (req) => {
       }
       // SKU do seller é a identidade canônica. ASIN só é fallback quando a
       // Amazon não retorna sellerSku e existe um único produto para o ASIN.
-      const existing:any = skuMatches[0] || (!skuKey && asinMatches.length === 1 ? asinMatches[0] : null);
+      const existing:any = canonical || skuMatches[0] || (!skuKey && asinMatches.length === 1 ? asinMatches[0] : null);
       if (existing?.id) seenProductIds.add(existing.id);
       const patch:any = {
         amazon_account_id: body.amazon_account_id,

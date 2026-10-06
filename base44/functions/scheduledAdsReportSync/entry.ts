@@ -117,11 +117,11 @@ const REPORT_CONFIGS = [
         'impressions', 'clicks', 'cost',
         'purchases1d', 'purchases7d', 'purchases14d', 'purchases30d',
         'purchasesSameSku1d', 'purchasesSameSku7d', 'purchasesSameSku14d', 'purchasesSameSku30d',
-        'purchasesOtherSku1d', 'purchasesOtherSku7d', 'purchasesOtherSku14d', 'purchasesOtherSku30d',
+
         'unitsSoldClicks1d', 'unitsSoldClicks7d', 'unitsSoldClicks14d', 'unitsSoldClicks30d',
         'sales1d', 'sales7d', 'sales14d', 'sales30d',
         'attributedSalesSameSku1d', 'attributedSalesSameSku7d', 'attributedSalesSameSku14d', 'attributedSalesSameSku30d',
-        'salesOtherSku1d', 'salesOtherSku7d', 'salesOtherSku14d', 'salesOtherSku30d',
+        'salesOtherSku7d',
         'unitsSoldSameSku1d', 'unitsSoldSameSku7d', 'unitsSoldSameSku14d', 'unitsSoldSameSku30d',
         'acosClicks14d', 'roasClicks14d',
       ],
@@ -230,12 +230,12 @@ Deno.serve(async (req) => {
     // ══════════════════════════════════════════════════════════════════
     if (action === 'request') {
       const token = await getAdsToken(refreshToken);
-      
+
       const endDate = new Date();
       endDate.setDate(endDate.getDate() - 1);
       const startDate = new Date(endDate);
       startDate.setDate(startDate.getDate() - 29);
-      
+
       const ts = Date.now();
       const reportIds = {};
       const errors = [];
@@ -378,7 +378,7 @@ Deno.serve(async (req) => {
           });
         }
       }
-      
+
       await bulkInsertBatched(base44.asServiceRole.entities.AdsReportRaw, rawRecords);
       console.log(`✓ AdsReportRaw: ${rawRecords.length} registos`);
       totalRecords += rawRecords.length;
@@ -527,7 +527,7 @@ Deno.serve(async (req) => {
       totalRecords += historyRecords.length;
 
       // ── ATUALIZAR ENTIDADES OPERACIONAIS ──
-      
+
       // SearchTerm (apenas search terms)
       const searchTermRecords = historyRecords.filter(r => r.report_type === 'searchTerms').map(r => ({
         amazon_account_id: amazonAccountId,
@@ -610,7 +610,7 @@ Deno.serve(async (req) => {
       // Atualizar Campaigns e Products (agregado 30 dias)
       const campAgg = new Map();
       const prodAgg = new Map();
-      
+
       for (const r of historyRecords) {
         // Campanhas
         if (r.campaign_id && !campAgg.has(r.campaign_id)) {
@@ -635,7 +635,7 @@ Deno.serve(async (req) => {
           c.impressions += r.impressions;
           c.orders += r.orders_14d;
         }
-        
+
         // Produtos
         if (r.advertised_asin && !prodAgg.has(r.advertised_asin)) {
           prodAgg.set(r.advertised_asin, {
@@ -665,7 +665,7 @@ Deno.serve(async (req) => {
 
       const existingCamps = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: amazonAccountId });
       const campMap = new Map(existingCamps.map(c => [c.campaign_id, c]));
-      
+
       const toUpdate = campRecords.filter(r => campMap.has(r.campaign_id)).map(r => ({ id: campMap.get(r.campaign_id).id, ...r }));
       const toCreate = campRecords.filter(r => !campMap.has(r.campaign_id));
 
@@ -698,12 +698,12 @@ Deno.serve(async (req) => {
 
       // Finalizar
       const durationMs = Date.now() - startTime;
-      
+
       await base44.asServiceRole.entities.AmazonAccount.update(amazonAccountId, {
         last_sync_at: now,
         status: 'connected',
       });
-      
+
       if (syncRunId) {
         await base44.asServiceRole.entities.SyncRun.update(syncRunId, {
           status: 'success',
