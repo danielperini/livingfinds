@@ -16,7 +16,7 @@ export function visibleCatalogProducts(products) {
 
 export function catalogStockStatus(product) {
   if (product.status === 'archived') return 'archived';
-  const raw = product.fba_inventory ?? product.available_quantity;
+  const raw = product.fba_inventory;
   if (raw == null || raw === '' || typeof raw === 'boolean') return 'unknown';
   const quantity = Number(raw);
   if (!Number.isInteger(quantity) || quantity < 0) return 'unknown';

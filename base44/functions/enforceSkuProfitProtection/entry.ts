@@ -15,7 +15,7 @@ import {
 } from '../../shared/profitGuardPolicy.ts';
 import { calculateIntradayTargetBid, nextProfitableBid } from '../../shared/intradayBidTargetPolicy.ts';
 
-const RULE_VERSION = 6;
+const RULE_VERSION = 7;
 const LOOKBACK_DAYS = 14;
 const BID_COOLDOWN_HOURS = 24;
 const PAUSE_AFTER_REDUCTION_HOURS = 72;

@@ -1,3 +1,5 @@
+import { availableAdsStock } from './stockAdsPolicy.ts';
+
 export const numberValue = (value: unknown, fallback = 0): number => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -16,17 +18,14 @@ export const normalizeState = (value: unknown): string =>
   String(value || '').trim().toLowerCase();
 
 export function availableInventory(product: any): number {
-  const values = [
-    product?.fba_inventory,
-    product?.available_quantity,
-    product?.fulfillable_quantity,
-    product?.inventory_quantity,
-  ].map((value) => numberValue(value, -1));
-  const known = values.filter((value) => value >= 0);
-  return known.length ? Math.max(...known) : -1;
+  return availableAdsStock(product);
 }
 
 export function resolveBreakEvenAcos(economics: any): number | null {
+  if (economics?.economics_status === 'complete'
+    && economics?.profit_before_ads != null
+    && Number.isFinite(Number(economics.profit_before_ads))
+    && Number(economics.profit_before_ads) <= 0) return 0;
   const candidates = [
     economics?.break_even_acos,
     economics?.contribution_margin_percent,
@@ -48,17 +47,14 @@ export function resolveOperatingAcos(economics: any, accountTargetAcos = 15): {
     .map((value) => numberValue(value, 0))
     .filter((value) => value > 0 && value <= 100);
   const configuredTarget = configured.length ? Math.min(...configured) : 15;
-  const safetyAcos = breakEven && breakEven > 0 ? breakEven * 0.8 : null;
-  const target = clamp(
-    safetyAcos ? Math.min(configuredTarget, safetyAcos) : configuredTarget,
-    1,
-    breakEven ? Math.max(1, breakEven - 0.5) : 100,
-  );
+  const safetyAcos = breakEven !== null ? breakEven * 0.8 : null;
+  // A generic account target must never override the product's actual margin.
+  const target = safetyAcos !== null ? Math.min(configuredTarget, safetyAcos) : configuredTarget;
   return {
     target_acos: roundMoney(target),
-    break_even_acos: breakEven ? roundMoney(breakEven) : null,
-    safety_acos: safetyAcos ? roundMoney(safetyAcos) : null,
-    source: breakEven ? 'product_economics' : 'account_target_fallback',
+    break_even_acos: breakEven !== null ? roundMoney(breakEven) : null,
+    safety_acos: safetyAcos !== null ? roundMoney(safetyAcos) : null,
+    source: breakEven !== null ? 'product_economics' : 'account_target_fallback',
   };
 }
 
@@ -69,11 +65,13 @@ export function resolveSafeMaxCpc(params: {
   operatingAcos: number;
 }): number | null {
   const explicit = numberValue(params.economics?.safe_max_cpc, 0);
-  if (explicit > 0) return roundMoney(explicit);
   const price = numberValue(params.observedAov, 0) || numberValue(params.economics?.average_sale_price, 0) || numberValue(params.economics?.current_price, 0);
   const cvr = numberValue(params.observedCvr, 0);
-  if (price <= 0 || cvr <= 0 || params.operatingAcos <= 0) return null;
-  return roundMoney(price * cvr * (params.operatingAcos / 100));
+  if (params.operatingAcos <= 0) return 0;
+  const calculated = price > 0 && cvr > 0 && cvr <= 1 ? price * cvr * (params.operatingAcos / 100) : null;
+  const cap = calculated !== null ? (explicit > 0 ? Math.min(explicit, calculated) : calculated) : (explicit > 0 ? explicit : null);
+  // Round down: a monetary ceiling cannot be exceeded by rounding.
+  return cap === null ? null : Math.floor((cap + Number.EPSILON) * 100) / 100;
 }
 
 export function economicsAreActionable(economics: any, assessment?: any): boolean {

@@ -14,7 +14,7 @@ export function contributionReward(input:EconomicInput){
  const raw=n(input.contributionMarginRate,0),rate=clamp(raw>1?raw/100:raw,0,1); return sales*rate-spend;
 }
 export function assessEconomicEvidence(input:EconomicInput){
- const spend=Math.max(0,n(input.spend)),sales=Math.max(0,n(input.sales)),target=Math.max(.1,n(input.targetAcosPct,15)),breakEven=Math.max(target,n(input.breakEvenAcosPct,target));
+ const spend=Math.max(0,n(input.spend)),sales=Math.max(0,n(input.sales)),breakEven=Math.max(0,n(input.breakEvenAcosPct,0)),target=Math.min(Math.max(0,n(input.targetAcosPct,15)),breakEven*.8);
  const acos=sales>0?spend/sales*100:null,score=calculateEvidenceScore(input),level=evidenceLevel(score),reward=contributionReward(input);
  let zone:EconomicZone='EXPLORE_HOLD',adjustment=0,allowPause=false,allowNegative=false;
  if(acos===null){if(level==='HIGH'&&spend>0){zone='STRONG_CONTAINMENT';adjustment=-20}else if(level==='MEDIUM'){zone='LIGHT_CONTAINMENT';adjustment=-10}}

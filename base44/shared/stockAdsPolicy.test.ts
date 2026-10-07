@@ -9,14 +9,14 @@ Deno.test('missing, ambiguous and invalid inventory never becomes sellable or ze
     assertEquals(stockAdsDecision({ fba_inventory: quantity }), 'unknown');
   }
   for (const status of ['mapping_conflict', 'invalid_inventory', 'not_found']) {
-    assertEquals(stockAdsDecision({ available_quantity: 60, catalog_sync_status: status }), 'unknown');
+    assertEquals(stockAdsDecision({ fba_inventory: 60, catalog_sync_status: status }), 'unknown');
   }
   assertEquals(inventoryAvailable({ inventoryDetails: { fulfillableQuantity: 0 } }), 0);
 });
 
 Deno.test('activation requires successful recent inventory sync', () => {
   const now = Date.parse('2026-10-02T12:00:00Z');
-  const product = { available_quantity: 1, catalog_sync_status: 'success', last_catalog_sync_at: new Date(now).toISOString() };
+  const product = { fba_inventory: 1, catalog_sync_status: 'success', last_catalog_sync_at: new Date(now).toISOString() };
   assertEquals(hasFreshAdsInventory(product, now), true);
   assertEquals(hasFreshAdsInventory(product, now + 31 * 60_000), false);
   assertEquals(hasFreshAdsInventory(product, now - 1), false);
@@ -39,19 +39,19 @@ Deno.test('restock never overrides financial, manual or unknown campaign pauses'
 });
 
 Deno.test('pauses advertising with zero units', () => {
-  assertEquals(stockAdsDecision({ available_quantity: 0 }), 'pause');
+  assertEquals(stockAdsDecision({ fba_inventory: 0 }), 'pause');
 });
 
 Deno.test('activates advertising even with one or three units', () => {
   for (const quantity of [1, 2, 3, 8, 60, 92]) {
-    assertEquals(stockAdsDecision({ available_quantity: quantity }), 'activate');
+    assertEquals(stockAdsDecision({ fba_inventory: quantity }), 'activate');
   }
 });
 
 Deno.test('does not guess when inventory is unknown', () => {
   assertEquals(stockAdsDecision({}), 'unknown');
-  assertEquals(stockAdsDecision({ available_quantity: 'invalid' }), 'unknown');
-  assertEquals(stockAdsDecision({ available_quantity: -1 }), 'unknown');
+  assertEquals(stockAdsDecision({ fba_inventory: 'invalid' }), 'unknown');
+  assertEquals(stockAdsDecision({ fba_inventory: -1 }), 'unknown');
 });
 
 Deno.test('FBA balance takes precedence according to the selected stock policy', () => {

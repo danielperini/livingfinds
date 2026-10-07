@@ -53,7 +53,7 @@ Deno.serve(async(request)=>{
     return Response.json({
       ok:economicEvidence?.ok!==false&&engine?.ok!==false&&reconciliation?.ok!==false&&arbitration?.ok!==false,
       engine:'canonical-decision-cycle',
-      engine_version:'canonical-v22-pre-execution-arbiter',
+      engine_version:'canonical-v23-fba-margin-ceiling',
       correlation_id:correlationId,
       economic_evidence:economicEvidence,
       unified_engine:engine,

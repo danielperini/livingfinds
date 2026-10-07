@@ -1,12 +1,12 @@
 import { assertEquals } from 'jsr:@std/assert';
 import { campaignCoverageEligible } from './campaignCoverageEligibility.ts';
 
-const product = { asin: 'B0GNW1Q6V3', sku: 'SKU-002314V', available_quantity: 3 };
+const product = { asin: 'B0GNW1Q6V3', sku: 'SKU-002314V', fba_inventory: 3 };
 
 Deno.test('paused low-stock products without sales or activity qualify for discovery', () => {
   assertEquals(campaignCoverageEligible({ ...product, campaign_status: 'paused',
     pause_reason: 'low_stock_one_unit', sales: 0, acos: 0, impressions: 0 }), true);
-  assertEquals(campaignCoverageEligible({ ...product, available_quantity: 1 }), true);
+  assertEquals(campaignCoverageEligible({ ...product, fba_inventory: 1 }), true);
 });
 
 Deno.test('all eleven requested ASINs qualify without a metrics history', () => {
@@ -16,14 +16,14 @@ Deno.test('all eleven requested ASINs qualify without a metrics history', () => 
     ['B0GHP9PPWN', 25], ['B0FN4RCXY2', 23], ['B0GHP68123', 8],
     ['B0GR6GXS1B', 15], ['B0GHP958MV', 24],
   ];
-  for (const [asin, available_quantity] of inventory) {
-    assertEquals(campaignCoverageEligible({ ...product, asin, available_quantity }), true);
+  for (const [asin, fba_inventory] of inventory) {
+    assertEquals(campaignCoverageEligible({ ...product, asin, fba_inventory }), true);
   }
 });
 
 Deno.test('zero and unknown stock cannot launch discovery', () => {
-  for (const available_quantity of [0, -1, undefined, null, '', 'invalid']) {
-    assertEquals(campaignCoverageEligible({ ...product, available_quantity }), false);
+  for (const fba_inventory of [0, -1, undefined, null, '', 'invalid']) {
+    assertEquals(campaignCoverageEligible({ ...product, fba_inventory }), false);
   }
 });
 

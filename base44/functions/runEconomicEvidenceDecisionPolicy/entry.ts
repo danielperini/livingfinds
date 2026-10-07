@@ -1,3 +1,4 @@
+import { resolveOperatingAcos } from '../../shared/profitGuardPolicy.ts';
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { assessEconomicEvidence, selectContextualExplorationArm, type ContextualArm } from '../../shared/economicEvidencePolicy.ts';
 
@@ -36,7 +37,9 @@ Deno.serve(async(request)=>{
     const asin=s(term.advertised_asin||term.asin||campaign.asin).toUpperCase(),product:any=productByAsin.get(asin),econ:any=econByAsin.get(asin); if(!asin||!product)continue;
     const stock=n(product.fba_inventory??product.available_quantity??product.fulfillable_quantity,0); if(stock<=0||product.listing_buyable===false||product.listing_suppressed===true)continue;
     const spend=n(term.spend),sales=term.same_sku_attribution_verified===true?n(term.same_sku_sales):n(term.sales_1d),orders=term.same_sku_attribution_verified===true?n(term.same_sku_orders):n(term.orders_1d),clicks=n(term.clicks),impressions=n(term.impressions); if(clicks<=0&&impressions<=0)continue;
-    const breakEven=Math.max(defaultTarget,n(econ?.break_even_acos??product.break_even_acos_pct,defaultTarget)),target=Math.max(1,n(econ?.target_acos,defaultTarget));
+    const policy=resolveOperatingAcos(econ,defaultTarget);
+    if(policy.break_even_acos===null)continue;
+    const breakEven=policy.break_even_acos,target=policy.target_acos;
     const marginAmount=n(econ?.contribution_margin_amount??econ?.profit_before_ads??product.available_profit_per_sale??product.contribution_margin,NaN),marginRate=n(econ?.contribution_margin_rate??econ?.contribution_margin_pct??product.contribution_margin_pct,0),observedDays=Math.max(1,n(term.observed_days??term.days_with_data??1,1));
     const assessment=assessEconomicEvidence({clicks,orders,impressions,observedDays,spend,sales,targetAcosPct:target,breakEvenAcosPct:breakEven,contributionMarginAmount:marginAmount,contributionMarginRate:marginRate}),baseReward=assessment.reward;
     const arms:ContextualArm[]=[{key:'REDUCE',expectedReward:baseReward+(assessment.zone.includes('CONTAINMENT')||assessment.zone==='PAUSE_OR_NEGATIVE'?Math.max(0,spend*.12):0),uncertainty:Math.max(0,spend*.05),minimumEvidence:'MEDIUM'},{key:'HOLD',expectedReward:baseReward,uncertainty:Math.max(0,spend*.08),minimumEvidence:'LOW'},{key:'SCALE',expectedReward:baseReward+(assessment.zone==='SCALE'?Math.max(0,assessment.reward*.10):Math.min(0,assessment.reward*.05)),uncertainty:Math.max(0,Math.abs(baseReward)*.12+1),minimumEvidence:'MEDIUM'}];
@@ -52,6 +55,6 @@ Deno.serve(async(request)=>{
    await base44.asServiceRole.entities.SyncExecutionLog.create({amazon_account_id:aid,operation:'economic_evidence_contextual_shadow',trigger_type:body.trigger_type||'unified_engine',status:'success',records_processed:selected.length,result_summary:`created=${persisted}; refreshed=${refreshed}; scale=${selected.filter((x:any)=>x.zone==='SCALE').length}; hold=${selected.filter((x:any)=>x.zone==='EXPLORE_HOLD').length}; light=${selected.filter((x:any)=>x.zone==='LIGHT_CONTAINMENT').length}; strong=${selected.filter((x:any)=>x.zone==='STRONG_CONTAINMENT').length}; terminal_candidates=${selected.filter((x:any)=>x.zone==='PAUSE_OR_NEGATIVE').length}`,started_at:new Date().toISOString(),completed_at:new Date().toISOString()}).catch(()=>{});
    results.push({amazon_account_id:aid,ok:true,shadow_only:true,candidates:selected.length,persisted,refreshed,summary:{scale:selected.filter((x:any)=>x.zone==='SCALE').length,hold:selected.filter((x:any)=>x.zone==='EXPLORE_HOLD').length,light_containment:selected.filter((x:any)=>x.zone==='LIGHT_CONTAINMENT').length,strong_containment:selected.filter((x:any)=>x.zone==='STRONG_CONTAINMENT').length,pause_or_negative:selected.filter((x:any)=>x.zone==='PAUSE_OR_NEGATIVE').length},sample:selected.slice(0,20)});
   }
-  return Response.json({ok:true,policy:'economic-evidence-contextual-v1',execution_mode:'shadow_only',canonical_executor:'executeApprovedDecisionQueue',results});
+  return Response.json({ok:true,policy:'economic-evidence-contextual-v2-margin-ceiling',execution_mode:'shadow_only',canonical_executor:'executeApprovedDecisionQueue',results});
  }catch(error:any){return Response.json({ok:false,error:error?.message||String(error)},{status:500})}
 });

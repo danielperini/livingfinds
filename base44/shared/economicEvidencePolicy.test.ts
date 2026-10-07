@@ -1,6 +1,11 @@
 import { assertEquals, assert } from 'jsr:@std/assert@1';
 import { assessEconomicEvidence, calculateEvidenceScore, selectContextualExplorationArm } from './economicEvidencePolicy.ts';
 
+Deno.test('account target above actual margin never labels loss as safe hold or scale', () => {
+ const r=assessEconomicEvidence({clicks:80,orders:10,impressions:6000,observedDays:14,spend:140,sales:1000,targetAcosPct:20,breakEvenAcosPct:9.38,contributionMarginRate:.0938});
+ assert(r.zone!=='SCALE'&&r.zone!=='EXPLORE_HOLD'); assert(r.reward<0);
+});
+
 Deno.test('low evidence cannot pause or negative',()=>{
  const r=assessEconomicEvidence({clicks:3,orders:0,impressions:100,observedDays:1,spend:20,sales:10,targetAcosPct:15,breakEvenAcosPct:30,contributionMarginRate:.30});
  assertEquals(r.allowPause,false); assertEquals(r.allowNegative,false); assert(r.bidAdjustmentPct>=-10);

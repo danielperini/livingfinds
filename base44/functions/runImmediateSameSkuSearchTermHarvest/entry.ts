@@ -23,6 +23,7 @@ import {
   availableInventory,
   economicsAreActionable,
   resolveOperatingAcos,
+  resolveSafeMaxCpc,
 } from '../../shared/profitGuardPolicy.ts';
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -256,7 +257,10 @@ Deno.serve(async (request) => {
         const assessment = assessmentByAsin.get(aggregate.asin);
         const policy = resolveOperatingAcos(econ, targetAcos);
         const observedCpc = aggregate.clicks > 0 ? aggregate.spend / aggregate.clicks : 0;
-        const safeCpc = numberValue(assessment?.safe_max_cpc ?? econ?.safe_max_cpc, 0);
+        const safeCpc = resolveSafeMaxCpc({ economics: econ,
+          observedCvr: aggregate.clicks > 0 ? aggregate.sameSkuOrders / aggregate.clicks : 0,
+          observedAov: aggregate.sameSkuOrders > 0 ? aggregate.sameSkuSales / aggregate.sameSkuOrders : 0,
+          operatingAcos: policy.target_acos }) ?? 0;
         const safeBid = calculateSafeHarvestBid({ observedCpc, safeCpc, minBid, maxBid });
         // Uma campanha MANUAL EXACT também descobre variações reais. Só bloqueie
         // a promoção quando esta consulta já existir como EXACT para o ASIN;
@@ -761,6 +765,12 @@ Deno.serve(async (request) => {
         unique_asin_terms: aggregates.length,
         same_sku_candidates: candidates.length,
         selected: selected.length,
+        selected_candidates: selected.map(({ aggregate, safeBid, policy }) => ({
+          sku: aggregate.sku, asin: aggregate.asin, term: aggregate.term,
+          same_sku_orders: aggregate.sameSkuOrders, same_sku_sales: aggregate.sameSkuSales,
+          spend: aggregate.spend, bid: safeBid, target_acos: policy.target_acos,
+          break_even_acos: policy.break_even_acos,
+        })),
         promoted: promoted.length,
         failed: failed.length,
         bank_created: bankCreated,

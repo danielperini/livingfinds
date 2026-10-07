@@ -135,7 +135,7 @@ Deno.serve(async (req) => {
         previous_inventory_status: existing?.inventory_status || null,
         previous_fba_inventory: num(existing?.fba_inventory),
         previous_available_quantity: existing?.available_quantity ?? null,
-        fba_inventory: total,
+        fba_inventory: available,
         available_quantity: available,
         total_quantity: total,
         reserved_inventory: num(details?.reservedQuantity?.totalReservedQuantity),

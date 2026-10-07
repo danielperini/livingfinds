@@ -1,3 +1,4 @@
+import { inventoryAvailable } from '../../shared/inventorySyncPolicy.ts';
 /**
  * syncProductsFromInventory — Importa produtos do inventário FBA via SP-API.
  * Marca novos ASINs com is_new_asin=true.
@@ -97,10 +98,12 @@ Deno.serve(async (req) => {
       const sku = item.sellerSku;
       if (!asin) continue;
 
+      const availableQty = inventoryAvailable(item);
+      if (availableQty === null) continue;
       const totalQty = (item.inventoryDetails?.fulfillableQuantity || 0)
         + (item.inventoryDetails?.reservedQuantity?.totalReservedQuantity || 0);
       const inboundQty = item.inventoryDetails?.inboundShippingQuantity || 0;
-      const inventoryStatus = totalQty === 0 ? 'out_of_stock' : totalQty < 10 ? 'low_stock' : 'in_stock';
+      const inventoryStatus = availableQty === 0 ? 'out_of_stock' : availableQty < 10 ? 'low_stock' : 'in_stock';
       const isNew = !existingAsinMap.has(asin);
       if (isNew) newAsinCount++;
 
@@ -111,7 +114,6 @@ Deno.serve(async (req) => {
       const existingScope = existing?.ads_scope_status || 'not_authorized';
       let adsEligibilityStatus = existing?.ads_eligibility_status || 'unknown';
       let adsIneligibilityReason = existing?.ads_ineligibility_reason || '';
-      const availableQty = item.inventoryDetails?.fulfillableQuantity || 0; // apenas disponível
       if (existingScope === 'authorized') {
         // Manter estado específico de listing_suppressed/offer_inactive (gerido pela SP-API de listings)
         const lockedStates = ['listing_suppressed', 'offer_inactive', 'not_buyable', 'mapping_conflict', 'manual_block'];
@@ -136,7 +138,8 @@ Deno.serve(async (req) => {
         product_name: item.productName || existing?.product_name || asin,
         status: 'active',
         inventory_status: inventoryStatus,
-        fba_inventory: totalQty,
+        fba_inventory: availableQty,
+        total_quantity: totalQty,
         available_quantity: availableQty,
         inbound_inventory: inboundQty,
         is_new_asin: isNew,

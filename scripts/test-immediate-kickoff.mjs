@@ -39,7 +39,7 @@ test('another SKU on the same ASIN cannot pause a SKU-linked campaign', () => {
 });
 
 registerHooks({ resolve(specifier, context, next) {
-  if (specifier === 'jsr:@std/assert') return { url: 'data:text/javascript,export { deepStrictEqual as assertEquals } from "node:assert/strict";', shortCircuit: true };
+  if (specifier === 'jsr:@std/assert' || specifier === 'jsr:@std/assert@1') return { url: 'data:text/javascript,export { deepStrictEqual as assertEquals, ok as assert } from "node:assert/strict";', shortCircuit: true };
   return next(specifier, context);
 }});
 globalThis.Deno = { test };
@@ -49,7 +49,7 @@ test('modified backend handlers have valid TypeScript syntax', async () => {
     stripTypeScriptTypes(await readFile(`base44/functions/${name}/entry.ts`, 'utf8'));
   }
 });
-for (const name of ['stockAdsPolicy', 'campaignCoverageEligibility', 'searchTermHarvestPolicy']) {
+for (const name of ['stockAdsPolicy', 'campaignCoverageEligibility', 'searchTermHarvestPolicy', 'profitGuardPolicy', 'economicEvidencePolicy']) {
   await import(`../base44/shared/${name}.test.ts`);
 }
 
@@ -87,7 +87,7 @@ test('daily discovery updates one product repeatedly without creating campaigns 
 
 function fixture({ syncOk = true, queueFails = false, paused = false } = {}) {
   const calls = [];
-  const product = { id: 'p1', asin: 'B0GNW1Q6V3', sku: 'SKU-002314V', available_quantity: 1, cost_confirmed:true, ads_scope_status:'authorized',
+  const product = { id: 'p1', asin: 'B0GNW1Q6V3', sku: 'SKU-002314V', fba_inventory: 1, available_quantity: 0, cost_confirmed:true, ads_scope_status:'authorized',
     catalog_sync_status: 'success', last_catalog_sync_at: new Date().toISOString() };
   const entities = {
     AmazonAccount: { filter: async () => [{ id: 'a1' }] },
@@ -141,7 +141,7 @@ test('daily engine requests reports before same-SKU winner search with fresh inv
 for (const accepted of [true, false]) {
   test(`stock guard ${accepted ? 'resumes only stock pauses' : 'rejects HTTP 207 item failures'}`, async () => {
     const updates = [], requests = [];
-    const product = { id: 'p1', asin: 'B0GNW1Q6V3', available_quantity: 8,
+    const product = { id: 'p1', asin: 'B0GNW1Q6V3', fba_inventory: 8, available_quantity: 0,
       catalog_sync_status: 'success', last_catalog_sync_at: new Date().toISOString(), pause_reason: 'out_of_stock_confirmed' };
     const campaigns = [
       { id: 'stock', asin: product.asin, campaign_id: '42', state: 'paused', last_pause_reason: 'out_of_stock_confirmed' },
