@@ -146,6 +146,7 @@ const AuthenticatedApp = () => {
             <Route path="/optimizer" element={<OptimizerPipeline />} />
             <Route path="/currency-audit" element={<CurrencyAudit />} />
             <Route path="/keyword-management" element={<KeywordManagement />} />
+            <Route path="/KeywordManagement" element={<KeywordManagement />} />
             <Route path="/amazon-oauth-setup" element={<AmazonOAuthSetup />} />
             <Route path="/term-bank" element={<Navigate to="/campaign-factory" replace />} />
             <Route path="/campaign-factory" element={<CampaignFactory />} />

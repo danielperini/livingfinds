@@ -129,7 +129,7 @@ function CampaignDropdown({ product }) {
             const acos = Number(c.acos || 0);
             return (
               <div key={id || i} className="text-xs leading-snug">
-                <a href={`/KeywordManagement?campaign_id=${encodeURIComponent(id)}&account_id=${encodeURIComponent(product.amazon_account_id)}`} className="text-blue-600 font-medium underline block max-w-[260px]" title={name}>{name}</a>
+                <a href={`/keyword-management?campaign_id=${encodeURIComponent(id)}&account_id=${encodeURIComponent(product.amazon_account_id)}`} className="text-blue-600 font-medium underline block max-w-[260px]" title={name}>{name}</a>
                 <CopyProductKeywords product={product} campaign={c} />
                 <div className="flex items-center gap-2 text-[11px] mt-0.5 flex-wrap">
                   <span className={`font-semibold ${statusColor(c)}`}>{statusLabel(c)}</span>
