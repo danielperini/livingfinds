@@ -25,6 +25,7 @@ const ENDPOINT_MAP: Record<string, string> = {
 // ── Lista canônica de SKUs autorizados ─────────────────────────────────────────
 // Comparação EXATA e case-sensitive. Alterar aqui para incluir/remover.
 const AUTHORIZED_SKUS: string[] = [
+  'FBA-0122',
   'FBA-0087c',
   'FBA-0076C',
   'FBA-0010',
@@ -48,6 +49,7 @@ const AUTHORIZED_SKUS: string[] = [
 
 // Mapeamento esperado SKU → ASIN (para detecção de conflito)
 const SKU_ASIN_MAPPING: Record<string, string> = {
+  'FBA-0122': 'B0HLMF8PPD',
   'FBA-0087c':    'B0H59FPPKS',
   'FBA-0076C':    'B0GHP612B8',
   'FBA-0010':     'B0DJ3RGHK6',
