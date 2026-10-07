@@ -8,5 +8,7 @@ try {
 } finally {await sql.end();}
 
 const token=Deno.env.get("API_TOKEN")||Deno.env.get("ADMIN_PASSWORD")||"";
+const costRes=await fetch("http://127.0.0.1:8000/functions/importProductEconomics",{method:"POST",headers:{"content-type":"application/json","x-api-token":token},body:JSON.stringify({_service_role:true,amazon_account_id:"6a40448b9af1241f356e9fcc",items:[{sku:"FBA-0122",unit_cost:80,cost_source:"user_confirmed_2026_10_07"}],run_decision_engine:false}),signal:AbortSignal.timeout(120000)});
+console.log("MIC_COST="+JSON.stringify(await costRes.json()));
 const res=await fetch("http://127.0.0.1:8000/functions/runImmediateSameSkuSearchTermHarvest",{method:"POST",headers:{"content-type":"application/json","x-api-token":token},body:JSON.stringify({_service_role:true,amazon_account_id:"6a40448b9af1241f356e9fcc",dry_run:true,persist:false,lookback_days:30,max_promotions:10,require_fresh_inventory:true}),signal:AbortSignal.timeout(120000)});
 console.log("FINAL_HARVEST="+JSON.stringify(await res.json()));
