@@ -221,7 +221,8 @@ export function aggregateSearchTerms(rows: any[]): HarvestAggregate[] {
     const asin = String(row.advertised_asin || row.asin || '').trim().toUpperCase();
     if (!term || !normalizedTerm || !termFamilyKey || !asin) continue;
 
-    const key = `${asin}|${termFamilyKey}`;
+    const skuKey = String(row.advertised_sku || row.sku || '').trim().toUpperCase();
+    const key = `${asin}|${skuKey}|${termFamilyKey}`;
     const current = aggregates.get(key) || {
       asin,
       sku: String(row.advertised_sku || row.sku || '').trim(),
@@ -333,7 +334,7 @@ export function evaluateHarvestCandidate(input: {
   const { aggregate } = input;
   const sameSkuAcos = aggregate.sameSkuSales > 0 ? aggregate.spend / aggregate.sameSkuSales * 100 : null;
   if (isAsinSearchTerm(aggregate.term)) return { eligible: false, reason: 'product_target_not_keyword', sameSkuAcos };
-  if (!aggregate.skuResolutionVerified || !aggregate.asin) return { eligible: false, reason: 'sku_unresolved', sameSkuAcos };
+  if (!aggregate.skuResolutionVerified || !aggregate.asin || !aggregate.sku) return { eligible: false, reason: 'sku_unresolved', sameSkuAcos };
   
   // NEW: Allow fallback single_advertised_sku as verified attribution
   const hasValidAttribution = aggregate.attributionVerified || aggregate.attributionFallbackReason?.includes('single_advertised_sku_fallback');

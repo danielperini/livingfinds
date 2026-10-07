@@ -81,6 +81,9 @@ Deno.test('uma venda do mesmo SKU é elegível, mas venda halo não é', () => {
   };
   const eligible = evaluateHarvestCandidate({ aggregate: base, inStock: true, economicsActionable: true, breakEvenAcos: 40, safeBid: 0.45, alreadyExact: false, alreadyPromoted: false });
   if (!eligible.eligible) throw new Error(`venda deveria promover: ${eligible.reason}`);
+  for (const breakEvenAcos of [null, 0, -5]) {
+    if (evaluateHarvestCandidate({ aggregate: base, inStock: true, economicsActionable: true, breakEvenAcos, safeBid: 0.45, alreadyExact: false, alreadyPromoted: false }).eligible) throw new Error('margem ausente/negativa não pode promover');
+  }
   const halo = evaluateHarvestCandidate({ aggregate: { ...base, sameSkuOrders: 0, sameSkuSales: 0, haloOrders: 1, haloSales: 203.8 }, inStock: true, economicsActionable: true, breakEvenAcos: 40, safeBid: 0.45, alreadyExact: false, alreadyPromoted: false });
   if (halo.eligible || halo.reason !== 'no_same_sku_sale') throw new Error('venda halo não pode promover');
 });
@@ -107,4 +110,14 @@ Deno.test('EXACT equivalente ativa não é duplicada', () => {
   };
   const result = evaluateHarvestCandidate({ aggregate, inStock: true, economicsActionable: true, breakEvenAcos: 40, safeBid: 0.5, alreadyExact: true, alreadyPromoted: false });
   if (result.eligible || result.reason !== 'exact_keyword_already_active') throw new Error('EXACT duplicada não foi bloqueada');
+});
+
+Deno.test('same ASIN search terms never merge sales from different SKUs', () => {
+  const rows = ['FBA-0087', 'I1-NOI2-CU3W'].map(sku => ({
+    advertised_asin: 'B0GFQ7SY5W', advertised_sku: sku, search_term: 'lixeira automatica 13l',
+    same_sku_attribution_verified: true, same_sku_orders: 1, same_sku_sales: 72.9,
+    clicks: 1, spend: 0.4, sku_resolution_status: 'resolved_campaign',
+  }));
+  const result = aggregateSearchTerms(rows);
+  if (result.length !== 2 || result.some(row => row.sameSkuOrders !== 1)) throw new Error('SKUs misturados');
 });

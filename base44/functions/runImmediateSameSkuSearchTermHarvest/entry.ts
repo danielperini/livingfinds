@@ -170,8 +170,6 @@ Deno.serve(async (request) => {
           campaignById.set(String(id), campaign);
         }
       }
-      const productByAsin = new Map<string, any>(products.filter((row: any) => row.asin).map((row: any) => [String(row.asin).toUpperCase(), row]));
-      const economicsByAsin = new Map<string, any>(economics.filter((row: any) => row.asin).map((row: any) => [String(row.asin).toUpperCase(), row]));
       const assessmentByAsin = new Map<string, any>();
       for (const row of assessments) {
         const asin = String(row.asin || '').toUpperCase();
@@ -252,8 +250,12 @@ Deno.serve(async (request) => {
 
       for (const aggregate of aggregates) {
         const key = `${aggregate.asin}|${aggregate.normalizedTerm}`;
-        const product = productByAsin.get(aggregate.asin);
-        const econ = economicsByAsin.get(aggregate.asin);
+        const matchesSku = (row: any) => String(row.sku || '').trim().toUpperCase() === aggregate.sku.trim().toUpperCase()
+          && String(row.asin || '').toUpperCase() === aggregate.asin;
+        const productMatches = products.filter((row: any) => row.status !== 'archived' && row.catalog_sync_status !== 'duplicate' && matchesSku(row));
+        const economyMatches = economics.filter(matchesSku);
+        const product = productMatches.length === 1 ? productMatches[0] : undefined;
+        const econ = economyMatches.length === 1 ? economyMatches[0] : undefined;
         const assessment = assessmentByAsin.get(aggregate.asin);
         const policy = resolveOperatingAcos(econ, targetAcos);
         const observedCpc = aggregate.clicks > 0 ? aggregate.spend / aggregate.clicks : 0;
