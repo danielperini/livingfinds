@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { kickoffDiscovery } from '../../shared/productDiscoveryPolicy.ts';
 
 function saoPauloNow() {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -73,6 +74,13 @@ Deno.serve(async (request) => {
       return Response.json({ ok: false, error: 'Informe o termo exato' }, { status: 400 });
     }
 
+    if (body.discovery_offer === true) {
+      const products = await base44.asServiceRole.entities.Product.filter({amazon_account_id:body.amazon_account_id,asin:body.asin,sku:body.sku},'-updated_date',20);
+      const product = products.find(p=>p.status!=='archived');
+      const campaigns = await base44.asServiceRole.entities.Campaign.filter({amazon_account_id:body.amazon_account_id,asin:body.asin},null,1000);
+      const eligibility = product ? kickoffDiscovery(product,campaigns,[]) : {status:'blocked',reasons:['Produto não encontrado.']};
+      if (eligibility.status !== 'ready') return Response.json({ok:false,error:eligibility.reasons.join(' ') || 'Produto já possui campanha ativa.'},{status:409});
+    }
     const slot = nextSlot();
     const existing = await base44.asServiceRole.entities.ProductKickoffQueue.filter(
       {

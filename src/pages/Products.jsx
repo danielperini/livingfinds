@@ -6,6 +6,7 @@ import KickoffModal from '@/components/products/KickoffModal';
 import KickoffWithQueueCleanModal from '@/components/products/KickoffWithQueueCleanModal';
 import AcceleratorModal from '@/components/products/AcceleratorModal';
 import RestockedAlert from '@/components/products/RestockedAlert';
+import DailyKickoffDiscovery from '@/components/products/DailyKickoffDiscovery';
 import HighAdherenceAlert from '@/components/products/HighAdherenceAlert';
 import CampaignDivergenceBadge from '@/components/products/CampaignDivergenceBadge';
 import ProductRow, {
@@ -643,6 +644,7 @@ export default function Products({ externalRefreshTrigger }) {
       )}
 
       {!loading && account && <HighAdherenceAlert accountId={account.id} />}
+      {!loading && account && <DailyKickoffDiscovery products={products} accounts={accounts} onKickoff={openKickoff} onRefresh={load} />}
 
       {!loading && restockedProducts.length > 0 && (
         <RestockedAlert products={restockedProducts} account={account} onDone={load} />

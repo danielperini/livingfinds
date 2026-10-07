@@ -2,9 +2,10 @@ export const MIN_ADVERTISING_STOCK = 1;
 
 export function availableAdsStock(product: any): number {
   if (product?.status === 'archived' || product?.catalog_sync_status === 'duplicate') return -1;
-  // fba_inventory is totalQuantity (reserved/inbound included), not sellable stock.
+  // User-selected inventory policy: prefer the catalog's FBA balance.
+  // Offer buyability is verified separately; inventory alone never proves it.
   if (['mapping_conflict', 'invalid_inventory', 'not_found'].includes(product?.catalog_sync_status)) return -1;
-  const raw = product?.available_quantity ?? product?.fulfillable_quantity;
+  const raw = product?.fba_inventory ?? product?.available_quantity ?? product?.fulfillable_quantity;
   if (raw === null || raw === undefined || raw === '' || typeof raw === 'boolean') return -1;
   const value = Number(raw);
   return Number.isInteger(value) && value >= 0 ? value : -1;

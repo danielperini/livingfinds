@@ -2,6 +2,13 @@
   "timezone": "America/Sao_Paulo",
   "jobs": [
     {
+      "name": "Daily new product kickoff discovery - 07:05 BRT",
+      "function": "discoverDailyKickoffProducts",
+      "cron": "5 7 * * *",
+      "run_on_startup": true,
+      "payload": { "_service_role": true, "trigger_type": "daily_product_discovery" }
+    },
+    {
       "name": "Sellable inventory kickoff and stock pauses - every 15 minutes",
       "function": "checkInventoryChangesAndKickoff",
       "cron": "3,18,33,48 * * * *",

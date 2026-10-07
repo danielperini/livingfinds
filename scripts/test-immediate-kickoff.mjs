@@ -8,6 +8,20 @@ import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { canonicalSkuRecord, recoveredOfferLockPatch } from '../base44/shared/catalogRecoveryPolicy.ts';
 import { campaignMatchesProduct } from '../base44/shared/productCampaignPauseGuard.ts';
+import { kickoffDiscovery } from '../base44/shared/productDiscoveryPolicy.ts';
+
+test('new microphone with FBA 20 and available zero is discovered without sales history', () => {
+  const p={amazon_account_id:'a1',sku:'FBA-0122',asin:'B0HLMF8PPD',fba_inventory:20,available_quantity:0,
+    catalog_sync_status:'success',last_catalog_sync_at:new Date().toISOString(),offer_active:true,listing_buyable:true,
+    ads_last_eligibility_check_at:new Date().toISOString(),ads_scope_status:'authorized',cost_confirmed:true};
+  assert.equal(kickoffDiscovery(p,[],[]).status,'ready');
+  assert.equal(kickoffDiscovery({...p,cost_confirmed:false},[],[]).status,'blocked');
+  assert.equal(kickoffDiscovery({...p,listing_buyable:false},[],[]).status,'blocked');
+  assert.equal(kickoffDiscovery(p,[{...p,state:'enabled'}],[]).status,'covered');
+  assert.equal(kickoffDiscovery(p,[],[{...p,status:'scheduled'}]).status,'queued');
+  assert.equal(kickoffDiscovery({...p,campaign_pause_lock:true},[],[]).status,'blocked');
+  assert.equal(kickoffDiscovery(p,[{...p,amazon_account_id:'another',state:'enabled'}],[]).status,'ready');
+});
 
 test('duplicate SKU recovery preserves confirmed cost record and rejects different ASIN', () => {
   const a={id:'a',asin:'B0GNW1Q6V3',cost_confirmed:true}, b={id:'b',asin:a.asin};
@@ -31,7 +45,7 @@ registerHooks({ resolve(specifier, context, next) {
 globalThis.Deno = { test };
 test('modified backend handlers have valid TypeScript syntax', async () => {
   for (const name of ['autoStockCampaignGuard', 'checkInventoryChangesAndKickoff', 'ensureActiveProductCampaignCoverage',
-    'processProductKickoffQueueV2', 'runImmediateSameSkuSearchTermHarvest', 'runUnifiedDecisionEngine', 'syncProductCatalogV2']) {
+    'processProductKickoffQueueV2', 'runImmediateSameSkuSearchTermHarvest', 'runUnifiedDecisionEngine', 'syncProductCatalogV2', 'discoverDailyKickoffProducts', 'scheduleProductKickoff']) {
     stripTypeScriptTypes(await readFile(`base44/functions/${name}/entry.ts`, 'utf8'));
   }
 });
@@ -50,9 +64,30 @@ async function handler(name, client) {
   return globalThis.__testHandler;
 }
 
+test('daily discovery updates one product repeatedly without creating campaigns or queue jobs', async () => {
+  const product={id:'mic',amazon_account_id:'a1',sku:'FBA-0122',asin:'B0HLMF8PPD',fba_inventory:20,available_quantity:0,
+    catalog_sync_status:'success',last_catalog_sync_at:new Date().toISOString(),cost_confirmed:false};
+  const calls=[],updates=[];
+  const client={auth:{isAuthenticated:async()=>true},asServiceRole:{entities:{
+    AmazonAccount:{filter:async()=>[{id:'a1'}]},
+    Product:{filter:async()=>[product],update:async(id,patch)=>{updates.push(id);Object.assign(product,patch);}},
+    Campaign:{filter:async()=>[]},ProductKickoffQueue:{filter:async()=>[]},
+  },functions:{invoke:async(name)=>{calls.push(name);return {data:{ok:true}};}}}};
+  const run=await handler('discoverDailyKickoffProducts',client);
+  const request=()=>new Request('https://test.invalid',{method:'POST',body:JSON.stringify({amazon_account_id:'a1'})});
+  const first=await (await run(request())).json();
+  const discoveredAt=product.kickoff_discovered_at;
+  const second=await (await run(request())).json();
+  assert.equal(first.ok,true);assert.equal(second.results[0].candidates.length,1);
+  assert.equal(product.kickoff_discovered_at,discoveredAt);
+  assert.equal(product.kickoff_discovery_status,'blocked');
+  assert.deepEqual(updates,['mic','mic']);
+  assert.ok(calls.every(n=>['syncProductCatalogV2','syncAmazonOfferAvailability'].includes(n)));
+});
+
 function fixture({ syncOk = true, queueFails = false, paused = false } = {}) {
   const calls = [];
-  const product = { id: 'p1', asin: 'B0GNW1Q6V3', sku: 'SKU-002314V', available_quantity: 1,
+  const product = { id: 'p1', asin: 'B0GNW1Q6V3', sku: 'SKU-002314V', available_quantity: 1, cost_confirmed:true, ads_scope_status:'authorized',
     catalog_sync_status: 'success', last_catalog_sync_at: new Date().toISOString() };
   const entities = {
     AmazonAccount: { filter: async () => [{ id: 'a1' }] },

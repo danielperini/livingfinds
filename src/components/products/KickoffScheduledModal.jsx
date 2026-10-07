@@ -62,6 +62,7 @@ export default function KickoffScheduledModal({ product, account, onClose, onDon
         product_name: product.product_name || product.display_name || product.asin,
         mode,
         keyword: mode === 'manual_only' ? term.trim() : null,
+        discovery_offer: Boolean(product.kickoff_discovered_at),
         status: 'scheduled',
         queue_hour: slot.hour,
         queue_window: slot.window,

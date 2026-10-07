@@ -2,6 +2,10 @@
   "name": "Product",
   "type": "object",
   "properties": {
+    "kickoff_discovered_at": { "type": "string", "format": "date-time" },
+    "kickoff_discovery_checked_at": { "type": "string", "format": "date-time" },
+    "kickoff_discovery_status": { "type": "string", "enum": ["ready", "blocked", "queued", "covered", "excluded"] },
+    "kickoff_discovery_reasons": { "type": "array", "items": { "type": "string" } },
     "previous_available_quantity": { "type": "number", "description": "Quantidade vendável na sincronização anterior, excluindo reservado e trânsito." },
     "amazon_account_id": {
       "type": "string"

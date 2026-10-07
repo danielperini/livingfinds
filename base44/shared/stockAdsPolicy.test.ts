@@ -6,7 +6,7 @@ import { inventoryAvailable, campaignStateConfirmed, isStockCampaignPause } from
 Deno.test('missing, ambiguous and invalid inventory never becomes sellable or zero', () => {
   for (const quantity of [undefined, null, '', true, -1, 1.5, 'bad']) {
     assertEquals(inventoryAvailable({ totalQuantity: 60, inventoryDetails: { fulfillableQuantity: quantity } }), null);
-    assertEquals(stockAdsDecision({ available_quantity: quantity, fba_inventory: 60 }), 'unknown');
+    assertEquals(stockAdsDecision({ fba_inventory: quantity }), 'unknown');
   }
   for (const status of ['mapping_conflict', 'invalid_inventory', 'not_found']) {
     assertEquals(stockAdsDecision({ available_quantity: 60, catalog_sync_status: status }), 'unknown');
@@ -54,7 +54,8 @@ Deno.test('does not guess when inventory is unknown', () => {
   assertEquals(stockAdsDecision({ available_quantity: -1 }), 'unknown');
 });
 
-Deno.test('explicit zero available stock takes precedence over FBA stock', () => {
-  assertEquals(stockAdsDecision({ available_quantity: 0, fba_inventory: 60 }), 'pause');
-  assertEquals(stockAdsDecision({ fba_inventory: 1 }), 'unknown');
+Deno.test('FBA balance takes precedence according to the selected stock policy', () => {
+  assertEquals(stockAdsDecision({ available_quantity: 0, fba_inventory: 20 }), 'activate');
+  assertEquals(stockAdsDecision({ available_quantity: 20, fba_inventory: 0 }), 'pause');
+  assertEquals(stockAdsDecision({ fba_inventory: 1 }), 'activate');
 });

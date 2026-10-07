@@ -125,7 +125,7 @@ Deno.serve(async (req) => {
       const alreadyQueued = inQueueAsins.has(asin);
 
       // ── CASO 1: Produto novo com estoque, sem campanha ─────────────────
-      if (qty > 0 && !hasActiveCampaign && !hasPausedCampaign && !alreadyQueued) {
+      if (qty > 0 && product.cost_confirmed === true && product.ads_scope_status === 'authorized' && !hasActiveCampaign && !hasPausedCampaign && !alreadyQueued) {
         stats.new_products_found++;
         if (!dryRun) {
           await base44.asServiceRole.entities.ProductKickoffQueue.create({

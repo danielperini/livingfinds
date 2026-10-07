@@ -1,6 +1,7 @@
 import { recoveredOfferLockPatch } from '../../shared/catalogRecoveryPolicy.ts';
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { listingOfferStatus } from '../../shared/listingOfferStatus.ts';
+import { availableAdsStock } from '../../shared/stockAdsPolicy.ts';
 
 const MARKETPLACE_ID = Deno.env.get('AMAZON_MARKETPLACE_ID') || 'A2Q3Y263D00KWC';
 
@@ -119,7 +120,7 @@ Deno.serve(async (request) => {
             : observed;
           const effectiveQuantity = signal.fulfillment_channel === 'MFN'
             ? Number(signal.mfn_quantity || 0)
-            : Number(product.available_quantity ?? product.fba_inventory ?? 0);
+            : availableAdsStock(product);
           const eligibility = observed.listing_status_confirmed === false ? (product.ads_eligibility_status || 'verification_pending')
             : signal.listing_suppressed ? 'listing_suppressed'
             : !signal.offer_active ? 'offer_inactive'
