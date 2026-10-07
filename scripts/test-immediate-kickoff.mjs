@@ -45,11 +45,11 @@ registerHooks({ resolve(specifier, context, next) {
 globalThis.Deno = { test };
 test('modified backend handlers have valid TypeScript syntax', async () => {
   for (const name of ['autoStockCampaignGuard', 'checkInventoryChangesAndKickoff', 'ensureActiveProductCampaignCoverage',
-    'processProductKickoffQueueV2', 'runImmediateSameSkuSearchTermHarvest', 'runUnifiedDecisionEngine', 'syncProductCatalogV2', 'discoverDailyKickoffProducts', 'scheduleProductKickoff']) {
+    'processProductKickoffQueueV2', 'runImmediateSameSkuSearchTermHarvest', 'runUnifiedDecisionEngine', 'syncProductCatalogV2', 'discoverDailyKickoffProducts', 'scheduleProductKickoff', 'runIntradaySalesRecovery']) {
     stripTypeScriptTypes(await readFile(`base44/functions/${name}/entry.ts`, 'utf8'));
   }
 });
-for (const name of ['stockAdsPolicy', 'campaignCoverageEligibility', 'searchTermHarvestPolicy', 'profitGuardPolicy', 'economicEvidencePolicy']) {
+for (const name of ['stockAdsPolicy', 'campaignCoverageEligibility', 'searchTermHarvestPolicy', 'profitGuardPolicy', 'economicEvidencePolicy', 'paidTrafficTrend']) {
   await import(`../base44/shared/${name}.test.ts`);
 }
 

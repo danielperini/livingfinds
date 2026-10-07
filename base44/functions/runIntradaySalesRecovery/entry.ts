@@ -1,3 +1,5 @@
+import { paidTrafficTrend } from '../../shared/paidTrafficTrend.ts';
+import { hasFreshAdsInventory } from '../../shared/stockAdsPolicy.ts';
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { productAdsEligibility } from '../../shared/productAdsEligibility.ts';
 import { canonicalAccountSalesByDate } from '../../shared/salesDailyIntegrity.ts';
@@ -52,7 +54,7 @@ function median(values: number[]) {
 
 function freshWithin(value: unknown, minutes: number) {
   const timestamp = new Date(String(value || '')).getTime();
-  return Number.isFinite(timestamp) && Date.now() - timestamp <= minutes * 60000;
+  return Number.isFinite(timestamp) && Date.now() >= timestamp && Date.now() - timestamp <= minutes * 60000;
 }
 
 function targetMer(settings: any) {
@@ -123,6 +125,7 @@ Deno.serve(async (request) => {
       ]);
 
       const settings = settingsRows[0] || {};
+      const trafficTrend = paidTrafficTrend(dailyMetrics, today);
       const targetAcos = Math.max(1, n(settings.target_acos || settings.acos_target, 15));
       const merTarget = targetMer(settings);
       const minCampaignBudget = Math.max(5, n(settings.minimum_campaign_budget, 5));
@@ -234,7 +237,7 @@ Deno.serve(async (request) => {
         const asin = asinForCampaign(campaign, productAds);
         const product = productByAsin.get(asin);
         const eligibility = productAdsEligibility(product);
-        if (!id || !asin || !eligibility.eligible) continue;
+        if (!id || !asin || !eligibility.eligible || !hasFreshAdsInventory(product)) continue;
         const econ = econByAsin.get(asin) || {};
         const economicConfidence = confidence01(econ.final_economic_confidence ?? econ.economic_data_confidence ?? econ.confidence);
         const spApiDataFresh = freshWithin(product?.last_confirmed_at || product?.last_synced_at || product?.updated_at, 24 * 60);
@@ -340,7 +343,7 @@ Deno.serve(async (request) => {
               ...admission,
             },
           }),
-          source_function: SOURCE, model_version: 'sales-recovery-v1.4-sales-volume',
+          source_function: SOURCE, model_version: 'sales-recovery-v1.5-traffic-diagnosis',
           created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
         });
       };
@@ -526,7 +529,7 @@ Deno.serve(async (request) => {
         ? { ok: true, recommended: true, owner: 'runUnifiedDecisionEngine', reason: 'revenue_below_intraday_floor' }
         : { ok: true, skipped: true, owner: 'runUnifiedDecisionEngine' };
 
-      await base44.asServiceRole.entities.SyncExecutionLog.create({
+      if (body.dry_run !== true) await base44.asServiceRole.entities.SyncExecutionLog.create({
         amazon_account_id: aid, sync_type: 'intraday_sales_recovery', status: 'completed', source_function: SOURCE,
         records_processed: campaigns.length, records_imported: queued.length,
         message: recoveryActive || competitiveCoverageActive
@@ -537,6 +540,7 @@ Deno.serve(async (request) => {
 
       reports.push({
         amazon_account_id: aid, date: today, hour_brt: hour,
+        paid_traffic_trend: trafficTrend,
         recovery_active: recoveryActive, competitive_coverage_active: competitiveCoverageActive, growth_allowed: growthAllowed,
         revenue_today: r2(observedRevenueToday), sales_source: todaySales?.source || null,
         baseline_daily_revenue_median_14d: r2(baselineRevenue), expected_revenue_floor_now: r2(expectedFloor), revenue_ratio_to_floor: r2(expectedFloor > 0 ? observedRevenueToday / expectedFloor : 1),
