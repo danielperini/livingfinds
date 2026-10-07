@@ -341,7 +341,7 @@ export function evaluateHarvestCandidate(input: {
   
   if (aggregate.sameSkuOrders < 1 || aggregate.sameSkuSales <= 0) return { eligible: false, reason: 'no_same_sku_sale', sameSkuAcos };
   if (!input.inStock) return { eligible: false, reason: 'out_of_stock', sameSkuAcos };
-  if (!input.economicsActionable || input.safeBid == null) return { eligible: false, reason: 'unsafe_or_missing_economics', sameSkuAcos };
+  if (!input.economicsActionable || input.safeBid == null || input.breakEvenAcos == null || input.breakEvenAcos <= 0) return { eligible: false, reason: 'unsafe_or_missing_economics', sameSkuAcos };
   if (input.breakEvenAcos && sameSkuAcos != null && sameSkuAcos >= input.breakEvenAcos) return { eligible: false, reason: 'same_sku_acos_above_break_even', sameSkuAcos };
   if (input.alreadyExact) return { eligible: false, reason: 'exact_keyword_already_active', sameSkuAcos };
   if (input.alreadyPromoted) return { eligible: false, reason: 'promotion_already_registered', sameSkuAcos };
