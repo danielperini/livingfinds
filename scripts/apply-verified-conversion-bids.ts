@@ -20,11 +20,11 @@ for(const g of [...groups.values()].sort((a,b)=>b.spend-a.spend)){
  if(!reduce&&!increase)continue;
  const c=(await ads('/sp/campaigns/list','POST',{campaignIdFilter:{include:[g.campaign]},maxResults:100},'spCampaign')).campaigns?.[0];if(c?.state!=='ENABLED')continue;
  const type=g.type==='targets'?'spTargetingClause':'spKeyword',idKey=g.type==='targets'?'targetId':'keywordId',filterKey=g.type==='targets'?'targetIdFilter':'keywordIdFilter';
- const data=await ads('/sp/'+g.type+'/list','POST',{[filterKey]:{include:[g.target]},maxResults:100},type);const remote=data[g.type]?.find(x=>String(x[idKey])===g.target);if(remote?.state!=='ENABLED'||String(remote.campaignId)!==g.campaign)continue;
- const old=Number(remote.bid);if(!(old>0))continue;const safe=Number(e.safe_max_cpc||0);if(increase&&!(safe>old))continue;
+ const data=await ads('/sp/'+g.type+'/list','POST',{[filterKey]:{include:[g.target]},maxResults:100},type);const remote=data[g.type==='targets'?'targetingClauses':'keywords']?.find(x=>String(x[idKey])===g.target);if(remote?.state!=='ENABLED'||String(remote.campaignId)!==g.campaign)continue;
+ let old=Number(remote.bid);if(!(old>0)&&g.type==='targets'){const ag=await ads('/sp/adGroups/list','POST',{adGroupIdFilter:{include:[remote.adGroupId]},maxResults:100},'spAdGroup');old=Number(ag.adGroups?.find(x=>String(x.adGroupId)===String(remote.adGroupId))?.defaultBid);}if(!(old>0))continue;const safe=Number(e.safe_max_cpc||0);if(increase&&!(safe>old))continue;
  const bid=Math.floor((reduce?Math.max(0.1,old*0.8):Math.min(old*1.1,safe,1))*100)/100;if(Math.abs(bid-old)<0.02)continue;
- await ads('/sp/'+g.type,'PUT',{[g.type]:[{[idKey]:g.target,bid}]},type);
- const after=await ads('/sp/'+g.type+'/list','POST',{[filterKey]:{include:[g.target]},maxResults:100},type);const actual=after[g.type]?.find(x=>String(x[idKey])===g.target);const confirmed=Number(actual?.bid)===bid;
+ await ads('/sp/'+g.type,'PUT',{[g.type==='targets'?'targetingClauses':'keywords']:[{[idKey]:g.target,bid}]},type);
+ const after=await ads('/sp/'+g.type+'/list','POST',{[filterKey]:{include:[g.target]},maxResults:100},type);const actual=after[g.type==='targets'?'targetingClauses':'keywords']?.find(x=>String(x[idKey])===g.target);const confirmed=Number(actual?.bid)===bid;
  const evidence={...g,old_bid:old,new_bid:bid,confirmed,acos,break_even_acos:policy.break_even_acos};results.push(evidence);console.log('BID_RESULT='+JSON.stringify(evidence));
  if(confirmed){changes++;await db.AdsBidChangeLog.create({amazon_account_id:aid,campaign_id:g.campaign,keyword_id:g.target,target_id:g.target,asin:g.asin,sku:g.sku,old_bid:old,new_bid:bid,direction:reduce?'decrease':'increase',reason:'User conversion optimization; closed 30-day same-SKU report evidence',source:'user_conversion_review',created_at:new Date().toISOString(),amazon_confirmed:true});
  const entity=g.type==='keywords'?db.Keyword:db.ProductTarget;const records=await entity.filter({amazon_account_id:aid,[g.type==='keywords'?'keyword_id':'target_id']:g.target});for(const row of records)await entity.update(row.id,{bid,current_bid:bid,last_sync_at:new Date().toISOString()});}
