@@ -109,17 +109,21 @@ Deno.serve(async (request) => {
         adGroups: [{ name: `AG | AUTO | ${asin}`, campaignId, defaultBid: bid, state: 'ENABLED' }],
       }, 'application/vnd.spAdGroup.v3+json');
       const adGroupId = idFrom(adGroupResponse, 'adGroups', 'adGroupId');
+      let productAdId = null;
       if (adGroupId) {
         await wait(14000);
-        await ads(base44, accountId, 'createAutoProductAd', 'POST', '/sp/productAds', {
+        const productAdResponse = await ads(base44, accountId, 'createAutoProductAd', 'POST', '/sp/productAds', {
           productAds: [{ campaignId, adGroupId, ...(product?.sku ? { sku: product.sku } : { asin }), state: 'ENABLED' }],
         }, 'application/vnd.spProductAd.v3+json');
+        productAdId = idFrom(productAdResponse, 'productAds', 'adId');
       }
       autoCampaign = await base44.asServiceRole.entities.Campaign.create({
         amazon_account_id: accountId, campaign_id: String(campaignId), asin, sku: product.sku || null,
-        name, campaign_name: name, campaign_type: 'SP', targeting_type: 'AUTO', state: 'enabled', status: 'enabled',
+        name, campaign_name: name, campaign_type: 'SP', targeting_type: 'AUTO', state: 'enabled', status: productAdId ? 'enabled' : 'incomplete',
+        ad_group_id: adGroupId ? String(adGroupId) : null, ad_id: productAdId ? String(productAdId) : null,
         daily_budget: budget, created_by_app: true, launch_phase: 'new', created_at: now, synced_at: now,
       });
+      if (!adGroupId || !productAdId) return Response.json({ ok: false, incomplete: true, campaign_id: String(campaignId), error: 'Campanha criada, mas a Amazon ainda não confirmou o grupo e o anúncio do produto.' });
     }
 
     const strategy = {

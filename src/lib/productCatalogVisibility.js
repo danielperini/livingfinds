@@ -1,3 +1,4 @@
+import { confirmedFbaOverride } from '../../base44/shared/fbaStockOverride.ts';
 export function catalogSyncTime(product) {
   return Date.parse(product.last_catalog_sync_at || product.synced_at || product.last_sync_at || '') || 0;
 }
@@ -16,7 +17,7 @@ export function visibleCatalogProducts(products) {
 
 export function catalogStockStatus(product) {
   if (product.status === 'archived') return 'archived';
-  const raw = product.fba_inventory;
+  const raw = confirmedFbaOverride(product) ?? product.fba_inventory;
   if (raw == null || raw === '' || typeof raw === 'boolean') return 'unknown';
   const quantity = Number(raw);
   if (!Number.isInteger(quantity) || quantity < 0) return 'unknown';

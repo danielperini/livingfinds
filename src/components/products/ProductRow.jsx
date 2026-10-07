@@ -1,3 +1,4 @@
+import { confirmedFbaOverride } from '../../../base44/shared/fbaStockOverride.ts';
 import CopyProductKeywords from './CopyProductKeywords';
 import { catalogStockStatus, catalogStockFreshness } from '@/lib/productCatalogVisibility';
 import { useState } from 'react';
@@ -151,9 +152,10 @@ function CampaignDropdown({ product }) {
 export function OfferStatusBadge({ product }) {
   const status = offerStatus(product);
   const freshness = stockFreshness(product);
-  const fba = Number(product?.fba_inventory ?? 0);
+  const override = confirmedFbaOverride(product);
+  const fba = override ?? Number(product?.fba_inventory ?? 0);
 
-  const staleTag = freshness === 'stale' && (
+  const staleTag = override !== null ? (<span className="block text-[11px] text-[#B45309] mt-1">Confirmado pelo vendedor · API: {product.fba_inventory ?? '—'} disponíveis<br />Válido até {new Date(product.fba_stock_override.expires_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}</span>) : freshness === 'stale' && (
     <span className="block text-[11px] text-[#B45309] mt-1">Desatualizado</span>
   );
 

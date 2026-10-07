@@ -2,6 +2,7 @@
   "name": "Product",
   "type": "object",
   "properties": {
+    "fba_stock_override": { "type": "object", "description": "Saldo confirmado explicitamente pelo vendedor; quantidade, origem, confirmação e expiração máxima de 24h, sem alterar o saldo original SP-API." },
     "kickoff_strategy": { "type": "object", "description": "Plano AUTO, descoberta diária e promoção de vencedores validada pelo motor." },
     "kickoff_discovered_at": { "type": "string", "format": "date-time" },
     "kickoff_discovery_checked_at": { "type": "string", "format": "date-time" },

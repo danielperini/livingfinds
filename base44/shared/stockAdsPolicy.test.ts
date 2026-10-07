@@ -59,3 +59,13 @@ Deno.test('FBA balance takes precedence according to the selected stock policy',
   assertEquals(stockAdsDecision({ available_quantity: 20, fba_inventory: 0 }), 'pause');
   assertEquals(stockAdsDecision({ fba_inventory: 1 }), 'activate');
 });
+
+Deno.test('seller confirmation permits temporary FBA override without changing Amazon quantity', async () => {
+  const { confirmedFbaOverride } = await import('./fbaStockOverride.ts');
+  const now = Date.now();
+  const product = { fba_inventory: 0, fba_stock_override: { source: 'seller_confirmed', quantity: 20, confirmed_at: new Date(now - 1000).toISOString(), expires_at: new Date(now + 3600000).toISOString() } };
+  assertEquals(stockAdsDecision(product), 'activate');
+  assertEquals(product.fba_inventory, 0);
+  assertEquals(confirmedFbaOverride(product, now + 3600001), null);
+  assertEquals(confirmedFbaOverride({ ...product, fba_stock_override: { ...product.fba_stock_override, source: 'inferred_total' } }, now), null);
+});

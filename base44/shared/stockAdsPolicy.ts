@@ -1,3 +1,4 @@
+import { confirmedFbaOverride } from './fbaStockOverride.ts';
 export const MIN_ADVERTISING_STOCK = 1;
 
 export function availableAdsStock(product: any): number {
@@ -5,7 +6,7 @@ export function availableAdsStock(product: any): number {
   // User-selected inventory policy: use only the catalog's available FBA balance.
   // Offer buyability is verified separately; inventory alone never proves it.
   if (['mapping_conflict', 'invalid_inventory', 'not_found'].includes(product?.catalog_sync_status)) return -1;
-  const raw = product?.fba_inventory;
+  const raw = confirmedFbaOverride(product) ?? product?.fba_inventory;
   if (raw === null || raw === undefined || raw === '' || typeof raw === 'boolean') return -1;
   const value = Number(raw);
   return Number.isInteger(value) && value >= 0 ? value : -1;
