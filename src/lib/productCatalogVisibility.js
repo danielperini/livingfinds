@@ -44,3 +44,10 @@ export async function loadAccountProducts(entity, accountId) {
     if (batch.length < limit) return result;
   }
 }
+
+export function productNeedsRecovery(product) {
+  const offerActive = product.offer_active === true || product.listing_buyable === true || product.status === 'active';
+  return !offerActive
+    || ['paused', 'incomplete'].includes(String(product.campaign_status || '').toLowerCase())
+    || ['no_delivery', 'dropout', 'stalled'].includes(String(product.delivery_status || '').toLowerCase());
+}

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { visibleCatalogProducts, loadAccountProducts } from '@/lib/productCatalogVisibility';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { visibleCatalogProducts, loadAccountProducts, productNeedsRecovery } from '@/lib/productCatalogVisibility';
 import { base44 } from '@/api/base44Client';
 import { ChevronDown, ChevronUp, Filter, Loader2, Package, Pause, Search, X, TrendingUp, CheckSquare, Square } from 'lucide-react';
 import { useAmazonPropagation } from '@/hooks/useAmazonPropagation';
@@ -395,6 +395,7 @@ export default function Products({ externalRefreshTrigger }) {
       const active = isCampaignActiveFn(product);
       const matchesFilter =
         filter === 'all' ||
+        (filter === 'new_products' && product.is_new_asin === true) ||
         (filter === 'offer_active' && offerStatus(product) === 'active') ||
         (filter === 'low_stock' && offerStatus(product) === 'low_stock') ||
         (filter === 'stale_stock' && stockFreshness(product) !== 'fresh') ||
@@ -405,7 +406,7 @@ export default function Products({ externalRefreshTrigger }) {
         (filter === 'restocked' && Number(product.fba_inventory || 0) > 0 && (product.previous_inventory_status === 'out_of_stock' || (product.campaign_status === 'paused' && product.pause_reason?.includes('stock'))));
       return matchesSearch && matchesFilter;
     });
-    return applySort(base, sortBy, colSort);
+    return applySort(base, sortBy, colSort).sort((a, b) => Number(productNeedsRecovery(a)) - Number(productNeedsRecovery(b)));
   }, [visibleProducts, search, filter, sortBy, colSort]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -609,7 +610,7 @@ export default function Products({ externalRefreshTrigger }) {
       )}
 
       {!loading && account && <HighAdherenceAlert accountId={account.id} />}
-      {!loading && account && <DailyKickoffDiscovery products={products} accounts={accounts} onKickoff={openKickoff} onRefresh={load} />}
+
 
       {!loading && restockedProducts.length > 0 && (
         <RestockedAlert products={restockedProducts} account={account} onDone={load} />
@@ -668,6 +669,7 @@ export default function Products({ externalRefreshTrigger }) {
           <Filter className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
           {[
             { key: 'all', label: `Todos (${visibleProducts.length})` },
+            { key: 'new_products', label: `Novos (${visibleProducts.filter(p => p.is_new_asin).length})` },
             { key: 'offer_active', label: `Estoque OK (${activeOffers})` },
             { key: 'low_stock', label: `Baixo Estoque (${lowStock})` },
             { key: 'stale_stock', label: `Desatualizado (${staleStock})` },
@@ -758,7 +760,9 @@ export default function Products({ externalRefreshTrigger }) {
                 </tr>
               </thead>
               <tbody>
-                {paginated.map(product => (
+                {paginated.map((product, index) => (
+                  <Fragment key={product.id}>
+                    {(index === 0 || productNeedsRecovery(product) !== productNeedsRecovery(paginated[index - 1])) && <tr className="bg-slate-100"><th colSpan={6} className="px-4 py-3 text-left text-slate-800">{productNeedsRecovery(product) ? 'Inativos, pausados e produtos a recuperar' : 'Produtos com oferta ativa'}</th></tr>}
                   <ProductRow
                     key={product.id}
                     product={product}
@@ -786,6 +790,7 @@ export default function Products({ externalRefreshTrigger }) {
                       />
                     ) : null}
                   />
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -802,6 +807,8 @@ export default function Products({ externalRefreshTrigger }) {
           )}
         </div>
       )}
+
+      {!loading && account && <DailyKickoffDiscovery products={products} accounts={accounts} onKickoff={openKickoff} onRefresh={load} />}
 
       {kickoffProduct && kickoffStuckItems && (
         <KickoffWithQueueCleanModal

@@ -4,6 +4,7 @@ import { base44 } from '@/api/base44Client';
 export default function DailyKickoffDiscovery({ products, accounts, onKickoff, onRefresh }) {
   const [busy,setBusy] = useState(false);
   const [message,setMessage] = useState('');
+  const [expanded,setExpanded] = useState(false);
   const candidates=products.filter(p=>['ready','blocked','queued'].includes(p.kickoff_discovery_status) && p.status!=='archived');
   async function scan() {
     setBusy(true);setMessage('');
@@ -26,12 +27,13 @@ export default function DailyKickoffDiscovery({ products, accounts, onKickoff, o
     </div>
     {message && <p role="status" className="text-sm">{message}</p>}
     {!candidates.length && <p className="text-sm">Nenhuma sugestão pendente na última varredura. Use “Verificar novos produtos” para atualizar.</p>}
-    {candidates.map(p=><div key={p.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-black/10 p-3">
+    {(expanded?candidates:candidates.slice(0,8)).map(p=><div key={p.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-black/10 p-3">
       <div><p className="font-medium">{p.product_name || p.display_name || p.asin}</p>
-        <p className="text-sm">{p.sku} · {p.asin} · FBA: {p.fba_inventory ?? p.available_quantity ?? 'não confirmado'}</p>
+        <p className="text-sm">{p.sku} · {p.asin} · FBA: {p.fba_inventory ?? 'não confirmado'}</p>
         <p className="text-sm opacity-80">{p.kickoff_discovery_status==='ready'?'Pronto para configurar o kickoff.':(p.kickoff_discovery_reasons||[]).join(' ')}</p>
       </div>
       <button type="button" disabled={p.kickoff_discovery_status!=='ready'} onClick={()=>onKickoff(p)} className="rounded-lg border px-3 py-2 disabled:opacity-40">Configurar kickoff</button>
     </div>)}
+    {candidates.length>8 && <button type="button" onClick={()=>setExpanded(!expanded)} className="underline">{expanded?'Mostrar menos':`Mostrar todos os ${candidates.length} produtos`}</button>}
   </section>;
 }

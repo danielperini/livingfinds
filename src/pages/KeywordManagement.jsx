@@ -50,6 +50,7 @@ export default function KeywordManagement() {
   const [negatives, setNegatives] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(true);
+  const campaignScope = new URLSearchParams(window.location.search).get('campaign_id') || '';
   const [activeTab, setActiveTab] = useState('search');
   const [actionMsg, setActionMsg] = useState(null);
   const [actionLoading, setActionLoading] = useState(null);
@@ -68,7 +69,8 @@ export default function KeywordManagement() {
     try {
       const me = await base44.auth.me();
       const accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
-      const acc = accounts[0] || (await base44.entities.AmazonAccount.list('-updated_date', 1))[0];
+      const requestedAccount = new URLSearchParams(window.location.search).get('account_id');
+      const acc = accounts.find(a => a.id === requestedAccount) || accounts[0] || (await base44.entities.AmazonAccount.list('-updated_date', 1))[0];
       setAccount(acc || null);
       if (!acc) return;
 
@@ -98,17 +100,17 @@ export default function KeywordManagement() {
   const visibleKeywords = useMemo(() => keywords
     .filter((term) => {
       const campaignId = idOfTermCampaign(term);
-      return !campaignId || activeCampaignIds.has(campaignId);
+      return (!campaignScope || campaignId === campaignScope) && (!campaignId || activeCampaignIds.has(campaignId));
     })
     .map((term) => {
       const metrics = metricsOf(term);
       return { ...term, ...metrics, _displayTerm: termText(term), _class: classifyTerm(term, acosTarget) };
-    }), [keywords, activeCampaignIds, acosTarget]);
+    }), [keywords, activeCampaignIds, acosTarget, campaignScope]);
 
   const visibleNegatives = useMemo(() => negatives.filter((item) => {
     const campaignId = String(item?.campaign_id || '').trim();
-    return !campaignId || activeCampaignIds.has(campaignId);
-  }), [negatives, activeCampaignIds]);
+    return (!campaignScope || campaignId === campaignScope) && (!campaignId || activeCampaignIds.has(campaignId));
+  }), [negatives, activeCampaignIds, campaignScope]);
 
   const eligibleAutoNegatives = useMemo(() => {
     const existing = new Set(visibleNegatives.filter((item) => item.status !== 'rejected').map(suggestionKey));

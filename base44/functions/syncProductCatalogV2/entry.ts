@@ -132,6 +132,7 @@ Deno.serve(async (req) => {
       const patch:any = {
         amazon_account_id: body.amazon_account_id,
         asin, sku: sku || existing?.sku || null,
+        product_name: item.productName || existing?.product_name || sku || asin,
         previous_inventory_status: existing?.inventory_status || null,
         previous_fba_inventory: num(existing?.fba_inventory),
         previous_available_quantity: existing?.available_quantity ?? null,
@@ -154,7 +155,7 @@ Deno.serve(async (req) => {
       } else {
         const createdProduct = await base44.asServiceRole.entities.Product.create({
           ...patch,
-          product_name: sku || asin,
+          product_name: item.productName || sku || asin,
           display_name: '',
           is_new_asin: true,
           has_campaign: false,

@@ -1,3 +1,4 @@
+import CopyProductKeywords from './CopyProductKeywords';
 import { catalogStockStatus, catalogStockFreshness } from '@/lib/productCatalogVisibility';
 import { useState } from 'react';
 import { base44 } from '@/api/base44Client';
@@ -81,7 +82,7 @@ function CampaignDropdown({ product }) {
             const cid = c.campaign_id || c.id;
             if (!seen.has(cid)) { seen.add(cid); unique.push(c); }
           }
-          setCampaigns(unique.filter(c => String(c.state || c.status || '').toLowerCase() !== 'archived'));
+          setCampaigns(unique.filter(c => String(c.state || c.status || '').toLowerCase() !== 'archived' && (!c.sku || String(c.sku).toLowerCase() === String(product.sku).toLowerCase())));
         }
       } finally {
         setLoading(false);
@@ -128,7 +129,8 @@ function CampaignDropdown({ product }) {
             const acos = Number(c.acos || 0);
             return (
               <div key={id || i} className="text-xs leading-snug">
-                <p className="text-[#0D1117] font-medium truncate max-w-[260px]" title={name}>{name}</p>
+                <a href={`/KeywordManagement?campaign_id=${encodeURIComponent(id)}&account_id=${encodeURIComponent(product.amazon_account_id)}`} className="text-blue-600 font-medium underline block max-w-[260px]" title={name}>{name}</a>
+                <CopyProductKeywords product={product} campaign={c} />
                 <div className="flex items-center gap-2 text-[11px] mt-0.5 flex-wrap">
                   <span className={`font-semibold ${statusColor(c)}`}>{statusLabel(c)}</span>
                   {id && <span className="font-mono text-[#6B7280]">...{String(id).slice(-8)}</span>}
@@ -258,7 +260,7 @@ function ContextualAction({ product, onKickoff, onToggleCampaign, loading, onCan
   const hasCampaign = productHasCampaign(product);
   const active = isCampaignActiveFn(product);
   const incomplete = isCampaignIncomplete(product);
-  const outOfStock = isConfirmedOutOfStock(product);
+  const outOfStock = !['active', 'low_stock'].includes(offerStatus(product));
   const pausedByStock = productPausedByStock(product);
   const kickoffPending = !hasCampaign && !incomplete &&
     (String(product?.queue_status || '').toLowerCase() === 'scheduled' ||
