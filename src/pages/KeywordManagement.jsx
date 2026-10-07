@@ -13,8 +13,21 @@ const CLASSIFICATION_CONFIG = {
   no_data: { label: 'Sem dados', color: 'text-slate-400 bg-slate-400/10 border-slate-400/20' },
 };
 
+async function loadAllRows(entity, filter) {
+  const rows = [];
+  const seen = new Set();
+  for (let offset = 0; ; offset += 500) {
+    const page = await entity.filter(filter, 'id', 500, offset);
+    for (const row of page) {
+      if (seen.has(row.id)) throw new Error('Dados alterados durante a leitura. Atualize a página.');
+      seen.add(row.id);
+      rows.push(row);
+    }
+    if (page.length < 500) return rows;
+  }
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const idOfCampaign = (campaign) => String(campaign?.campaign_id || campaign?.amazon_campaign_id || campaign?.id || '').trim();
 const idOfTermCampaign = (term) => String(term?.campaign_id || term?.amazon_campaign_id || '').trim();
 const termText = (term) => String(term?.search_term || term?.keyword_text || term?.keyword || '').trim();
 const suggestionKey = (item) => `${String(item?.campaign_id || '').trim()}::${String(item?.keyword_text || '').trim().toLocaleLowerCase('pt-BR')}::exact`;
@@ -47,6 +60,7 @@ function campaignIsAutomatic(campaign, term) {
 export default function KeywordManagement() {
   const [account, setAccount] = useState(null);
   const [keywords, setKeywords] = useState([]);
+  const [configuredKeywords, setConfiguredKeywords] = useState([]);
   const [negatives, setNegatives] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -62,7 +76,6 @@ export default function KeywordManagement() {
   const [autoNegating, setAutoNegating] = useState(false);
   const [acosTarget, setAcosTarget] = useState(30);
   const fileInputRef = useRef(null);
-  const autoRunKeyRef = useRef('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -74,15 +87,17 @@ export default function KeywordManagement() {
       setAccount(acc || null);
       if (!acc) return;
 
-      const [rules, searchTerms, suggestions, loadedCampaigns] = await Promise.all([
+      const [rules, searchTerms, suggestions, loadedCampaigns, configured] = await Promise.all([
         base44.entities.BudgetRule.filter({ amazon_account_id: acc.id }),
-        base44.entities.SearchTerm.filter({ amazon_account_id: acc.id }, '-clicks', 2000),
-        base44.entities.NegativeKeywordSuggestion.filter({ amazon_account_id: acc.id }, '-created_date', 1000),
+        loadAllRows(base44.entities.SearchTerm, { amazon_account_id: acc.id }),
+        loadAllRows(base44.entities.NegativeKeywordSuggestion, { amazon_account_id: acc.id }),
         loadAllCampaigns(acc.id, {}, { includeExcluded: true }),
+        campaignScope ? loadAllRows(base44.entities.Keyword, { amazon_account_id: acc.id, campaign_id: campaignScope }) : Promise.resolve([]),
       ]);
 
       if (rules[0]?.target_acos) setAcosTarget(Number(rules[0].target_acos));
       setKeywords(searchTerms);
+      setConfiguredKeywords(configured.filter(k => String(k.state || k.status).toLowerCase() !== 'archived'));
       setNegatives(suggestions);
       setCampaigns(loadedCampaigns.filter((campaign) => !campaignIsArchived(campaign)));
     } catch (error) {
@@ -90,27 +105,27 @@ export default function KeywordManagement() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [campaignScope]);
 
   useEffect(() => { load(); }, [load]);
 
-  const campaignById = useMemo(() => new Map(campaigns.map((campaign) => [idOfCampaign(campaign), campaign])), [campaigns]);
-  const activeCampaignIds = useMemo(() => new Set(campaigns.map(idOfCampaign).filter(Boolean)), [campaigns]);
+  const campaignById = useMemo(() => new Map(campaigns.flatMap(campaign => [campaign.id, campaign.campaign_id, campaign.amazon_campaign_id].filter(Boolean).map(id => [String(id), campaign]))), [campaigns]);
+  const activeCampaignIds = useMemo(() => new Set(campaignById.keys()), [campaignById]);
 
   const visibleKeywords = useMemo(() => keywords
     .filter((term) => {
       const campaignId = idOfTermCampaign(term);
-      return (!campaignScope || campaignId === campaignScope) && (!campaignId || activeCampaignIds.has(campaignId));
+      return (!campaignScope || campaignId === campaignScope || (campaignById.get(campaignId) && campaignById.get(campaignId) === campaignById.get(campaignScope))) && (!campaignId || activeCampaignIds.has(campaignId));
     })
     .map((term) => {
       const metrics = metricsOf(term);
       return { ...term, ...metrics, _displayTerm: termText(term), _class: classifyTerm(term, acosTarget) };
-    }), [keywords, activeCampaignIds, acosTarget, campaignScope]);
+    }), [keywords, activeCampaignIds, acosTarget, campaignScope, campaignById]);
 
   const visibleNegatives = useMemo(() => negatives.filter((item) => {
     const campaignId = String(item?.campaign_id || '').trim();
-    return (!campaignScope || campaignId === campaignScope) && (!campaignId || activeCampaignIds.has(campaignId));
-  }), [negatives, activeCampaignIds, campaignScope]);
+    return (!campaignScope || campaignId === campaignScope || (campaignById.get(campaignId) && campaignById.get(campaignId) === campaignById.get(campaignScope))) && (!campaignId || activeCampaignIds.has(campaignId));
+  }), [negatives, activeCampaignIds, campaignScope, campaignById]);
 
   const eligibleAutoNegatives = useMemo(() => {
     const existing = new Set(visibleNegatives.filter((item) => item.status !== 'rejected').map(suggestionKey));
@@ -172,13 +187,7 @@ export default function KeywordManagement() {
     await load();
   }, [account, autoNegating, eligibleAutoNegatives, executeNegativeSuggestion, load]);
 
-  useEffect(() => {
-    if (loading || !account || eligibleAutoNegatives.length === 0) return;
-    const key = `${account.id}:${eligibleAutoNegatives.map((item) => item.id).sort().join(',')}`;
-    if (autoRunKeyRef.current === key) return;
-    autoRunKeyRef.current = key;
-    autoNegateEligible(true);
-  }, [loading, account, eligibleAutoNegatives, autoNegateEligible]);
+
 
   const approveNegative = async (item) => {
     setActionLoading(item.id);
@@ -219,7 +228,7 @@ export default function KeywordManagement() {
     try {
       const response = await base44.functions.invoke('fetchSearchTermsFromApi', { amazon_account_id: account.id, days: 30, manual: true });
       const data = response.data;
-      setActionMsg({ type: data?.ok ? 'success' : 'info', text: data?.ok ? `${data.imported || 0} novos termos e ${data.updated || 0} atualizados.` : (data?.error || data?.message || 'Relatório solicitado à Amazon.') });
+      setActionMsg({ type: data?.ok ? 'success' : 'info', text: data?.ok ? (data.message || `${data.imported || 0} novos termos e ${data.updated || 0} atualizados.`) : (data?.error || data?.message || 'Relatório solicitado à Amazon.') });
       await load();
     } catch (error) { setActionMsg({ type: 'error', text: error?.message || 'Falha ao buscar termos.' }); }
     finally { setFetchingApi(false); }
@@ -285,14 +294,28 @@ export default function KeywordManagement() {
         </div>
       </div>
 
+      {campaignScope && <div className="rounded-xl border border-blue-500/30 p-3 text-sm text-slate-200">
+        Campanha: {campaignById.get(campaignScope)?.name || campaignById.get(campaignScope)?.campaign_name || campaignScope}
+        <a className="ml-3 text-blue-400 underline" href={`/keyword-management?account_id=${encodeURIComponent(account?.id || '')}`}>Ver todas as campanhas</a>
+        {!loading && visibleKeywords.length === 0 && <p className="mt-2">Nenhum termo de pesquisa importado para esta campanha. Isso não significa ausência de palavras-chave configuradas. Consulte a aba abaixo ou use Buscar Amazon para atualizar o relatório.</p>}
+      </div>}
+
       {actionMsg && <div className={`rounded-xl border px-4 py-3 text-sm ${actionMsg.type === 'error' ? 'border-red-500/30 bg-red-500/10 text-red-300' : actionMsg.type === 'success' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-blue-500/30 bg-blue-500/10 text-blue-300'}`}>{actionMsg.text}</div>}
 
       <div className="flex gap-2 border-b border-[#24324F]">
-        <button className={`px-4 py-2 text-sm font-semibold ${activeTab === 'search' ? 'border-b-2 border-[#5B8CFF] text-white' : 'text-slate-400'}`} onClick={() => setActiveTab('search')}>Search Terms</button>
+        <button className={`px-4 py-2 text-sm font-semibold ${activeTab === 'search' ? 'border-b-2 border-[#5B8CFF] text-white' : 'text-slate-400'}`} onClick={() => setActiveTab('search')}>Termos de pesquisa</button>
+        {campaignScope && <button className="px-4 py-2 text-sm font-semibold text-slate-300" onClick={() => setActiveTab('configured')}>Palavras-chave configuradas ({configuredKeywords.length})</button>}
         <button className={`px-4 py-2 text-sm font-semibold ${activeTab === 'negatives' ? 'border-b-2 border-[#FF5D5D] text-white' : 'text-slate-400'}`} onClick={() => setActiveTab('negatives')}>Palavras negativas ({pendingNegatives})</button>
       </div>
 
-      {loading ? <div className="flex justify-center py-20"><Loader2 className="h-7 w-7 animate-spin text-[#5B8CFF]" /></div> : activeTab === 'search' ? (
+      {loading ? <div className="flex justify-center py-20"><Loader2 className="h-7 w-7 animate-spin text-[#5B8CFF]" /></div> : activeTab === 'configured' ? (
+        <PremiumDataTable data={configuredKeywords} searchable columns={[
+          { id: 'keyword', header: 'Palavra-chave', sortValue: row => termText(row), cell: row => termText(row) },
+          { id: 'match_type', header: 'Correspondência', accessor: 'match_type', cell: row => row.match_type || '—' },
+          { id: 'state', header: 'Estado', accessor: 'state', cell: row => row.state || row.status || '—' },
+          { id: 'bid', header: 'Lance', sortValue: row => Number(row.current_bid ?? row.bid ?? 0), cell: row => Number(row.current_bid ?? row.bid ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) },
+        ]} emptyMessage="Nenhuma palavra-chave manual sincronizada. Campanhas automáticas utilizam segmentações automáticas." />
+      ) : activeTab === 'search' ? (
         <PremiumDataTable columns={keywordColumns} data={visibleKeywords} searchable searchPlaceholder="Pesquisar termo ou campanha..." initialSort={{ id: 'clicks', direction: 'desc' }} emptyMessage="Nenhum termo de campanha atual encontrado." />
       ) : (
         <div className="space-y-3">
