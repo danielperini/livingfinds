@@ -11,7 +11,7 @@
     "typecheck": "tsc -p ./jsconfig.json",
     "preview": "vite preview",
     "ui:audit": "node scripts/capture-all-routes.mjs",
-    "test:ui-contract": "node --test src/lib/pagination.test.js src/lib/profitProjectionMath.test.js"
+    "test:ui-contract": "node --test src/lib/pagination.test.js src/lib/profitProjectionMath.test.js src/lib/productCatalogVisibility.test.js"
   },
   "dependencies": {
     "@base44/sdk": "^0.8.48",

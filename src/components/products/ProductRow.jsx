@@ -1,3 +1,4 @@
+import { catalogStockStatus, catalogStockFreshness } from '@/lib/productCatalogVisibility';
 import { useState } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
@@ -8,36 +9,16 @@ import {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-const STOCK_FRESH_HOURS = 24;
-const STOCK_WITH_CAMPAIGN_FRESH_HOURS = 24;
 
 export function isCampaignActiveFn(product) {
   return ['active', 'enabled'].includes(String(product?.campaign_status || '').toLowerCase());
 }
 
-export function stockFreshness(product) {
-  const syncAt = product?.last_sync_at || product?.last_catalog_sync_at || product?.synced_at || product?.updated_date || null;
-  if (!syncAt) return 'unknown';
-  const ageHours = (Date.now() - new Date(syncAt).getTime()) / 3600000;
-  const limit = isCampaignActiveFn(product) ? STOCK_WITH_CAMPAIGN_FRESH_HOURS : STOCK_FRESH_HOURS;
-  return ageHours <= limit ? 'fresh' : 'stale';
-}
-
-export function offerStatus(product) {
-  const status = String(product?.status || 'active').toLowerCase();
-  if (status === 'archived') return 'archived';
-  if (status === 'inactive') return 'inactive';
-  const inv = String(product?.inventory_status || '').toLowerCase();
-  if (inv === 'out_of_stock') return 'out_of_stock';
-  if (inv === 'low_stock') return 'low_stock';
-  return 'active';
-}
+export const stockFreshness = catalogStockFreshness;
+export const offerStatus = catalogStockStatus;
 
 export function isConfirmedOutOfStock(product) {
-  const inv = String(product?.inventory_status || '').toLowerCase();
-  const fba = Number(product?.fba_inventory ?? -1);
-  const fresh = stockFreshness(product) === 'fresh';
-  return inv === 'out_of_stock' && fba === 0 && fresh;
+  return offerStatus(product) === 'out_of_stock' && stockFreshness(product) === 'fresh';
 }
 
 export function productHasCampaign(product) {
@@ -174,7 +155,7 @@ export function OfferStatusBadge({ product }) {
     <span className="block text-[11px] text-[#B45309] mt-1">Desatualizado</span>
   );
 
-  if (freshness === 'unknown') {
+  if (freshness === 'unknown' || status === 'unknown') {
     return (
       <div>
         <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold badge-neutral">

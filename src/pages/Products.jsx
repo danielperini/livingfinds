@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { visibleCatalogProducts, loadAccountProducts } from '@/lib/productCatalogVisibility';
 import { base44 } from '@/api/base44Client';
 import { ChevronDown, ChevronUp, Filter, Loader2, Package, Pause, Search, X, TrendingUp, CheckSquare, Square } from 'lucide-react';
 import { useAmazonPropagation } from '@/hooks/useAmazonPropagation';
@@ -11,7 +12,7 @@ import HighAdherenceAlert from '@/components/products/HighAdherenceAlert';
 import CampaignDivergenceBadge from '@/components/products/CampaignDivergenceBadge';
 import ProductRow, {
   offerStatus, productHasCampaign, isCampaignActiveFn, campaignIdOf,
-  isConfirmedOutOfStock, stockFreshness,
+  stockFreshness,
 } from '@/components/products/ProductRow';
 
 const PAGE_SIZE = 20;
@@ -244,7 +245,7 @@ export default function Products({ externalRefreshTrigger }) {
 
       // Fetch products from ALL accounts in parallel
       const productResults = await Promise.allSettled(
-        accs.map(acc => base44.entities.Product.filter({ amazon_account_id: acc.id }, '-created_date', 500))
+        accs.map(acc => loadAccountProducts(base44.entities.Product, acc.id))
       );
       const productFailures = productResults.filter(result => result.status === 'rejected');
       const allProducts = productResults.flatMap(result => result.status === 'fulfilled' ? result.value : []);
@@ -308,7 +309,7 @@ export default function Products({ externalRefreshTrigger }) {
   const reloadProducts = useCallback(async () => {
     if (!accounts.length) { await load(); return; }
     const [productResults, economicsResults] = await Promise.all([
-      Promise.allSettled(accounts.map(acc => base44.entities.Product.filter({ amazon_account_id: acc.id }, '-created_date', 500))),
+      Promise.allSettled(accounts.map(acc => loadAccountProducts(base44.entities.Product, acc.id))),
       Promise.allSettled(accounts.map(acc => base44.entities.ProductEconomics.filter({ amazon_account_id: acc.id }, '-updated_at', 5000))),
     ]);
     const allResults = productResults.filter(result => result.status === 'fulfilled').map(result => result.value);
@@ -368,48 +369,12 @@ export default function Products({ externalRefreshTrigger }) {
   );
 
   // ── VISIBILITY + DEDUP (multi-account aware) ─────────────────────────────
-  // First pass: collect max fba_inventory per ASIN across all accounts
-  const maxFbaByAsin = useMemo(() => {
-    const map = {};
-    for (const p of products) {
-      const key = p.asin;
-      if (!key) continue;
-      const fba = Number(p.fba_inventory || 0);
-      if (fba > (map[key] || 0)) map[key] = fba;
-    }
-    return map;
-  }, [products]);
-
-  const visibleProducts = useMemo(() => {
-    // Include product if ANY record for that ASIN has fba > 0, OR status is not explicitly out_of_stock with fresh data
-    const active = products.filter(p => {
-      if (p.status === 'inactive' || p.status === 'archived') return false;
-      const asinMaxFba = maxFbaByAsin[p.asin] || 0;
-      if (asinMaxFba > 0) return true; // at least one account has stock
-      return offerStatus(p) !== 'out_of_stock';
-    });
-
-    // Dedup by ASIN: priority 1 = highest fba_inventory, priority 2 = most recent last_sync_at
-    const byAsin = new Map();
-    for (const p of active) {
-      const key = p.asin || p.id;
-      const existing = byAsin.get(key);
-      if (!existing) { byAsin.set(key, p); continue; }
-      const newStock = Number(p.fba_inventory || 0);
-      const existStock = Number(existing.fba_inventory || 0);
-      const newSync = new Date(p.last_sync_at || p.synced_at || 0).getTime();
-      const existSync = new Date(existing.last_sync_at || existing.synced_at || 0).getTime();
-      if (newStock > existStock || (newStock === existStock && newSync > existSync)) {
-        byAsin.set(key, p);
-      }
-    }
-    return Array.from(byAsin.values());
-  }, [products, maxFbaByAsin]);
+  const visibleProducts = useMemo(() => visibleCatalogProducts(products), [products]);
 
   const counters = useMemo(() => {
     const activeOffers = visibleProducts.filter(p => offerStatus(p) === 'active').length;
     const lowStock = visibleProducts.filter(p => offerStatus(p) === 'low_stock').length;
-    const staleStock = visibleProducts.filter(p => stockFreshness(p) === 'stale').length;
+    const staleStock = visibleProducts.filter(p => stockFreshness(p) !== 'fresh').length;
     const activeAds = visibleProducts.filter(p => productHasCampaign(p) && isCampaignActiveFn(p)).length;
     const pausedAds = visibleProducts.filter(p => productHasCampaign(p) && !isCampaignActiveFn(p)).length;
     const withoutCampaign = visibleProducts.filter(p => !productHasCampaign(p)).length;
@@ -432,7 +397,7 @@ export default function Products({ externalRefreshTrigger }) {
         filter === 'all' ||
         (filter === 'offer_active' && offerStatus(product) === 'active') ||
         (filter === 'low_stock' && offerStatus(product) === 'low_stock') ||
-        (filter === 'stale_stock' && stockFreshness(product) === 'stale') ||
+        (filter === 'stale_stock' && stockFreshness(product) !== 'fresh') ||
         (filter === 'ads_active' && hasCampaign && active) ||
         (filter === 'ads_paused' && hasCampaign && !active) ||
         (filter === 'no_campaign' && !hasCampaign) ||
@@ -441,7 +406,7 @@ export default function Products({ externalRefreshTrigger }) {
       return matchesSearch && matchesFilter;
     });
     return applySort(base, sortBy, colSort);
-  }, [products, search, filter, sortBy, colSort]);
+  }, [visibleProducts, search, filter, sortBy, colSort]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
@@ -574,7 +539,7 @@ export default function Products({ externalRefreshTrigger }) {
   };
 
   const { activeOffers, lowStock, staleStock, activeAds, pausedAds, withoutCampaign, pausedByStock, restocked } = counters;
-  const eligibleForKickoff = visibleProducts.filter(p => !productHasCampaign(p) && !isConfirmedOutOfStock(p)).length;
+  const eligibleForKickoff = visibleProducts.filter(p => !productHasCampaign(p) && p.kickoff_discovery_status === 'ready').length;
 
   return (
     <div className="p-6 space-y-5 animate-fade-in">
@@ -587,7 +552,7 @@ export default function Products({ externalRefreshTrigger }) {
           <div>
             <h1 className="text-lg font-bold text-white">Produtos & Ads</h1>
             <p className="text-sm text-slate-200">
-              {visibleProducts.length} ASINs ativos · {activeAds} ads ativos · {withoutCampaign} sem campanha
+              {visibleProducts.length} produtos no catálogo · {activeAds} ads ativos · {withoutCampaign} sem campanha
               {accounts.length > 1 && <span className="text-cyan ml-1">· {accounts.length} contas</span>}
             </p>
           </div>
