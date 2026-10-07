@@ -1,68 +1,19 @@
-name: Proactive campaign growth cycle
-
+name: Read-only ads delivery audit
 on:
-  schedule:
-    # 07:15 and 15:15 America/Sao_Paulo (UTC-3).  GitHub Actions cron is UTC.
-    - cron: '15 10,18 * * *'
   workflow_dispatch:
-
-concurrency:
-  group: proactive-campaign-growth-cycle
-  cancel-in-progress: false
-
 jobs:
-  grow:
+  audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - name: Prepare secure VPS connection
+      - name: Prepare SSH
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-
-      - name: Run the canonical growth cycle and confirm Amazon
+      - name: Read production state and simulate winner discovery
         env:
           TARGET: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
           VPS_PATH: ${{ secrets.VPS_PATH }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 "$TARGET" "cd '$VPS_PATH' && docker compose -f server/docker-compose.yml exec -T app deno eval '
-            const token = Deno.env.get(\"API_TOKEN\") || Deno.env.get(\"ADMIN_PASSWORD\") || \"\";
-            const call = async (name, payload) => {
-              const response = await fetch(\"http://127.0.0.1:8000/functions/\" + name, {
-                method: \"POST\",
-                headers: { \"content-type\": \"application/json\", \"x-api-token\": token },
-                body: JSON.stringify(payload),
-              });
-              const data = await response.json().catch(() => ({}));
-              if (!response.ok || data.ok === false) throw new Error(name + \": \" + (data.error || response.status));
-              return data;
-            };
-            const common = { _service_role: true, _canonical_orchestrator: \"runUnifiedDecisionEngine\", dry_run: false };
-            const engine = await call(\"runUnifiedDecisionEngine\", {
-              ...common,
-              force_campaign_lifecycle: true,
-              serving_campaign_growth_target_pct: 40,
-              max_new_exact_per_run: 10,
-              max_auto_budget_expansions: 5,
-              trigger_type: \"scheduled_twice_daily_proactive_growth\",
-            });
-            const execution = await call(\"executeApprovedDecisionQueue\", {
-              _service_role: true, max_decisions: 50,
-              trigger_type: \"scheduled_twice_daily_proactive_growth\",
-            });
-            await new Promise(resolve => setTimeout(resolve, 5000));
-            const confirmation = await call(\"confirmExecutedDecisions\", {
-              _service_role: true, trigger_type: \"scheduled_twice_daily_proactive_growth\",
-            });
-            console.log(\"PROACTIVE_GROWTH=\" + JSON.stringify({
-              engine: engine.engine_version || engine.engine,
-              lifecycle_due: engine.campaign_lifecycle?.due,
-              growth_goal: engine.serving_campaign_growth_goal,
-              promotions: engine.stages?.campaignLifecycle?.results?.[0]?.stages?.harvesting?.promoted ?? null,
-              executed: execution.executed ?? 0,
-              remaining: execution.remaining ?? 0,
-              confirmed: confirmation.confirmed ?? 0,
-              divergences: confirmation.divergences ?? 0,
-              note: \"No eligible economic opportunity is a valid outcome; the cycle must not manufacture bids or campaigns.\",
-            }));
-          ' </dev/null"
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 "$TARGET" "cd '$VPS_PATH' && docker compose -f server/docker-compose.yml exec -T app deno eval \"\$(printf %s 'Y29uc3QgdG9rZW49RGVuby5lbnYuZ2V0KCJBUElfVE9LRU4iKXx8RGVuby5lbnYuZ2V0KCJBRE1JTl9QQVNTV09SRCIpfHwiIjsNCmFzeW5jIGZ1bmN0aW9uIGNhbGwobmFtZSxwYXlsb2FkKSB7Y29uc3Qgcj1hd2FpdCBmZXRjaCgiaHR0cDovLzEyNy4wLjAuMTo4MDAwL2Z1bmN0aW9ucy8iK25hbWUse21ldGhvZDoiUE9TVCIsaGVhZGVyczp7ImNvbnRlbnQtdHlwZSI6ImFwcGxpY2F0aW9uL2pzb24iLCJ4LWFwaS10b2tlbiI6dG9rZW59LGJvZHk6SlNPTi5zdHJpbmdpZnkoe19zZXJ2aWNlX3JvbGU6dHJ1ZSxhbWF6b25fYWNjb3VudF9pZDoiNmE0MDQ0OGI5YWYxMjQxZjM1NmU5ZmNjIiwuLi5wYXlsb2FkfSksc2lnbmFsOkFib3J0U2lnbmFsLnRpbWVvdXQoMTgwMDAwKX0pO2NvbnN0IGRhdGE9YXdhaXQgci5qc29uKCk7IGNvbnNvbGUubG9nKG5hbWUrIj0iK0pTT04uc3RyaW5naWZ5KGRhdGEpKTtpZighci5va3x8ZGF0YS5vaz09PWZhbHNlKXRocm93IG5ldyBFcnJvcihuYW1lKyIgZmFpbGVkIik7cmV0dXJuIGRhdGE7fQ0KYXdhaXQgY2FsbCgiZW5mb3JjZVNrdVByb2ZpdFByb3RlY3Rpb24iLHtkcnlfcnVuOnRydWV9KTsNCmF3YWl0IGNhbGwoInJ1bkludHJhZGF5U2FsZXNSZWNvdmVyeSIse2RyeV9ydW46dHJ1ZSxfY2Fub25pY2FsX29yY2hlc3RyYXRvcjoicnVuVW5pZmllZERlY2lzaW9uRW5naW5lIn0pOw0K' | base64 -d)\"" </dev/null
