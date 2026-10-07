@@ -232,6 +232,7 @@ Deno.serve(async (req) => {
     );
     const productGroups = new Map<string, any[]>();
     for (const product of products) {
+      if (product.status === 'archived' || product.catalog_sync_status === 'duplicate') continue;
       const key = normalizeSku(product.sku);
       if (!key) continue;
       const group = productGroups.get(key) || [];
