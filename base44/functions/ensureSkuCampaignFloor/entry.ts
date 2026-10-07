@@ -24,16 +24,6 @@ function uniqueCampaigns(rows: any[]) {
   });
 }
 
-function titleSeeds(product: any): string[] {
-  const title = norm(product.product_name || product.title || product.name || '')
-    .replace(/[^a-z0-9\sáéíóúâêôãõç-]/gi, ' ');
-  const words = title.split(/\s+/).filter((word: string) => word.length > 2);
-  const seeds = [title.slice(0, 40)];
-  for (let size = 5; size >= 2; size--) {
-    for (let i = 0; i + size <= words.length; i++) seeds.push(words.slice(i, i + size).join(' ').slice(0, 40));
-  }
-  return [...new Set(seeds.map(norm).filter((term) => term.length >= 5))];
-}
 
 function belongsTo(c: any, sku: string, asin: string) {
   const cAsin = String(c.asin || '').trim().toUpperCase();
@@ -188,7 +178,7 @@ Deno.serve(async (req) => {
             const name = String(c.name || c.campaign_name || '');
             return norm(name.split('|').pop());
           }));
-          const terms = [...new Set([...empirical, ...titleSeeds(product)])].filter((term) => term && !used.has(term))
+          const terms = [...new Set(empirical)].filter((term) => term && !used.has(term))
             .slice(0, floor - manualActive);
           const creationResults = await Promise.all(terms.map(async (keyword) => {
             const response = await base44.asServiceRole.functions.invoke('createManualCampaignV2', {

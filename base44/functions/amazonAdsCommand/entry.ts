@@ -193,6 +193,17 @@ Deno.serve(async (request) => {
       return Response.json({ ok: false, error: 'Endpoint Ads não permitido' }, { status: 403 });
     }
 
+    // All automatic manual-campaign creation goes through same-SKU report evidence.
+    const requestedCampaigns = body.payload?.campaigns || (Array.isArray(body.payload) ? body.payload : []);
+    if (method === 'POST' && ['/sp/campaigns', '/v2/sp/campaigns'].includes(path)
+      && requestedCampaigns.some((c:any) => String(c.targetingType || c.targeting_type || '').toUpperCase() === 'MANUAL')) {
+      const promotions = await base44.asServiceRole.entities.SearchTermPromotion.filter({ amazon_account_id: body.amazon_account_id, promotion_status: 'campaign_creating' }, '-created_at', 1000);
+      const verified = body.operation === 'sameSkuHarvestCreateCampaigns' && requestedCampaigns.every((c:any) =>
+        promotions.some((p:any) => p.destination_campaign_name === c.name && p.same_sku_attribution_verified === true
+          && Number(p.same_sku_orders) > 0 && Number(p.same_sku_sales) > 0 && Number(p.target_bid) > 0));
+      if (!verified) return Response.json({ ok: false, blocked: true, error: 'Campanhas manuais exigem promoção validada por conversão real do mesmo SKU. Fragmentos de títulos e sugestões não autorizam criação.' }, { status: 409 });
+    }
+
     const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1);
     const account = accounts[0];
     if (!account) return Response.json({ ok: false, error: 'Conta Amazon não encontrada' }, { status: 404 });
