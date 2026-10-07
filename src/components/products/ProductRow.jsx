@@ -169,8 +169,14 @@ export function OfferStatusBadge({ product }) {
   if (status === 'out_of_stock') return (
     <div>
       <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold badge-danger">
-        <XCircle className="w-3.5 h-3.5" />Sem estoque
+        <XCircle className="w-3.5 h-3.5" />Disponível FBA: 0
       </span>
+      {Number(product.total_quantity) > 0 && <span className="block text-[11px] text-[#6B7280] mt-1">
+        Total FBA: {product.total_quantity} · Reservado: {product.reserved_inventory ?? 'não informado'}
+      </span>}
+      {product.last_catalog_sync_at && <span className="block text-[11px] text-[#6B7280] mt-1">
+        API: {new Date(product.last_catalog_sync_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
+      </span>}
       {staleTag}
     </div>
   );
@@ -289,7 +295,7 @@ function ContextualAction({ product, onKickoff, onToggleCampaign, loading, onCan
     if (outOfStock) {
       return (
         <span className="text-xs text-[#991B1B] italic max-w-[160px] leading-tight block">
-          Sem estoque — Kick-off bloqueado.
+          Sem unidades FBA disponíveis — Kick-off bloqueado.
         </span>
       );
     }
