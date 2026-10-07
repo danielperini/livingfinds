@@ -136,7 +136,7 @@ function AttentionPanel({ accountId, decisions = [] }) {
       <div className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
         <CheckCircle2 className="w-5 h-5 text-emerald-500 flex-shrink-0" />
         <div>
-          <p className="text-sm font-semibold text-emerald-700">Tudo operacional</p>
+          <p className="text-sm font-semibold text-emerald-700">Nenhum alerta crítico registrado</p>
           <p className="text-xs text-emerald-600/80 mt-0.5">Nenhum alerta crítico ou de alta severidade ativo.</p>
         </div>
       </div>
@@ -229,14 +229,14 @@ export default function DecisionalOverview({
   }, [metricsDaily, salesDaily]);
 
   const timestamps = useMemo(() => ({
-    ads: account?.ads_metrics_last_sync_at || account?.ads_data_fresh_at || null,
+    ads: [account?.ads_metrics_last_sync_at, account?.ads_data_fresh_at, ...metricsDaily.map(m => m.synced_at || m.updated_at || m.updated_date)].filter(Boolean).sort().pop() || null,
     spApi: account?.sp_data_last_sync_at || account?.last_sync_at || null,
     motor: [...(decisions || []), ...(bidChanges || [])]
       .map(d => d?.created_at || d?.created_date || d?.evaluated_at || d?.executed_at)
       .filter(Boolean)
       .sort()
       .pop() || null,
-  }), [account, decisions, bidChanges]);
+  }), [account, decisions, bidChanges, metricsDaily]);
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
@@ -300,7 +300,7 @@ export default function DecisionalOverview({
             tone={snapshot30.acos === 0 ? 'default' : snapshot30.acos <= 15 ? 'success' : snapshot30.acos <= 25 ? 'warning' : 'danger'}
           />
           <MetricCard
-            label="Lucro estimado"
+            label="Receita menos Ads (antes dos custos)"
             value={fmtBRL(snapshot30.profit)}
             trendPct={snapshot30.profitTrend}
             freshness={timestamps.spApi}

@@ -2,6 +2,12 @@
   "timezone": "America/Sao_Paulo",
   "jobs": [
     {
+      "name": "Daily profitable same-SKU search term discovery - 07:25 BRT",
+      "function": "runImmediateSameSkuSearchTermHarvest",
+      "cron": "25 7 * * *",
+      "payload": { "_service_role": true, "dry_run": false, "lookback_days": 30, "max_promotions": 5, "require_fresh_inventory": true, "trigger_type": "daily_winning_terms" }
+    },
+    {
       "name": "Daily new product kickoff discovery - 07:05 BRT",
       "function": "discoverDailyKickoffProducts",
       "cron": "5 7 * * *",

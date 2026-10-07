@@ -1,3 +1,4 @@
+import { loadAllCampaigns, campaignIsArchived } from '@/lib/campaignUtils';
 import { confirmedFbaOverride } from '../../../base44/shared/fbaStockOverride.ts';
 import CopyProductKeywords from './CopyProductKeywords';
 import { catalogStockStatus, catalogStockFreshness } from '@/lib/productCatalogVisibility';
@@ -73,17 +74,14 @@ function CampaignDropdown({ product }) {
         const asin = product?.asin;
         const accountId = product?.amazon_account_id;
         if (asin && accountId) {
-          const results = await base44.entities.Campaign.filter(
-            { amazon_account_id: accountId, asin },
-            null, 30
-          ).catch(() => []);
+          const results = await loadAllCampaigns(accountId, { asin }, { includeExcluded: true });
           const seen = new Set();
           const unique = [];
           for (const c of results) {
             const cid = c.campaign_id || c.id;
             if (!seen.has(cid)) { seen.add(cid); unique.push(c); }
           }
-          setCampaigns(unique.filter(c => String(c.state || c.status || '').toLowerCase() !== 'archived' && (!c.sku || String(c.sku).toLowerCase() === String(product.sku).toLowerCase())));
+          setCampaigns(unique.filter(c => !campaignIsArchived(c) && (!c.sku || String(c.sku).toLowerCase() === String(product.sku).toLowerCase())));
         }
       } finally {
         setLoading(false);
