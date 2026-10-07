@@ -173,6 +173,7 @@ export default function Products({ externalRefreshTrigger }) {
 
   const { propagating: amazonPropagating, propagationResult: amazonResult, propagate: amazonPropagate } = useAmazonPropagation();
 
+  const [discoveryLoading, setDiscoveryLoading] = useState(false);
   const [priceQueryLoading, setPriceQueryLoading] = useState(false);
   const [kickoffProduct, setKickoffProduct] = useState(null);
   const [kickoffStuckItems, setKickoffStuckItems] = useState(null);
@@ -394,6 +395,7 @@ export default function Products({ externalRefreshTrigger }) {
       const active = isCampaignActiveFn(product);
       const matchesFilter =
         filter === 'all' ||
+        (filter === 'inactive' && productNeedsRecovery(product)) ||
         (filter === 'new_products' && product.is_new_asin === true) ||
         (filter === 'offer_active' && offerStatus(product) === 'active') ||
         (filter === 'low_stock' && offerStatus(product) === 'low_stock') ||
@@ -558,6 +560,22 @@ export default function Products({ externalRefreshTrigger }) {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <button type="button" disabled={discoveryLoading || !accounts.length}
+            className="px-3 py-2 rounded-lg border border-cyan/30 text-cyan disabled:opacity-50"
+            onClick={async () => {
+              setDiscoveryLoading(true);
+              setActionMsg({ type: 'info', text: 'Buscando novos produtos e estoque disponível FBA na Amazon…' });
+              try {
+                for (const acc of accounts) {
+                  const response = await base44.functions.invoke('discoverDailyKickoffProducts', { amazon_account_id: acc.id });
+                  if (response.data?.ok !== true) throw new Error(response.data?.error || response.data?.results?.find(r => !r.ok)?.error || 'Falha na varredura da Amazon.');
+                }
+                await reloadProducts();
+                setActionMsg({ type: 'success', text: 'Produtos e estoque FBA atualizados pela API da Amazon.' });
+              } catch (error) {
+                setActionMsg({ type: 'error', text: error.message });
+              } finally { setDiscoveryLoading(false); }
+            }}>{discoveryLoading ? 'Varrendo Amazon…' : 'Buscar novos produtos na Amazon'}</button>
           {account && (
             <button
               type="button"
@@ -668,6 +686,7 @@ export default function Products({ externalRefreshTrigger }) {
           <Filter className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
           {[
             { key: 'all', label: `Todos (${visibleProducts.length})` },
+            { key: 'inactive', label: `Inativos / a recuperar (${visibleProducts.filter(productNeedsRecovery).length})` },
             { key: 'new_products', label: `Novos (${visibleProducts.filter(p => p.is_new_asin).length})` },
             { key: 'offer_active', label: `Estoque OK (${activeOffers})` },
             { key: 'low_stock', label: `Baixo Estoque (${lowStock})` },
@@ -761,7 +780,7 @@ export default function Products({ externalRefreshTrigger }) {
               <tbody>
                 {paginated.map((product, index) => (
                   <Fragment key={product.id}>
-                    {(index === 0 || productNeedsRecovery(product) !== productNeedsRecovery(paginated[index - 1])) && <tr className="bg-slate-100"><th colSpan={6} className="px-4 py-3 text-left text-slate-800">{productNeedsRecovery(product) ? 'Inativos, pausados e produtos a recuperar' : 'Produtos com oferta ativa'}</th></tr>}
+                    {(index === 0 || productNeedsRecovery(product) !== productNeedsRecovery(paginated[index - 1])) && <tr className="bg-slate-100"><th colSpan={6} className="px-4 py-3 text-left text-slate-800">{productNeedsRecovery(product) ? 'Todos os produtos inativos e a recuperar' : 'Produtos ativos com estoque FBA'}</th></tr>}
                   <ProductRow
                     key={product.id}
                     product={product}

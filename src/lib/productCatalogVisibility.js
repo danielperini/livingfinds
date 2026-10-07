@@ -48,6 +48,7 @@ export async function loadAccountProducts(entity, accountId) {
 export function productNeedsRecovery(product) {
   const offerActive = product.offer_active === true || product.listing_buyable === true || product.status === 'active';
   return !offerActive
+    || !['active', 'low_stock'].includes(catalogStockStatus(product))
     || ['paused', 'incomplete'].includes(String(product.campaign_status || '').toLowerCase())
     || ['no_delivery', 'dropout', 'stalled'].includes(String(product.delivery_status || '').toLowerCase());
 }
