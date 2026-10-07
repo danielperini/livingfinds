@@ -45,7 +45,7 @@ registerHooks({ resolve(specifier, context, next) {
 globalThis.Deno = { test };
 test('modified backend handlers have valid TypeScript syntax', async () => {
   for (const name of ['autoStockCampaignGuard', 'checkInventoryChangesAndKickoff', 'ensureActiveProductCampaignCoverage',
-    'processProductKickoffQueueV2', 'runImmediateSameSkuSearchTermHarvest', 'runUnifiedDecisionEngine', 'syncProductCatalogV2', 'discoverDailyKickoffProducts', 'scheduleProductKickoff', 'runIntradaySalesRecovery']) {
+    'processProductKickoffQueueV2', 'runImmediateSameSkuSearchTermHarvest', 'runUnifiedDecisionEngine', 'syncProductCatalogV2', 'discoverDailyKickoffProducts', 'scheduleProductKickoff', 'runIntradaySalesRecovery', 'autoKickoffProductV2']) {
     stripTypeScriptTypes(await readFile(`base44/functions/${name}/entry.ts`, 'utf8'));
   }
 });
@@ -175,3 +175,19 @@ for (const accepted of [true, false]) {
     } finally { globalThis.fetch = realFetch; }
   });
 }
+
+test('kickoff reuses AUTO and asks the same-SKU winner engine instead of inventing four manual winners', async () => {
+ const calls=[],patches=[];
+ const product={id:'p',asin:'B0HLMF8PPD',sku:'FBA-0122',status:'active',catalog_sync_status:'success',last_catalog_sync_at:new Date().toISOString(),fba_inventory:20,cost_confirmed:true,ads_scope_status:'authorized',price:149.9,product_cost:80,amazon_fees:25.49};
+ const client={auth:{isAuthenticated:async()=>true},asServiceRole:{entities:{
+  Product:{filter:async()=>[product],update:async(_id,patch)=>{patches.push(patch);}},
+  AmazonAccount:{filter:async()=>[{id:'a'}]},
+  Campaign:{filter:async()=>[{campaign_id:'existing-auto',asin:product.asin,sku:product.sku,targeting_type:'AUTO',state:'enabled'}]},
+ },functions:{invoke:async(name,body)=>{calls.push({name,body});return {data:{ok:true,reports:[{promoted:0}]}};}}}};
+ const run=await handler('autoKickoffProductV2',client);
+ const response=await run(new Request('http://test',{method:'POST',body:JSON.stringify({amazon_account_id:'a',asin:product.asin,sku:product.sku,_window_execution:true})}));
+ const data=await response.json();
+ assert.equal(data.ok,true,JSON.stringify(data));assert.equal(data.auto_campaign.already_exists,true);assert.equal(data.manual_campaigns_created,0);
+ assert.deepEqual(calls.map(c=>c.name),['runImmediateSameSkuSearchTermHarvest']);assert.equal(calls[0].body.sku,product.sku);
+ assert.equal(patches.at(-1).kickoff_strategy.phase,'AUTO_DISCOVERY');
+});

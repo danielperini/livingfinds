@@ -95,6 +95,7 @@ async function cleanupQueue(base44: any, accountId?: string) {
       const products = await base44.asServiceRole.entities.Product.filter({
         amazon_account_id: item.amazon_account_id,
         asin: item.asin,
+        ...(item.sku ? { sku: item.sku } : {}),
       }, '-updated_at', 1).catch(() => []);
       productCache.set(productKey, products[0] || null);
     }
@@ -183,6 +184,7 @@ Deno.serve(async (request) => {
       const products = await base44.asServiceRole.entities.Product.filter({
         amazon_account_id: item.amazon_account_id,
         asin: item.asin,
+        ...(item.sku ? { sku: item.sku } : {}),
       }, '-updated_at', 1).catch(() => []);
       const product = products[0];
 

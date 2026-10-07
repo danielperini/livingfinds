@@ -249,6 +249,7 @@ Deno.serve(async (request) => {
       let bankUpdated = 0;
 
       for (const aggregate of aggregates) {
+        if (body.sku && aggregate.sku.trim().toUpperCase() !== String(body.sku).trim().toUpperCase()) continue;
         const key = `${aggregate.asin}|${aggregate.normalizedTerm}`;
         const matchesSku = (row: any) => String(row.sku || '').trim().toUpperCase() === aggregate.sku.trim().toUpperCase()
           && String(row.asin || '').toUpperCase() === aggregate.asin;
