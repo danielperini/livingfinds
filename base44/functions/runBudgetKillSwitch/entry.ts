@@ -1,3 +1,4 @@
+import {accountDailySpend} from '../../shared/accountDailySpend.ts';
 /**
  * runBudgetKillSwitch — v3 (PRD: propagação 100% confiável)
  *
@@ -79,7 +80,7 @@ Deno.serve(async (req) => {
     // ── Resolver conta ──
     let account: any;
     if (amazon_account_id) {
-      const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ id: amazon_account_id }, null, 1);
+      const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ id: amazon_account_id }, undefined, 1);
       account = accs[0];
     } else {
       const accs = await base44.asServiceRole.entities.AmazonAccount.filter({}, '-created_date', 1);
@@ -95,7 +96,7 @@ Deno.serve(async (req) => {
 
     // ── 1. Carregar controller atual do dia ──
     const controllers = await base44.asServiceRole.entities.AccountDailySpendController.filter(
-      { amazon_account_id: accountId, spend_date: todayBRT }, null, 1
+      { amazon_account_id: accountId, spend_date: todayBRT }, undefined, 1
     ).catch(() => [] as any[]);
     const controller = controllers[0];
 
@@ -114,25 +115,15 @@ Deno.serve(async (req) => {
 
     // ── 2. Calcular gasto confirmado via CampaignMetricsDaily (data BRT) ──
     const metricsToday = await base44.asServiceRole.entities.CampaignMetricsDaily.filter(
-      { amazon_account_id: accountId, date: todayBRT }, null, 500
+      { amazon_account_id: accountId, date: todayBRT }, undefined, 500
     ).catch(() => [] as any[]);
 
-    let confirmedSpend = 0;
-    let spendSource = 'metrics_daily';
-
-    if (metricsToday.length > 0) {
-      confirmedSpend = metricsToday.reduce((s: number, m: any) => s + Number(m.spend || 0), 0);
-    } else {
-      const campaigns = await base44.asServiceRole.entities.Campaign.filter(
-        { amazon_account_id: accountId }, null, 500
-      ).catch(() => [] as any[]);
-      confirmedSpend = campaigns.reduce((s: number, c: any) => s + Number(c.current_spend || 0), 0);
-      spendSource = 'campaign_spend_fallback';
-    }
-
-    if (spendSource === 'campaign_spend_fallback' && confirmedSpend === 0) {
-      return Response.json({ ok: true, skipped: true, reason: 'no_daily_spend_data', confirmed_spend: 0, daily_budget: dailyBudget, duration_ms: Date.now() - t0 });
-    }
+    const intraday = await base44.asServiceRole.entities.IntradaySpendSnapshot.filter(
+      {amazon_account_id:accountId,spend_date:todayBRT},'-observed_at',20000);
+    const spendEvidence = accountDailySpend(metricsToday,intraday,todayBRT);
+    const confirmedSpend = spendEvidence.spend;
+    const spendSource = spendEvidence.source;
+    if (!spendEvidence.hasData) return Response.json({ok:true,skipped:true,reason:'no_daily_spend_data',daily_budget:dailyBudget});
 
     const threshold = r2(dailyBudget * 0.97);
     const recoveryThreshold = r2(dailyBudget * 0.80);
@@ -151,7 +142,7 @@ Deno.serve(async (req) => {
         }).catch(() => {});
 
         const pausedCamps = await base44.asServiceRole.entities.Campaign.filter(
-          { amazon_account_id: accountId, last_pause_reason: 'DAILY_BUDGET_CAP_REACHED' }, null, 200
+          { amazon_account_id: accountId, last_pause_reason: 'DAILY_BUDGET_CAP_REACHED' }, undefined, 200
         ).catch(() => [] as any[]);
 
         let reactivated = 0;
@@ -197,7 +188,7 @@ Deno.serve(async (req) => {
 
     // ── Carregar campanhas ──
     const allCampaigns = await base44.asServiceRole.entities.Campaign.filter(
-      { amazon_account_id: accountId }, null, 500
+      { amazon_account_id: accountId }, undefined, 500
     ).catch(() => [] as any[]);
 
     const activeCampaigns = allCampaigns.filter((c: any) => {
@@ -250,7 +241,7 @@ Deno.serve(async (req) => {
       const campaignSpend = Number(c.spend || c.current_spend || 0);
       const createdAt = c.created_at ? new Date(c.created_at).getTime() : 0;
       const ageHours = createdAt > 0 ? (Date.now() - createdAt) / 3600000 : 999;
-      if (c.created_by_app === true && campaignSpend === 0 && ageHours < 72) return false;
+      // Launch campaigns also obey the account's actual spending cap.
       return true;
     });
 

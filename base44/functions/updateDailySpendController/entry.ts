@@ -1,3 +1,4 @@
+import {accountDailySpend} from '../../shared/accountDailySpend.ts';
 /**
  * updateDailySpendController
  *
@@ -77,14 +78,16 @@ Deno.serve(async (req) => {
     // Gasto confirmado de hoje via CampaignMetricsDaily
     const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
     const metricsToday = await base44.asServiceRole.entities.CampaignMetricsDaily.filter(
-      { amazon_account_id: aid, date: spendDate }, null, 500
+      { amazon_account_id: aid, date: spendDate }, undefined, 500
     ).catch(() => []);
     const metricsYesterday = await base44.asServiceRole.entities.CampaignMetricsDaily.filter(
-      { amazon_account_id: aid, date: yesterday }, null, 500
+      { amazon_account_id: aid, date: yesterday }, undefined, 500
     ).catch(() => []);
 
     // Se não há métricas de hoje, usar yesterday como fallback para estimated_pending
-    const confirmedSpend = metricsToday.reduce((s: number, m: any) => s + (m.spend || 0), 0);
+    const intraday = await base44.asServiceRole.entities.IntradaySpendSnapshot.filter({amazon_account_id:aid,spend_date:spendDate},'-observed_at',20000);
+    const spendEvidence = accountDailySpend(metricsToday,intraday,spendDate);
+    const confirmedSpend = spendEvidence.spend;
     const yesterdaySpend = metricsYesterday.reduce((s: number, m: any) => s + (m.spend || 0), 0);
 
     // Estimar gasto pendente: ritmo atual × horas restantes
@@ -94,7 +97,7 @@ Deno.serve(async (req) => {
     const estimatedPending = Math.round(spendRatePerHour * hoursRemaining * 100) / 100;
 
     // Soma nominal de budgets das campanhas
-    const campaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 200).catch(() => []);
+    const campaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, undefined, 200).catch(() => []);
     const activeCamps = campaigns.filter((c: any) => {
       const s = String(c.state || c.status || '').toLowerCase();
       return s === 'enabled' || s === 'active';
@@ -123,7 +126,7 @@ Deno.serve(async (req) => {
     let pausedToday: string[] = [];
     try {
       const existing = await base44.asServiceRole.entities.AccountDailySpendController.filter(
-        { amazon_account_id: aid, spend_date: spendDate }, null, 1
+        { amazon_account_id: aid, spend_date: spendDate }, undefined, 1
       );
       if (existing[0]?.campaigns_paused_today) pausedToday = existing[0].campaigns_paused_today;
     } catch {}
@@ -137,7 +140,7 @@ Deno.serve(async (req) => {
 
     // Upsert: buscar registro existente do dia
     const existingList = await base44.asServiceRole.entities.AccountDailySpendController.filter(
-      { amazon_account_id: aid, spend_date: spendDate }, null, 1
+      { amazon_account_id: aid, spend_date: spendDate }, undefined, 1
     ).catch(() => []);
 
     const payload = {
@@ -160,7 +163,8 @@ Deno.serve(async (req) => {
       campaigns_budget_limited_count: budgetLimitedCount,
       campaigns_paused_today: pausedToday,
       campaigns_paused_count: pausedToday.length,
-      last_ads_sync_at: account.ads_data_fresh_at || account.last_sync_at || null,
+      last_ads_sync_at: spendEvidence.observedAt || account.ads_data_fresh_at || account.last_sync_at || null,
+      spend_source: spendEvidence.source,
       last_action_at: now,
       last_pacing_check_at: now,
       updated_at: now,

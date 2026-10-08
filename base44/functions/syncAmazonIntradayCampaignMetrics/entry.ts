@@ -304,7 +304,7 @@ async function downloadStage(base44: any, account: any, job: any, clock: ReturnT
 
 async function persistStage(base44: any, account: any, job: any, clock: ReturnType<typeof brtClock>, trigger: string) {
   const existing = await base44.asServiceRole.entities.IntradaySpendSnapshot.filter(
-    { amazon_account_id: account.id, report_id: String(job.report_id) }, null, 5,
+    { amazon_account_id: account.id, report_id: String(job.report_id) }, undefined, 5,
   ).catch(() => []);
   if (existing.length > 0) {
     await base44.asServiceRole.entities.IntradayReportJob.update(job.id, {
@@ -345,7 +345,7 @@ async function persistStage(base44: any, account: any, job: any, clock: ReturnTy
   }).filter((row: any) => row.campaign_id);
 
   if (snapshots.length) await base44.asServiceRole.entities.IntradaySpendSnapshot.bulkCreate(snapshots);
-  const campaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: account.id }, null, 3000).catch(() => []);
+  const campaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: account.id }, undefined, 3000).catch(() => []);
   const campaignMap = new Map(campaigns.map((campaign: any) => [String(campaign.amazon_campaign_id || campaign.campaign_id || ''), campaign]));
   const updates = snapshots.map((snapshot: any) => {
     const campaign: any = campaignMap.get(snapshot.campaign_id);
@@ -370,6 +370,13 @@ async function persistStage(base44: any, account: any, job: any, clock: ReturnTy
     accountId: account.id, stage: 'persist', trigger, status: 'success', startedAt: clock.iso,
     records: snapshots.length, summary: { report_id: job.report_id, snapshots: snapshots.length, campaigns_updated: updates.length },
   });
+  // Refresh account spend from this cumulative snapshot before evaluating the cap.
+  await base44.asServiceRole.functions.invoke('updateDailySpendController', {
+    amazon_account_id: account.id, _service_role: true,
+  });
+  await base44.asServiceRole.functions.invoke('runBudgetKillSwitch', {
+    amazon_account_id: account.id, _service_role: true,
+  });
   // Assim que a Amazon confirma novo gasto intradiário, avaliar campanhas e
   // keywords sem esperar o próximo ciclo do scheduler.
   await base44.asServiceRole.functions.invoke('enforceSkuProfitProtection', {
@@ -391,7 +398,7 @@ async function runForAccount(base44: any, account: any, body: any) {
     : Infinity;
   let action = String(body.action || 'auto').toLowerCase();
   let job = body.job_id
-    ? (await base44.asServiceRole.entities.IntradayReportJob.filter({ id: body.job_id }, null, 1).catch(() => []))[0]
+    ? (await base44.asServiceRole.entities.IntradayReportJob.filter({ id: body.job_id }, undefined, 1).catch(() => []))[0]
     : active;
 
   if (action === 'auto') {
@@ -444,7 +451,7 @@ Deno.serve(async (request) => {
     }
 
     const accounts = body.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 20);
     if (!accounts.length) return Response.json({ ok: false, error: 'Nenhuma AmazonAccount conectada' }, { status: 404 });
 
