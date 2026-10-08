@@ -1,6 +1,7 @@
+import {campaignBudgetPolicy} from '../../shared/campaignBudgetPolicy.ts';
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
-const MAX_CAMPAIGN_DAILY_BUDGET = 15;
+
 const BATCH_SIZE = 50;
 
 Deno.serve(async (req) => {
@@ -19,6 +20,11 @@ Deno.serve(async (req) => {
     let failed = 0;
 
     for (const account of accounts) {
+      const [settingsRows,legacyRows]=await Promise.all([
+        base44.asServiceRole.entities.PerformanceSettings.filter({amazon_account_id:account.id},'-updated_at',1),
+        base44.asServiceRole.entities.AutopilotConfig.filter({amazon_account_id:account.id},'-updated_at',1),
+      ]);
+      const MAX_CAMPAIGN_DAILY_BUDGET=campaignBudgetPolicy(settingsRows[0],legacyRows[0]).maximumCampaignBudget;
       const campaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: account.id }, '-updated_at', 2000).catch(() => []);
       campaignsScanned += campaigns.length;
 
@@ -66,7 +72,7 @@ Deno.serve(async (req) => {
 
     return Response.json({
       ok: failed === 0,
-      max_campaign_daily_budget: MAX_CAMPAIGN_DAILY_BUDGET,
+      budget_cap_source: 'account_campaign_configuration',
       accounts_scanned: accounts.length,
       campaigns_scanned: campaignsScanned,
       campaigns_over_cap: campaignsOverCap,

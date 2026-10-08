@@ -2,6 +2,9 @@
   "name": "PerformanceSettings",
   "type": "object",
   "properties": {
+    "maximum_campaign_budget": {"type":"number","minimum":1,"description":"Teto nominal individual de campanha; independente do teto de gasto da conta."},
+    "allow_campaign_budget_overcommit": {"type":"boolean","default":false,"description":"Permite soma nominal acima do teto de gasto diário; não altera o teto efetivo da conta."},
+
     "amazon_account_id": {
       "type": "string"
     },

@@ -73,7 +73,8 @@ export function resolveSafeMaxCpc(params: {
   const cvr = numberValue(params.observedCvr, 0);
   if (params.operatingAcos <= 0) return 0;
   const calculated = price > 0 && cvr > 0 && cvr <= 1 ? price * cvr * (params.operatingAcos / 100) : null;
-  const cap = calculated !== null ? (explicit > 0 ? Math.min(explicit, calculated) : calculated) : (explicit > 0 ? explicit : null);
+  const hardExplicitCap = explicit > 0 && params.economics?.safe_max_cpc_source !== 'modeled_prior_cvr';
+  const cap = calculated !== null ? (hardExplicitCap ? Math.min(explicit, calculated) : calculated) : (explicit > 0 ? explicit : null);
   // Round down: a monetary ceiling cannot be exceeded by rounding.
   return cap === null ? null : Math.floor((cap + Number.EPSILON) * 100) / 100;
 }

@@ -1,3 +1,4 @@
+import {nominalBudgetExceedsLimit,campaignBudgetPolicy} from '../../shared/campaignBudgetPolicy.ts';
 /**
  * runSmartBudgetAllocation — Motor de redistribuição inteligente de budget diário
  *
@@ -110,7 +111,7 @@ Deno.serve(async (req) => {
     // ── Resolver conta ──────────────────────────────────────────────
     let account: any;
     if (body.amazon_account_id) {
-      const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1);
+      const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1);
       account = accs[0];
     } else {
       const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-created_date', 1);
@@ -121,8 +122,8 @@ Deno.serve(async (req) => {
 
     // ── Carregar configurações ──────────────────────────────────────
     const [perfList, campaigns] = await Promise.all([
-      base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, null, 1).catch(() => []),
-      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 500).catch(() => []),
+      base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, undefined, 1).catch(() => []),
+      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, undefined, 500).catch(() => []),
     ]);
 
     const perf = perfList[0] || {};
@@ -130,7 +131,7 @@ Deno.serve(async (req) => {
     const BREAK_EVEN_ACOS = Number(perf.max_acos || TARGET_ACOS * 2);
     const ACCOUNT_BUDGET_CAP = Number(perf.daily_budget_limit || 70); // hard cap da conta
     const MIN_CAMPAIGN_BUDGET = Number(perf.minimum_campaign_budget || 5);
-    const MAX_CAMPAIGN_BUDGET = 25; // teto por campanha para evitar concentração excessiva
+    const MAX_CAMPAIGN_BUDGET = campaignBudgetPolicy(perf).maximumCampaignBudget; // teto por campanha para evitar concentração excessiva
 
     // ── Filtrar campanhas ativas ────────────────────────────────────
     const activeCampaigns = campaigns.filter((c: any) => {
@@ -190,7 +191,7 @@ Deno.serve(async (req) => {
 
     // ── Hard cap de conta: escalar se soma > ACCOUNT_BUDGET_CAP ───
     const totalNewBudget = decisions.reduce((s, d) => s + d.new_budget, 0);
-    if (totalNewBudget > ACCOUNT_BUDGET_CAP) {
+    if (nominalBudgetExceedsLimit(perf,ACCOUNT_BUDGET_CAP,totalNewBudget)) {
       const scale = ACCOUNT_BUDGET_CAP / totalNewBudget;
       for (const d of decisions) {
         d.new_budget = r2(Math.max(MIN_CAMPAIGN_BUDGET, d.new_budget * scale));
@@ -212,7 +213,7 @@ Deno.serve(async (req) => {
       total_current_budget: r2(decisions.reduce((s, d) => s + d.current_budget, 0)),
       total_new_budget: r2(decisions.reduce((s, d) => s + d.new_budget, 0)),
       account_budget_cap: ACCOUNT_BUDGET_CAP,
-      scaled_down: totalNewBudget > ACCOUNT_BUDGET_CAP,
+      scaled_down: nominalBudgetExceedsLimit(perf,ACCOUNT_BUDGET_CAP,totalNewBudget),
     };
     for (const d of decisions) stats.classified[d.tier] = (stats.classified[d.tier] || 0) + 1;
 

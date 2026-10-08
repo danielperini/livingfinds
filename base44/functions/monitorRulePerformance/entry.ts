@@ -1,3 +1,4 @@
+import {nominalBudgetExceedsLimit} from '../../shared/campaignBudgetPolicy.ts';
 /**
  * monitorRulePerformance — Monitora performance de regras e executa rollback automático.
  * Executado diariamente. Não chama IA.
@@ -15,7 +16,7 @@ const ROLLBACK_ACOS_THRESHOLD = 50;     // ACoS > 50% → rollback
 const ROLLBACK_SPEND_NO_SALES_PCT = 0.3; // gasto sobe > 30% sem vendas → rollback
 const ROLLBACK_SALES_DROP_PCT = 0.4;     // vendas caem > 40% → rollback
 
-function daysAgo(n) { return new Date(Date.now() - n * 86400000).toISOString().slice(0, 10); }
+function daysAgo(n: number) { return new Date(Date.now() - n * 86400000).toISOString().slice(0, 10); }
 
 Deno.serve(async (req) => {
   const now = new Date().toISOString();
@@ -52,7 +53,7 @@ Deno.serve(async (req) => {
       { amazon_account_id: aid }, '-assessment_date', 1000
     ).catch(() => []);
 
-    const campaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 200);
+    const campaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, undefined, 200);
     const performance = (await base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, '-updated_at', 1).catch(() => []))[0] || {};
     const totalActiveBudget = campaigns
       .filter(c => c.state === 'enabled' || c.status === 'enabled')
@@ -87,7 +88,7 @@ Deno.serve(async (req) => {
     }
 
     // ── Guardrail global: budget total excede R$65 ──────────────────────
-    if (totalActiveBudget > MAX_TOTAL_DAILY_BUDGET) {
+    if (nominalBudgetExceedsLimit(performance,MAX_TOTAL_DAILY_BUDGET,totalActiveBudget)) {
       // Suspender regras de aumento de budget
       for (const rule of activeRules) {
         if (['redistribute_budget', 'increase_bid_percent'].includes(rule.action?.type)) {
@@ -135,8 +136,8 @@ Deno.serve(async (req) => {
       const metricsAfter = metrics14d.filter(m => m.date >= activationDate);
       const metricsBefore = metrics14d.filter(m => m.date < activationDate && m.date >= daysAgo(14));
 
-      const sumMetrics = (rows) => rows.reduce(
-        (acc, m) => ({ spend: acc.spend + (m.spend || 0), sales: acc.sales + (m.sales || 0), orders: acc.orders + (m.orders || 0) }),
+      const sumMetrics = (rows: any[]) => rows.reduce(
+        (acc: any, m: any) => ({ spend: acc.spend + (m.spend || 0), sales: acc.sales + (m.sales || 0), orders: acc.orders + (m.orders || 0) }),
         { spend: 0, sales: 0, orders: 0 }
       );
 
@@ -198,12 +199,12 @@ Deno.serve(async (req) => {
       rules_rolled_back: rolledBack.length,
       rules_promoted_to_deterministic: promoted.length,
       total_active_budget: Math.round(totalActiveBudget * 100) / 100,
-      budget_within_limits: totalActiveBudget <= MAX_TOTAL_DAILY_BUDGET,
+      budget_within_limits: !nominalBudgetExceedsLimit(performance,MAX_TOTAL_DAILY_BUDGET,totalActiveBudget),
       rolled_back: rolledBack,
       promoted,
     });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('[monitorRulePerformance]', error.message);
     return Response.json({ ok: false, error: error.message }, { status: 500 });
   }

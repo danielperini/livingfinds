@@ -42,3 +42,9 @@ Deno.test('missing totals do not fabricate a microphone margin', () => {
   assertEquals(resolveBreakEvenAcos({current_price:100,total_variable_cost_per_unit:110,break_even_acos:20}),0);
   assertEquals(resolveBreakEvenAcos({break_even_acos:0,contribution_margin_percent:12}),0);
 });
+
+Deno.test('observed conversion replaces a modeled prior but never a manual CPC cap',()=>{
+ const p={economics:{safe_max_cpc:0.49,safe_max_cpc_source:'modeled_prior_cvr'},observedCvr:0.1,observedAov:107.85,operatingAcos:13.56};
+ assertEquals(resolveSafeMaxCpc(p),1.46);
+ assertEquals(resolveSafeMaxCpc({...p,economics:{safe_max_cpc:0.49,safe_max_cpc_source:'manual_cap'}}),0.49);
+});

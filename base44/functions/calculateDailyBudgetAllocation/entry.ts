@@ -1,3 +1,4 @@
+import {nominalBudgetHeadroom} from '../../shared/campaignBudgetPolicy.ts';
 /**
  * calculateDailyBudgetAllocation — Motor Oficial de Orçamento v2
  *
@@ -85,6 +86,7 @@ Deno.serve(async (req) => {
     }
     if (!account) return Response.json({ ok: false, error: 'Nenhuma conta Amazon conectada.' });
     const aid = account.id;
+    const nominalSettings=(await base44.asServiceRole.entities.PerformanceSettings.filter({amazon_account_id:aid},'-updated_at',1))[0]||{};
 
     // ── 2. BudgetConfiguration (fonte oficial) ──────────────────────────────
     const budgetConfigs = await base44.asServiceRole.entities.BudgetConfiguration.filter({ amazon_account_id: aid });
@@ -141,9 +143,13 @@ Deno.serve(async (req) => {
     const totalWeightSum    = campaignWeight + hoursWeight;
     const utilization_score = ((campaign_factor * campaignWeight) + (hours_factor * hoursWeight)) / totalWeightSum;
     const rangeSpan         = ceiling - floor;
-    const daily_limit       = r2(clamp(floor + rangeSpan * utilization_score, floor, ceiling));
+    const suggested_daily_limit = r2(clamp(floor + rangeSpan * utilization_score, floor, ceiling));
+    // A configured account cap has precedence over the allocation formula.
+    const configuredCap = Number(nominalSettings.daily_budget_limit);
+    const daily_limit = Number.isFinite(configuredCap) && configuredCap > 0 ? configuredCap : suggested_daily_limit;
 
     const calcLog = {
+      suggested_daily_limit, configured_cap: configuredCap || null,
       floor, ceiling, weekly_capacity: weeklyCapacity, eligible_campaigns: eligibleCount,
       coverage_hours: coverageHours, campaign_weight: campaignWeight, hours_weight: hoursWeight,
       campaign_factor: r2(campaign_factor), hours_factor: r2(hours_factor),
@@ -205,7 +211,7 @@ Deno.serve(async (req) => {
     //   - nenhum aumento já pendente hoje
     //   - limite geral ainda permite gasto adicional
     const totalCurrentBudget = dedupedEligible.reduce((s: number, c: any) => s + Number(c.daily_budget || 0), 0);
-    const budgetRemainingForIncreases = daily_limit - totalCurrentBudget;
+    const budgetRemainingForIncreases = nominalBudgetHeadroom(nominalSettings,daily_limit,totalCurrentBudget);
 
     const allocations: any[] = [];
     let totalIncreases = 0;
@@ -288,18 +294,21 @@ Deno.serve(async (req) => {
         updated_at: now,
       });
 
-      // Aplicar aumentos de budget nas campanhas elegíveis
-      const toUpdate = allocations
-        .filter((a: any) => a.action === 'aumentar')
-        .map((a: any) => ({ id: a.campaign_db_id, daily_budget: a.suggested_budget }));
-
-      for (let i = 0; i < toUpdate.length; i += 50) {
-        await base44.asServiceRole.entities.Campaign.bulkUpdate(toUpdate.slice(i, i + 50)).catch(() => {});
+      // Only Amazon readback may confirm a budget change in the local catalog.
+      const requested = allocations.filter((a: any) => a.action === 'aumentar');
+      const confirmedIds = new Set<string>();
+      for (let i = 0; i < requested.length; i += 20) {
+        const result = await base44.asServiceRole.functions.invoke('adjustCampaignBudgets', {
+          _service_role: true, amazon_account_id: aid,
+          adjustments: requested.slice(i,i+20).map((a: any)=>({campaign_id:a.campaign_id,db_id:a.campaign_db_id,new_budget:a.suggested_budget,reason:a.reason})),
+        });
+        const data = result?.data ?? result;
+        for (const a of data?.adjustments || []) if (a.confirmed) confirmedIds.add(String(a.campaign_id));
       }
 
       // Registrar histórico
       const historyEntries = allocations
-        .filter((a: any) => a.action === 'aumentar')
+        .filter((a: any) => a.action === 'aumentar' && confirmedIds.has(String(a.campaign_id)))
         .map((a: any) => ({
           amazon_account_id: aid,
           campaign_id: a.campaign_id,

@@ -85,6 +85,7 @@ function legacyAdsEconomics(rec: any, conversionRate: number) {
     break_even_acos: Math.round(contributionPct * 100) / 100,
     target_acos: Math.round(targetAcos * 100) / 100,
     target_roas: targetAcos > 0 ? Math.round(100 / targetAcos * 100) / 100 : 0,
+    safe_max_cpc_source: 'modeled_prior_cvr',
     safe_max_cpc: Math.round(price * cvr * targetAcos / 100 * 100) / 100,
   };
 }

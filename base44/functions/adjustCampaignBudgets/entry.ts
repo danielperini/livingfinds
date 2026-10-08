@@ -1,6 +1,7 @@
+import {campaignBudgetPolicy} from '../../shared/campaignBudgetPolicy.ts';
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
-const MAX_CAMPAIGN_DAILY_BUDGET = 15;
+
 
 Deno.serve(async (req) => {
   try {
@@ -11,10 +12,15 @@ Deno.serve(async (req) => {
     const { amazon_account_id, adjustments } = body;
     // adjustments: [{ campaign_id, db_id, new_budget, reason }]
 
-    const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ id: amazon_account_id }, null, 1);
+    const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ id: amazon_account_id }, undefined, 1);
     const account = accounts[0];
     if (!account) return Response.json({ ok: false, error: 'Conta não encontrada' }, { status: 404 });
 
+    const [settingsRows,legacyRows]=await Promise.all([
+      base44.asServiceRole.entities.PerformanceSettings.filter({amazon_account_id},'-updated_at',1),
+      base44.asServiceRole.entities.AutopilotConfig.filter({amazon_account_id},'-updated_at',1),
+    ]);
+    const MAX_CAMPAIGN_DAILY_BUDGET=campaignBudgetPolicy(settingsRows[0],legacyRows[0]).maximumCampaignBudget;
     const safeAdjustments = (Array.isArray(adjustments) ? adjustments : []).map((a: any) => {
       const requestedBudget = Number(a?.new_budget || 0);
       const cappedBudget = Math.min(MAX_CAMPAIGN_DAILY_BUDGET, Math.max(1, Number.isFinite(requestedBudget) ? requestedBudget : 1));
@@ -30,6 +36,8 @@ Deno.serve(async (req) => {
     const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
     const clientId = Deno.env.get('ADS_CLIENT_ID');
     const clientSecret = Deno.env.get('ADS_CLIENT_SECRET');
+
+    if (!refreshToken || !profileId || !clientId || !clientSecret) return Response.json({ok:false,error:'Credenciais Ads incompletas'}, {status:400});
 
     const tokenRes = await fetch('https://api.amazon.com/auth/o2/token', {
       method: 'POST',
@@ -64,12 +72,14 @@ Deno.serve(async (req) => {
 
     const successIds = new Set((data?.campaigns?.success || []).map((s: any) => String(s.campaignId)));
     const errors = data?.campaigns?.error || [];
-    const allSuccess = res.ok && successIds.size === 0 && errors.length === 0;
+    const verifyResponse = await fetch(`${baseUrl}/sp/campaigns/list`, {method:'POST',headers,body:JSON.stringify({campaignIdFilter:{include:safeAdjustments.map((a:any)=>String(a.campaign_id))},maxResults:1000})});
+    const verifiedPayload = await verifyResponse.json();
+    const verifiedIds = new Set<string>((verifyResponse.ok ? verifiedPayload.campaigns || [] : []).filter((c:any)=>safeAdjustments.some((a:any)=>String(a.campaign_id)===String(c.campaignId)&&Math.abs(Number(c.budget?.budget)-a.new_budget)<0.001)).map((c:any)=>String(c.campaignId)));
 
     // Atualizar banco somente com o valor efetivamente permitido.
     let dbUpdated = 0;
     for (const adj of safeAdjustments) {
-      if (allSuccess || successIds.has(String(adj.campaign_id))) {
+      if (verifiedIds.has(String(adj.campaign_id))) {
         try {
           await base44.asServiceRole.entities.Campaign.update(adj.db_id, {
             daily_budget: adj.new_budget,
@@ -86,7 +96,7 @@ Deno.serve(async (req) => {
       amazon_account_id,
       operation: 'budget_adjustment',
       trigger_type: 'manual',
-      status: errors.length === 0 ? 'success' : 'warning',
+      status: res.ok && verifiedIds.size === safeAdjustments.length && errors.length === 0 ? 'success' : 'warning',
       started_at: new Date().toISOString(),
       completed_at: new Date().toISOString(),
       records_processed: safeAdjustments.length,
@@ -95,9 +105,10 @@ Deno.serve(async (req) => {
     }).catch(() => {});
 
     return Response.json({
-      ok: errors.length === 0,
+      ok: res.ok && errors.length === 0 && verifiedIds.size === safeAdjustments.length,
       http_status: res.status,
-      amazon_success: allSuccess ? safeAdjustments.length : successIds.size,
+      amazon_success: verifiedIds.size,
+      amazon_accepted: successIds.size,
       amazon_errors: errors,
       db_updated: dbUpdated,
       max_campaign_daily_budget: MAX_CAMPAIGN_DAILY_BUDGET,
@@ -105,11 +116,12 @@ Deno.serve(async (req) => {
       adjustments: safeAdjustments.map((a: any) => ({
         campaign_id: a.campaign_id,
         requested_budget: a.requested_budget,
-        applied_budget: a.new_budget,
+        applied_budget: verifiedIds.has(String(a.campaign_id)) ? a.new_budget : null,
+        confirmed: verifiedIds.has(String(a.campaign_id)),
         capped: a.budget_capped,
       })),
     });
-  } catch (error) {
+  } catch (error: any) {
     return Response.json({ ok: false, error: error.message }, { status: 500 });
   }
 });
