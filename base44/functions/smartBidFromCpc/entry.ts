@@ -105,7 +105,7 @@ Deno.serve(async (req) => {
           const econMatches = economics.filter(matches);
           const product = productMatches.length === 1 ? productMatches[0] : null;
           const econ = econMatches.length === 1 ? econMatches[0] : null;
-          if (!product || !hasFreshAdsInventory(product) || availableAdsStock(product) <= 0 || !isProductEligibleForCampaignActivation(product) || !economicsAreActionable(econ)) {
+          if (!product || !econ || !hasFreshAdsInventory(product) || availableAdsStock(product) <= 0 || !isProductEligibleForCampaignActivation(product) || !economicsAreActionable(econ)) {
             summary.skipped_insufficient_data++; continue;
           }
           const feeAge = Date.now() - Date.parse(econ.fees_verified_at || '');
