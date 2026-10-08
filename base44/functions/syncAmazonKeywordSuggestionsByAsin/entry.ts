@@ -39,6 +39,7 @@ function normalizeKeyword(kw: string): string {
 
 function extractRecommendations(data: any): any[] {
   if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.keywordTargetList)) return data.keywordTargetList;
   if (data?.keywordRecommendations && Array.isArray(data.keywordRecommendations)) return data.keywordRecommendations;
   if (data?.recommendations && Array.isArray(data.recommendations)) return data.recommendations;
   if (data?.suggestedKeywords && Array.isArray(data.suggestedKeywords)) return data.suggestedKeywords;
@@ -75,9 +76,10 @@ async function fetchWithRetry(url: string, opts: RequestInit, maxRetries = 2, de
     const waitMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
       ? retryAfterSeconds * 1000
       : delayMs * (attempt + 1);
-    if (attempt < maxRetries) await new Promise(r => setTimeout(r, waitMs));
+    if (attempt === maxRetries) return res;
+    await new Promise(r => setTimeout(r, waitMs));
   }
-  return fetch(url, opts); // last attempt
+  throw new Error('Invalid retry configuration');
 }
 
 Deno.serve(async (req) => {
@@ -182,9 +184,11 @@ Deno.serve(async (req) => {
               'Accept': 'application/vnd.spkeywordsrecommendation.v4+json',
             },
             body: JSON.stringify({
+              recommendationType: 'KEYWORDS_FOR_ASINS',
               asins: [asin_val],
+              targets: [],
               maxRecommendations: max_suggestions_per_asin,
-              filterOptions: { keywordMatchTypeFilter: match_types },
+              sortDimension: 'CONVERSIONS',
             }),
           },
           3, // 3 retries

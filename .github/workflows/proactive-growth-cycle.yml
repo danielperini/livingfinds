@@ -34,7 +34,13 @@ jobs:
                 body: JSON.stringify(payload),
               });
               const data = await response.json().catch(() => ({}));
-              if (!response.ok || data.ok === false) throw new Error(name + \": \" + (data.error || response.status));
+              if (!response.ok || data.ok === false) {
+                const failures = Object.entries(data.stages || {})
+                  .filter(([, stage]) => stage?.ok === false)
+                  .map(([stageName, stage]) => ({ stage: stageName, error: stage.error, reason: stage.reason, code: stage.code }));
+                console.error(\"GROWTH_STAGE_FAILURES=\" + JSON.stringify({ function: name, status: response.status, failures }));
+                throw new Error(name + \": \" + (data.error || data.reason || (failures.length ? failures.map(f => f.stage).join(\", \") : \"response ok=false\")));
+              }
               return data;
             };
             const common = { _service_role: true, _canonical_orchestrator: \"runUnifiedDecisionEngine\", dry_run: false };
