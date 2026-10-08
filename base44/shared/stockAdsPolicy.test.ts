@@ -1,5 +1,5 @@
 import { assertEquals } from 'jsr:@std/assert';
-import { stockAdsDecision } from './stockAdsPolicy.ts';
+import { stockAdsDecision, availableAdsStock } from './stockAdsPolicy.ts';
 import { hasFreshAdsInventory } from './stockAdsPolicy.ts';
 import { inventoryAvailable, campaignStateConfirmed, isStockCampaignPause } from './inventorySyncPolicy.ts';
 
@@ -68,4 +68,14 @@ Deno.test('seller confirmation permits temporary FBA override without changing A
   assertEquals(product.fba_inventory, 0);
   assertEquals(confirmedFbaOverride(product, now + 3600001), null);
   assertEquals(confirmedFbaOverride({ ...product, fba_stock_override: { ...product.fba_stock_override, source: 'inferred_total' } }, now), null);
+});
+
+Deno.test('a newer successful API observation supersedes seller stock override, including zero', async()=>{
+ const {confirmedFbaOverride}=await import('./fbaStockOverride.ts');
+ const now=Date.now();
+ const p={catalog_sync_status:'success',last_catalog_sync_at:new Date(now-500).toISOString(),fba_inventory:2,fba_stock_override:{source:'seller_confirmed',quantity:20,confirmed_at:new Date(now-1000).toISOString(),expires_at:new Date(now+3600000).toISOString()}};
+ assertEquals(confirmedFbaOverride(p,now),null);
+ assertEquals(availableAdsStock(p),2);
+ assertEquals(availableAdsStock({...p,fba_inventory:0}),0);
+ assertEquals(confirmedFbaOverride({...p,catalog_sync_status:'failed'},now),20);
 });

@@ -47,6 +47,9 @@ jobs:
       - name: Run Amazon Ads policy unit tests
         run: |
           deno test --node-modules-dir=auto \
+            base44/shared/profitGuardPolicy.test.ts \
+            base44/shared/adsUnitEconomics.test.ts \
+            base44/shared/verifiedBidEvidence.test.ts \
             base44/shared/stockAdsPolicy.test.ts \
             base44/shared/campaignCoverageEligibility.test.ts \
             base44/shared/portfolioBudgetPacing.test.ts \

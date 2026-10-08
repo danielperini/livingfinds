@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { zeroSalesCircuitBreaker, availableInventory, resolveOperatingAcos, resolveSafeMaxCpc } from "./profitGuardPolicy.ts";
+import { zeroSalesCircuitBreaker, availableInventory, resolveOperatingAcos, resolveSafeMaxCpc, resolveBreakEvenAcos } from "./profitGuardPolicy.ts";
 
 Deno.test('v23 inventory is exclusively available FBA', () => {
   assertEquals(availableInventory({ fba_inventory: 20, available_quantity: 0 }), 20);
@@ -30,3 +30,15 @@ Deno.test("mantém aprendizado pequeno abaixo do limite econômico", () => {
   }), { triggered: false, spendLimit: 5 });
 });
 
+
+Deno.test('Amazon total fees are not subtracted twice', () => {
+  const econ={current_price:71.9,total_variable_cost_per_unit:54.68,amazon_fee_amount:14.68,amazon_fee_percent:12,break_even_acos:23.95};
+  assertEquals(resolveOperatingAcos(econ,20).break_even_acos,23.95);
+  assertEquals(resolveOperatingAcos(econ,20).target_acos,19.16);
+});
+Deno.test('missing totals do not fabricate a microphone margin', () => {
+  assertEquals(resolveBreakEvenAcos({current_price:159.9,unit_cost:80,amazon_fee_amount:26.79,amazon_fee_percent:13}),null);
+  for(const v of [null,undefined,'',false,NaN]) assertEquals(resolveBreakEvenAcos({current_price:100,total_variable_cost_per_unit:v}),null);
+  assertEquals(resolveBreakEvenAcos({current_price:100,total_variable_cost_per_unit:110,break_even_acos:20}),0);
+  assertEquals(resolveBreakEvenAcos({break_even_acos:0,contribution_margin_percent:12}),0);
+});

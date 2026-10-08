@@ -1,3 +1,4 @@
+import { adsEconomicsStatus, calculateAdsUnitEconomics } from '../../shared/adsUnitEconomics.ts';
 /**
  * Motor único de repricing.
  *
@@ -1098,9 +1099,9 @@ async function queuePriceAction(base44: any, params: any) {
   let canonicalDecision: any = null;
   if (params.canonicalSnapshot) {
     const idempotencyKey = canonicalDecisionIdempotencyKey({
-      amazon_account_id: params.accountId, marketplace_id: params.marketplaceId,
-      entity_type: 'product_price', entity_id: params.product.id, action: 'update_listing_price',
-      window: String(params.canonicalSnapshot.window_end || day),
+      accountId: params.accountId, marketplaceId: params.marketplaceId, profileId: String(params.canonicalSnapshot.profile_id || 'sp-api'),
+      entityType: 'product_price', entityId: params.product.id, actionType: 'update_listing_price',
+      decisionWindow: String(params.canonicalSnapshot.window_end || day),
     });
     const existingDecision = await base44.asServiceRole.entities.OptimizationDecision.filter(
       { amazon_account_id: params.accountId, idempotency_key: idempotencyKey }, '-created_at', 1,
@@ -1110,7 +1111,7 @@ async function queuePriceAction(base44: any, params: any) {
       entity_type: 'product_price', entity_id: params.product.id, asin: params.product.asin, sku: params.product.sku,
       action: 'update_listing_price', canonical_action: 'REPRICE', value_before: oldPrice, value_after: newPrice,
       status: 'approved', snapshot_id: params.canonicalSnapshot.id, idempotency_key: idempotencyKey,
-      entity_lock_key: canonicalEntityLockKey({ amazon_account_id: params.accountId, marketplace_id: params.marketplaceId, entity_type: 'product_price', entity_id: params.product.id }),
+      entity_lock_key: canonicalEntityLockKey({ accountId: params.accountId, sku: params.product.sku, entityId: params.product.id, decisionWindow: String(params.canonicalSnapshot.window_end || day) }),
       reason: params.decision.decisionReason, correlation_id: params.correlationId || null,
       source: 'runUnifiedDecisionEngine', max_attempts: MAX_QUEUE_ATTEMPTS,
     });
@@ -1909,8 +1910,11 @@ async function evaluateAccount(
       guardrails: settings,
       listing_issues: listing.issues,
     };
+    const adsUnitEconomics = calculateAdsUnitEconomics({ ...mergedEconomics, simple_national_tax_pct: policy.salesTaxPct });
     const update: any = {
       ...feesPatch,
+      simple_national_tax_pct: policy.salesTaxPct,
+      ...(adsUnitEconomics || {}),
       marketplace_id: account.marketplace_id,
       product_id: product.id,
       asin: product.asin,
@@ -1947,13 +1951,7 @@ async function evaluateAccount(
       economic_data_complete: validation.complete &&
         Boolean(decision.currentEconomics),
       economic_data_updated_at: nowIso(),
-      economics_status: validation.complete
-        ? "complete"
-        : validation.reasons.some((reason) => reason.includes("Tarifas"))
-        ? "missing_fees"
-        : validation.reasons.some((reason) => reason.includes("Custo"))
-        ? "missing_cost"
-        : "partial",
+      economics_status: adsEconomicsStatus(mergedEconomics, validation.complete),
       repricing_requested: requestedEnabled,
       repricing_enabled: executionEnabled,
       repricing_status: status,
@@ -1976,22 +1974,9 @@ async function evaluateAccount(
       elasticity_confidence: elasticity.confidence,
       elasticity_observations: elasticity.observations,
       final_economic_confidence: decision.confidence,
-      contribution_margin_amount: decision.currentEconomics
-        ? roundMoney(
-          decision.currentEconomics.unitProfit + numberValue(adsCost.value),
-        )
-        : null,
-      contribution_margin_percent: decision.currentEconomics
-        ? roundMoney(
-          (decision.currentEconomics.unitProfit + numberValue(adsCost.value)) /
-            confirmedPrice * 100,
-        )
-        : null,
-      profit_before_ads: decision.currentEconomics
-        ? roundMoney(
-          decision.currentEconomics.unitProfit + numberValue(adsCost.value),
-        )
-        : null,
+      contribution_margin_amount: adsUnitEconomics?.contribution_margin_amount ?? null,
+      contribution_margin_percent: adsUnitEconomics?.contribution_margin_percent ?? null,
+      profit_before_ads: adsUnitEconomics?.contribution_margin_amount ?? null,
       profit_after_ads: decision.currentEconomics?.unitProfit,
       profit_after_ads_percent: decision.currentEconomics?.marginPct,
       economic_conflict: economicConflict,

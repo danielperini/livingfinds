@@ -1,20 +1,13 @@
+import { economicsAreActionable, resolveOperatingAcos, resolveSafeMaxCpc } from '../../shared/profitGuardPolicy.ts';
+import { availableAdsStock, hasFreshAdsInventory } from '../../shared/stockAdsPolicy.ts';
+import { isProductEligibleForCampaignActivation } from '../../shared/productCampaignPauseGuard.ts';
+import { verifiedBidEvidence } from '../../shared/verifiedBidEvidence.ts';
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { AMAZON_BID_CEILING_BRL, AMAZON_WINNER_BID_CEILING_BRL } from '../../shared/amazonBidCeiling.ts';
 
 const n = (value: any, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
 const round2 = (value: number) => Math.round(value * 100) / 100;
 const active = (value: unknown) => ['enabled', 'active'].includes(String(value || '').toLowerCase());
-
-function inventoryAvailable(product: any): number {
-  return Math.max(0, n(product?.fba_inventory ?? product?.inventory_quantity ?? product?.quantity ?? product?.stock, 0));
-}
-
-function gatewayOk(response: any): boolean {
-  const data = response?.data || response || {};
-  if (data?.ok === true) return true;
-  const status = n(data?.status || data?.status_code || data?.http_status, 0);
-  return status === 200 || status === 207;
-}
 
 Deno.serve(async (req) => {
   const now = new Date();
@@ -26,6 +19,7 @@ Deno.serve(async (req) => {
       return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
     }
 
+    const dryRun = payload.dry_run === true;
     const salesMode = payload.sales_mode === true || /sales_mode/i.test(String(payload.trigger_type || ''));
     const accounts = payload.amazon_account_id
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: payload.amazon_account_id }, undefined, 1)
@@ -47,20 +41,20 @@ Deno.serve(async (req) => {
 
     for (const account of accounts) {
       try {
-        const [settingsRows, legacyRows, keywords, campaigns, products, assessments, economics, recentChanges] = await Promise.all([
+        const [settingsRows, legacyRows, keywords, campaigns, products, economics, recentChanges, searchTerms] = await Promise.all([
           base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: account.id }, '-updated_at', 1).catch(() => []),
           base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: account.id }, '-updated_at', 1).catch(() => []),
           base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: account.id, state: 'enabled' }, '-spend', 2000).catch(() => []),
           base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: account.id }, undefined, 5000).catch(() => []),
           base44.asServiceRole.entities.Product.filter({ amazon_account_id: account.id }, undefined, 5000).catch(() => []),
-          base44.asServiceRole.entities.DailyProductAdsAssessment.filter({ amazon_account_id: account.id }, '-assessment_date', 5000).catch(() => []),
           base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: account.id }, '-updated_at', 5000).catch(() => []),
           base44.asServiceRole.entities.AdsBidChangeLog.filter({ amazon_account_id: account.id }, '-created_at', 5000).catch(() => []),
+          base44.asServiceRole.entities.SearchTerm.filter({ amazon_account_id: account.id }, '-date', 20000),
         ]);
 
         const settings = settingsRows[0] || {};
         const legacy = legacyRows[0] || {};
-        const targetAcos = n(settings.target_acos ?? settings.acos_target ?? legacy.target_acos ?? legacy.acos_target, 10);
+        const accountTargetAcos = n(settings.target_acos ?? settings.acos_target ?? legacy.target_acos ?? legacy.acos_target, 10);
         const configuredMin = Math.max(0.02, n(settings.min_bid ?? legacy.min_bid, 0.4));
         const configuredMax = Math.max(configuredMin, n(settings.max_bid ?? settings.max_cpc ?? legacy.max_bid, AMAZON_WINNER_BID_CEILING_BRL));
         const minBid = configuredMin;
@@ -82,18 +76,7 @@ Deno.serve(async (req) => {
             campaignState.set(String(id), state);
           }
         }
-        const productByAsin = new Map(products.filter((p: any) => p.asin).map((p: any) => [String(p.asin).toUpperCase(), p]));
-        const safeCpcByAsin = new Map<string, number>();
-        for (const row of economics) {
-          const asin = String(row.asin || '').toUpperCase();
-          const safe = n(row.safe_max_cpc ?? row.maximum_economic_cpc, 0);
-          if (asin && safe > 0) safeCpcByAsin.set(asin, safe);
-        }
-        for (const row of assessments) {
-          const asin = String(row.asin || '').toUpperCase();
-          const safe = n(row.safe_max_cpc ?? row.maximum_economic_cpc, 0);
-          if (asin && safe > 0) safeCpcByAsin.set(asin, safe);
-        }
+        const evidence = verifiedBidEvidence(searchTerms);
         const lastChangedAt = new Map<string, number>();
         for (const row of recentChanges) {
           const id = String(row.keyword_id || '');
@@ -102,36 +85,59 @@ Deno.serve(async (req) => {
           if (ts > (lastChangedAt.get(id) || 0)) lastChangedAt.set(id, ts);
         }
 
+        const seenKeywordIds = new Set<string>();
         summary.keywords_analyzed += keywords.length;
         for (const kw of keywords) {
           const keywordId = String(kw.keyword_id || '');
-          if (!keywordId) { summary.skipped_insufficient_data++; continue; }
+          if (!keywordId || seenKeywordIds.has(keywordId)) { summary.skipped_insufficient_data++; continue; }
+          seenKeywordIds.add(keywordId);
+          if (summary.adjustments.length >= Math.max(1, Math.min(50, n(payload.max_actions,20)))) break;
           const campaignId = String(kw.campaign_id || '');
           const state = campaignState.get(campaignId);
-          if (state && !active(state)) { summary.skipped_insufficient_data++; continue; }
+          if (!state || !active(state)) { summary.skipped_insufficient_data++; continue; }
 
-          const asin = String(kw.asin || '').toUpperCase();
-          const product = asin ? productByAsin.get(asin) : null;
-          if (product && (String(product.inventory_status || '').toLowerCase() === 'out_of_stock' || inventoryAvailable(product) <= 0)) {
-            summary.skipped_insufficient_data++;
-            continue;
+          const evidenceMatches = evidence.filter(row => row.keywordId === keywordId && row.campaignId === campaignId);
+          if (evidenceMatches.length !== 1) { summary.skipped_insufficient_data++; continue; }
+          const metrics = evidenceMatches[0];
+          const asin = metrics.asin;
+          const matches = (row:any) => String(row.asin || '').toUpperCase() === asin && String(row.sku || '').trim().toUpperCase() === metrics.sku;
+          const productMatches = products.filter((p:any) => p.status !== 'archived' && p.catalog_sync_status !== 'duplicate' && matches(p));
+          const econMatches = economics.filter(matches);
+          const product = productMatches.length === 1 ? productMatches[0] : null;
+          const econ = econMatches.length === 1 ? econMatches[0] : null;
+          if (!product || !hasFreshAdsInventory(product) || availableAdsStock(product) <= 0 || !isProductEligibleForCampaignActivation(product) || !economicsAreActionable(econ)) {
+            summary.skipped_insufficient_data++; continue;
           }
-
-          const clicks = n(kw.clicks, 0);
-          const orders = n(kw.orders, 0);
-          const spend = n(kw.spend, 0);
-          const sales = n(kw.sales, 0);
-          const cpc = n(kw.cpc, clicks > 0 ? spend / clicks : 0);
-          const currentBid = n(kw.current_bid ?? kw.bid, minBid);
-          const acos = n(kw.acos, sales > 0 ? (spend / sales) * 100 : 0);
+          const feeAge = Date.now() - Date.parse(econ.fees_verified_at || '');
+          if (econ.fees_source !== 'sp_api_product_fees' || !Number.isFinite(feeAge) || feeAge < 0 || feeAge > 24*3600000) { summary.skipped_insufficient_data++; continue; }
+          const targetAcos = resolveOperatingAcos(econ, accountTargetAcos).target_acos;
+          const {clicks,orders,spend,sales} = metrics;
+          const cpc = clicks > 0 ? spend / clicks : 0;
+          const acos = sales > 0 ? spend / sales * 100 : null;
           if (spend <= 0 || cpc <= 0) { summary.skipped_insufficient_data++; continue; }
-
-          const winner = orders >= 1 && sales > 0 && acos > 0 && acos <= targetAcos;
-          const clearlyUnprofitable = (orders > 0 && acos > targetAcos * 1.2) || (orders === 0 && spend >= noSaleSpendThreshold);
+          const winner = orders >= 1 && acos !== null && acos <= targetAcos;
+          const matureAcos = metrics.matureSales > 0 ? metrics.matureSpend / metrics.matureSales * 100 : null;
+          const clearlyUnprofitable = (metrics.matureOrders > 0 && matureAcos !== null && matureAcos > targetAcos * 1.2)
+            || (metrics.matureOrders === 0 && metrics.matureSpend >= noSaleSpendThreshold);
           const canIncrease = winner && clicks >= minClicksWinner;
-          const canReduce = clearlyUnprofitable && clicks >= minClicksReduce;
+          const canReduce = !winner && clearlyUnprofitable && metrics.matureClicks >= minClicksReduce;
           if (!canIncrease && !canReduce) { summary.skipped_within_target++; continue; }
-
+          // Read the actual bid and parent state before any write; stale local values are not a baseline.
+          const read = async (path:string, data:any, type:string) => {
+            const result = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
+              amazon_account_id: account.id, operation:'verify_economic_bid_state', method:'POST',path,payload:data,
+              content_type:`application/vnd.${type}.v3+json`,accept:`application/vnd.${type}.v3+json`,_service_role:true,
+            });
+            const response = result?.data || result;
+            if (response?.ok !== true) throw new Error('Amazon bid state unavailable');
+            return response.payload;
+          };
+          const campaignRemote = await read('/sp/campaigns/list',{campaignIdFilter:{include:[campaignId]},maxResults:100},'spCampaign');
+          if (!active(campaignRemote?.campaigns?.find((c:any)=>String(c.campaignId)===campaignId)?.state)) continue;
+          const keywordRemote = await read('/sp/keywords/list',{keywordIdFilter:{include:[keywordId]},maxResults:100},'spKeyword');
+          const remote = keywordRemote?.keywords?.find((k:any)=>String(k.keywordId)===keywordId && String(k.campaignId)===campaignId);
+          if (!active(remote?.state) || !(Number(remote.bid)>0)) continue;
+          const currentBid = Number(remote.bid);
           const direction = canIncrease ? 'increase' : 'decrease';
           const lastChange = lastChangedAt.get(keywordId) || 0;
           const cooldownH = direction === 'increase' ? winnerIncreaseCooldownH : reduceCooldownH;
@@ -140,21 +146,22 @@ Deno.serve(async (req) => {
             continue;
           }
 
-          const safeCpc = safeCpcByAsin.get(asin) || 0;
+          const safeCpc = resolveSafeMaxCpc({economics:econ,observedCvr:clicks>0?orders/clicks:0,observedAov:orders>0?sales/orders:0,operatingAcos:targetAcos});
+          if (direction === 'increase' && !(safeCpc && safeCpc > 0)) { summary.skipped_economic_ceiling++; continue; }
           const hardCeiling = direction === 'increase' ? winnerCeiling : normalCeiling;
-          const economicCeiling = safeCpc > 0 ? Math.min(hardCeiling, safeCpc) : hardCeiling;
+          const economicCeiling = safeCpc !== null ? Math.min(hardCeiling, safeCpc) : hardCeiling;
           let targetBid = currentBid;
 
           if (direction === 'increase') {
             const growth = 1 + maxIncreasePct / 100;
-            targetBid = round2(Math.min(currentBid * growth, economicCeiling));
+            targetBid = Math.floor(Math.min(currentBid * growth, economicCeiling) * 100) / 100;
             if (targetBid <= currentBid || targetBid - currentBid < minDelta) {
               summary.skipped_economic_ceiling++;
               continue;
             }
           } else {
-            const proportional = orders > 0 && acos > 0
-              ? currentBid * Math.max(0.65, Math.min(0.9, targetAcos / acos))
+            const proportional = orders > 0 && (acos ?? 0) > 0
+              ? currentBid * Math.max(0.65, Math.min(0.9, targetAcos / (acos || 1)))
               : currentBid * (1 - maxDecreasePct / 100);
             const maxStepDown = currentBid * (1 - maxDecreasePct / 100);
             targetBid = round2(Math.max(minBid, Math.max(proportional, maxStepDown)));
@@ -164,6 +171,7 @@ Deno.serve(async (req) => {
             }
           }
 
+          if (dryRun) { summary.adjustments.push({keyword_id:keywordId,sku:metrics.sku,asin,old_bid:currentBid,new_bid:targetBid,status:'proposed'}); continue; }
           const gatewayResponse = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
             amazon_account_id: account.id,
             operation: direction === 'increase' ? 'sales_mode_winner_bid_increase' : 'economic_bid_reduction',
@@ -176,18 +184,24 @@ Deno.serve(async (req) => {
             _service_role: true,
           }).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
 
-          if (!gatewayOk(gatewayResponse)) {
+          if ((gatewayResponse?.data || gatewayResponse)?.ok !== true) {
             const data = gatewayResponse?.data || gatewayResponse || {};
             summary.errors.push(`kw ${keywordId}: ${data.error || data.message || 'gateway_rejected'}`);
             continue;
           }
 
+          // Log acceptance before readback, so a transient GET failure cannot trigger another adjustment.
+          const acceptedLog = await base44.asServiceRole.entities.AdsBidChangeLog.create({amazon_account_id:account.id,keyword_id:keywordId,campaign_id:campaignId,asin,sku:metrics.sku,old_bid:currentBid,new_bid:targetBid,status:'confirming',amazon_confirmed:false,created_at:now.toISOString()});
+          const confirmedPayload = await read('/sp/keywords/list',{keywordIdFilter:{include:[keywordId]},maxResults:100},'spKeyword');
+          const confirmed = confirmedPayload?.keywords?.find((k:any)=>String(k.keywordId)===keywordId);
+          if (Number(confirmed?.bid) !== targetBid) { summary.errors.push(`kw ${keywordId}: readback mismatch`); continue; }
           await base44.asServiceRole.entities.Keyword.update(kw.id, {
             current_bid: targetBid,
             bid: targetBid,
             last_seen_at: now.toISOString(),
           }).catch(() => {});
-          await base44.asServiceRole.entities.AdsBidChangeLog.create({
+          await base44.asServiceRole.entities.AdsBidChangeLog.update(acceptedLog.id, {
+            amazon_confirmed: true,
             amazon_account_id: account.id,
             keyword_id: keywordId,
             keyword: kw.keyword_text || kw.keyword || '',
@@ -199,9 +213,9 @@ Deno.serve(async (req) => {
             change_percent: round2(((targetBid - currentBid) / Math.max(currentBid, 0.01)) * 100),
             direction,
             reason: direction === 'increase'
-              ? `Winner: ${orders} venda(s), ACoS ${acos.toFixed(1)}% <= meta ${targetAcos}%; +${maxIncreasePct}% limitado por teto econômico R$${economicCeiling.toFixed(2)}.`
-              : `Proteção econômica: ${orders} venda(s), ACoS ${acos.toFixed(1)}%, gasto R$${spend.toFixed(2)}; redução máxima ${maxDecreasePct}%.`,
-            evidence: `sales_mode=${salesMode} clicks=${clicks} orders=${orders} spend=${spend.toFixed(2)} sales=${sales.toFixed(2)} cpc=${cpc.toFixed(2)} acos=${acos.toFixed(1)} target_acos=${targetAcos} safe_cpc=${safeCpc || 'n/a'} gateway=amazonAdsCommand`,
+              ? `Winner: ${orders} venda(s), ACoS ${(acos ?? 0).toFixed(1)}% <= meta ${targetAcos}%; +${maxIncreasePct}% limitado por teto econômico R$${economicCeiling.toFixed(2)}.`
+              : `Proteção econômica: ${orders} venda(s), ACoS ${(acos ?? 0).toFixed(1)}%, gasto R$${spend.toFixed(2)}; redução máxima ${maxDecreasePct}%.`,
+            evidence: `sales_mode=${salesMode} clicks=${clicks} orders=${orders} spend=${spend.toFixed(2)} sales=${sales.toFixed(2)} cpc=${cpc.toFixed(2)} acos=${(acos ?? 0).toFixed(1)} target_acos=${targetAcos} safe_cpc=${safeCpc || 'n/a'} gateway=amazonAdsCommand`,
             ai_confidence: winner ? 90 : 80,
             risk_level: 'low',
             status: 'executed',
@@ -218,7 +232,7 @@ Deno.serve(async (req) => {
             old_bid: currentBid,
             new_bid: targetBid,
             economic_ceiling: economicCeiling,
-            acos: round2(acos),
+            acos: acos === null ? null : round2(acos),
             target_acos: targetAcos,
             orders,
           });

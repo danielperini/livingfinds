@@ -1,3 +1,4 @@
+import { adsEconomicsStatus, calculateAdsUnitEconomics } from '../../shared/adsUnitEconomics.ts';
 /**
  * Persiste somente custos e limites informados pelo usuário.
  * Dados Amazon (preço, tarifas, estoque e vendas) são preservados e atualizados
@@ -69,24 +70,12 @@ function invalidNonNegativeFields(item: any) {
 }
 
 function legacyAdsEconomics(rec: any, conversionRate: number) {
-  const price = Number(rec.current_price || 0);
-  const referralPct = Number(rec.amazon_fee_percent || 0);
-  const referralAmount = price > 0 && referralPct >= 0
-    ? price * referralPct / 100
-    : Number(rec.amazon_fee_amount || 0);
-  const costsBeforeAds = Number(rec.unit_cost || 0) +
-    Number(rec.inbound_freight_per_unit || 0) +
-    Number(rec.tax_per_unit || 0) +
-    Number(rec.logistics_cost_per_unit || 0) +
-    Number(rec.packaging_cost_per_unit || 0) +
-    Number(rec.other_variable_cost_per_unit || 0) +
-    Number(rec.fba_fee || 0) +
-    Number(rec.amazon_fixed_fee || 0) +
-    Number(rec.estimated_return_cost || 0) +
-    referralAmount;
-  if (price <= 0) return {};
-  const contribution = price - costsBeforeAds;
-  const contributionPct = contribution / price * 100;
+  const economics = calculateAdsUnitEconomics(rec);
+  if (!economics) return {};
+  const price = Number(rec.current_price);
+  const costsBeforeAds = economics.total_variable_cost_per_unit;
+  const contribution = economics.contribution_margin_amount;
+  const contributionPct = economics.break_even_acos;
   const targetAcos = Math.max(0, contributionPct * SAFETY_FACTOR);
   const cvr = conversionRate > 0 ? conversionRate : FALLBACK_CVR;
   return {
@@ -138,18 +127,7 @@ function policyInputs(rec: any) {
 }
 
 function economicsStatus(rec: any, complete: boolean) {
-  if (
-    rec.costs_confirmed_by_user !== true || !finite(rec.unit_cost) ||
-    Number(rec.unit_cost) <= 0
-  ) return "missing_cost";
-  if (
-    !rec.current_price || rec.current_price <= 0 ||
-    !String(rec.price_source || "").startsWith("sp_api")
-  ) return "missing_price";
-  if (
-    !rec.fees_verified_at || !String(rec.fees_source || "").startsWith("sp_api")
-  ) return "missing_fees";
-  return complete ? "complete" : "partial";
+  return adsEconomicsStatus(rec, complete);
 }
 
 Deno.serve(async (req) => {

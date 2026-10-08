@@ -26,14 +26,18 @@ export function resolveBreakEvenAcos(economics: any): number | null {
     && economics?.profit_before_ads != null
     && Number.isFinite(Number(economics.profit_before_ads))
     && Number(economics.profit_before_ads) <= 0) return 0;
+  // total_variable_cost_per_unit already includes Amazon fees. Missing is not zero.
+  const finite = (v: unknown) => v !== null && v !== undefined && v !== '' && typeof v !== 'boolean' && Number.isFinite(Number(v));
+  const total = economics?.total_variable_cost_per_unit;
+  const price = economics?.current_price;
   const candidates = [
     economics?.break_even_acos,
     economics?.contribution_margin_percent,
-    economics?.amazon_fee_percent > 0 && economics?.current_price > 0
-      ? ((numberValue(economics.current_price) - numberValue(economics.total_variable_cost_per_unit) - numberValue(economics.amazon_fee_amount)) / numberValue(economics.current_price)) * 100
+    finite(total) && Number(total) >= 0 && finite(price) && Number(price) > 0
+      ? (Number(price) - Number(total)) / Number(price) * 100
       : null,
-  ].map((value) => numberValue(value, 0)).filter((value) => value > 0 && value <= 100);
-  return candidates.length ? Math.min(...candidates) : null;
+  ].filter(finite).map(Number).filter(value => value <= 100);
+  return candidates.length ? Math.max(0, Math.min(...candidates)) : null;
 }
 
 export function resolveOperatingAcos(economics: any, accountTargetAcos = 15): {
@@ -88,7 +92,7 @@ export function economicsAreActionable(economics: any, assessment?: any): boolea
     (numberValue(economics.current_price, 0) > 0 || numberValue(economics.average_sale_price, 0) > 0);
   const economicsConfidenceOk = confidence >= 0.65 || confidence >= 65 || hasCoreEconomics;
   const assessmentConfidenceOk = assessmentConfidence >= 0.65 || assessmentConfidence >= 65;
-  return ['complete', 'partial'].includes(status) && economicsConfidenceOk && assessmentConfidenceOk;
+  return hasCoreEconomics && economics.costs_confirmed_by_user !== false && ['complete', 'partial'].includes(status) && economicsConfidenceOk && assessmentConfidenceOk;
 }
 
 export function isProtectedWinner(params: {
