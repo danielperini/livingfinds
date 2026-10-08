@@ -1,6 +1,7 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { CAMPAIGN_LIFECYCLE_VERSION, shouldRetireAutoCampaign } from '../../shared/campaignLifecyclePolicy.ts';
 import { productAdsEligibility } from '../../shared/productAdsEligibility.ts';
+import { createOptimizationDecisionOnce } from '../../shared/createOptimizationDecisionOnce.ts';
 
 const invoke = async (base44: any, name: string, payload: Record<string, unknown>) => {
   try {
@@ -198,7 +199,7 @@ Deno.serve(async (request) => {
             retirementDecisions.push({ campaign_id: id, asin, reason_code: reasonCode, dry_run: true });
             continue;
           }
-          const decision = await base44.asServiceRole.entities.OptimizationDecision.create({
+          const decision = await createOptimizationDecisionOnce(base44.asServiceRole.entities.OptimizationDecision, {
             amazon_account_id: accountId,
             decision_type: 'product_ads_eligibility',
             entity_type: 'campaign',
@@ -256,7 +257,7 @@ Deno.serve(async (request) => {
           retirementDecisions.push({ campaign_id: id, asin, reason_code: 'AUTO_30D_3D_NO_SALES_RETIRE', dry_run: true });
           continue;
         }
-        const decision = await base44.asServiceRole.entities.OptimizationDecision.create({
+        const decision = await createOptimizationDecisionOnce(base44.asServiceRole.entities.OptimizationDecision, {
           amazon_account_id: accountId,
           decision_type: 'automatic_campaign_lifecycle',
           entity_type: 'campaign',
