@@ -2,6 +2,12 @@
   "timezone": "America/Sao_Paulo",
   "jobs": [
     {
+      "name": "Confirm same-SKU promotions against Amazon - every 15 minutes",
+      "function": "confirmSameSkuSearchTermPromotions",
+      "cron": "12,27,42,57 * * * *",
+      "payload": { "_service_role": true, "max_promotions": 50 }
+    },
+    {
       "name": "Daily profitable same-SKU search term discovery - 07:25 BRT",
       "function": "runImmediateSameSkuSearchTermHarvest",
       "cron": "25 7 * * *",
