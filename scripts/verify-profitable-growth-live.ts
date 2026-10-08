@@ -4,6 +4,7 @@ async function call(name,payload={}){const r=await fetch('http://127.0.0.1:8000/
 try{
  console.log('FINAL_SYNC='+JSON.stringify(await call('syncAmazonIntradayCampaignMetrics')));
  console.log('FINAL_CONTROLLER='+JSON.stringify(await call('updateDailySpendController')));
+ console.log('FINAL_CAP_CHECK='+JSON.stringify(await call('runBudgetKillSwitch')));
  const settings=(await db.PerformanceSettings.filter({amazon_account_id:aid},'-updated_at',1))[0];
  const campaigns=await call('amazonAdsCommand',{path:'/sp/campaigns/list',method:'POST',content_type:'application/vnd.spCampaign.v3+json',payload:{campaignIdFilter:{include:['182671770305062']},maxResults:100}});
  const targets=await call('amazonAdsCommand',{path:'/sp/targets/list',method:'POST',content_type:'application/vnd.spTargetingClause.v3+json',payload:{targetIdFilter:{include:['483841461368064']},maxResults:100}});
