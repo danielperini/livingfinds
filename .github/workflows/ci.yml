@@ -28,6 +28,8 @@ jobs:
         run: npm ci
       - name: Test performance settings normalization
         run: node --test src/lib/performanceSettingsNormalization.test.js
+      - name: Test Amazon confirmation labels
+        run: node --test src/lib/motorLabels.test.js
       - name: Typecheck
         run: npm run typecheck
         continue-on-error: true

@@ -94,7 +94,11 @@ export function getMotorActionBadge(item) {
 export function getAmazonConfirmationStatus(item) {
   const decisionStatus = String(item?.status || '').toLowerCase();
   const queueStatus = String(item?.queue_status || '').toLowerCase();
-  const confirmationStatus = String(item?.amazon_confirmation_status || item?.confirmation_status || '').toLowerCase();
+  // Logs de ajustes verificados por releitura usam o contrato legado abaixo.
+  // Um status explícito mais recente (ex.: divergent) sempre prevalece.
+  const confirmationStatus = String(item?.amazon_confirmation_status || item?.confirmation_status || (
+    decisionStatus === 'confirmed' && item?.amazon_confirmed === true ? 'confirmed' : ''
+  )).toLowerCase();
   const hasAmazonAttempt = Boolean(
     item?.amazon_request_id || item?.amazon_response || item?.executed_at || Number(item?.attempt_count || 0) > 0
   );
