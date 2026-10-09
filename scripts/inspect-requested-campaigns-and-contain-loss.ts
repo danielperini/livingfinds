@@ -1,0 +1,31 @@
+import {makeEntities} from 'file:///app/server/src/sdk/entities.ts';import {sql} from 'file:///app/server/src/db.ts';
+import {verifiedBidEvidence} from 'file:///app/base44/shared/verifiedBidEvidence.ts';
+import {resolveOperatingAcos} from 'file:///app/base44/shared/profitGuardPolicy.ts';
+const aid='6a40448b9af1241f356e9fcc',db=makeEntities(),token=Deno.env.get('API_TOKEN')||Deno.env.get('ADMIN_PASSWORD')||'';
+async function call(name,payload={}){const r=await fetch('http://127.0.0.1:8000/functions/'+name,{method:'POST',headers:{'content-type':'application/json','x-api-token':token},body:JSON.stringify({_service_role:true,amazon_account_id:aid,...payload}),signal:AbortSignal.timeout(240000)});const d=await r.json();if(!r.ok||d.ok===false)throw Error(name+': '+JSON.stringify(d.error||d.errors||d));return d;}
+async function ads(path,method,payload,type){return (await call('amazonAdsCommand',{path,method,payload,content_type:'application/vnd.'+type+'.v3+json',accept:'application/vnd.'+type+'.v3+json'})).payload;}
+async function list(path,type,key,filter={}){const rows=[];let nextToken;do{const d=await ads(path,'POST',{...filter,maxResults:1000,...(nextToken?{nextToken}:{})},type);rows.push(...(d?.[key]||[]));nextToken=d?.nextToken;}while(nextToken);return rows;}
+const wanted=['39643884148441','111432477691277','39921441624350','32758869592808','30028219080984','55778939383970','115172465893236','71591552989634','145448285352925','31629826723833','83592980683886','158033588207099','75620440656198','268736662773603'];
+try{
+ await call('syncProductCatalogV2');await call('syncAmazonOfferAvailability');
+ const camps=await list('/sp/campaigns/list','spCampaign','campaigns');const selected=camps.filter(c=>wanted.includes(String(c.campaignId))||String(c.name).toLowerCase().includes('interruptor coibeu'));
+ const filter={campaignIdFilter:{include:selected.map(c=>String(c.campaignId))}};
+ const groups=await list('/sp/adGroups/list','spAdGroup','adGroups',filter),adsRows=await list('/sp/productAds/list','spProductAd','productAds',filter),keywords=await list('/sp/keywords/list','spKeyword','keywords',filter),targets=await list('/sp/targets/list','spTargetingClause','targetingClauses',filter);
+ const [products,econs,terms]=await Promise.all([db.Product.filter({amazon_account_id:aid},'id',5000),db.ProductEconomics.filter({amazon_account_id:aid},'id',5000),db.SearchTerm.filter({amazon_account_id:aid},'-date',20000)]);
+ const norm=s=>String(s||'').toUpperCase();
+ const lockEcons=econs.filter(e=>norm(e.sku)==='FBA-0100');
+ const lockProduct=products.find(p=>norm(p.sku)==='FBA-0100'&&p.catalog_sync_status==='success');
+ if(lockEcons.length===1&&lockProduct){const e=lockEcons[0];if(e.costs_confirmed_by_user===true&&Number(e.unit_cost)===280&&Number(e.total_variable_cost_per_unit)>Number(e.current_price)&&Date.now()-Date.parse(e.fees_verified_at)<86400000){
+ const allAds=await list('/sp/productAds/list','spProductAd','productAds',{stateFilter:{include:['ENABLED']}});
+ const bad=allAds.filter(a=>norm(a.sku)==='FBA-0100'&&a.asin===e.asin&&camps.some(c=>String(c.campaignId)===String(a.campaignId)&&c.state==='ENABLED'));
+ const cids=[...new Set(bad.map(a=>String(a.campaignId)))];
+ const exclusive=cids.filter(cid=>allAds.filter(a=>String(a.campaignId)===cid).every(a=>norm(a.sku)==='FBA-0100'));
+ for(let i=0;i<exclusive.length;i+=20){const batch=exclusive.slice(i,i+20);await ads('/sp/campaigns','PUT',{campaigns:batch.map(campaignId=>({campaignId,state:'PAUSED'}))},'spCampaign');const actual=await list('/sp/campaigns/list','spCampaign','campaigns',{campaignIdFilter:{include:batch}});for(const c of actual){if(c.state!=='PAUSED')throw Error('Pause not confirmed: '+c.campaignId);for(const local of await db.Campaign.filter({amazon_account_id:aid,campaign_id:String(c.campaignId)},'id',100))await db.Campaign.update(local.id,{state:'paused',status:'paused',last_pause_reason:'ABOVE_BREAK_EVEN',archive_reason:'ABOVE_BREAK_EVEN',updated_at:new Date().toISOString()});console.log('LOSS_PAUSE='+JSON.stringify({campaign_id:c.campaignId,name:c.name,state:c.state,sku:'FBA-0100',price:e.current_price,cost_total:e.total_variable_cost_per_unit}));}}
+ await db.Product.update(lockProduct.id,{campaign_pause_lock:true,campaign_pause_reason:'ABOVE_BREAK_EVEN',pause_reason:'ABOVE_BREAK_EVEN',campaign_pause_lock_source:'profit_protection',campaign_pause_lock_at:new Date().toISOString()});
+ console.log('LOSS_CONTAINMENT='+JSON.stringify({campaigns_paused:exclusive.length,shared_campaigns_not_paused:cids.filter(c=>!exclusive.includes(c)).length,sku:'FBA-0100'}));
+ }}
+ for(const c of selected){const cid=String(c.campaignId);console.log('SPECIFIC_CAMPAIGN='+JSON.stringify({id:cid,name:c.name,state:c.state,budget:c.budget,bidding:c.dynamicBidding,groups:groups.filter(a=>String(a.campaignId)===cid),ads:adsRows.filter(a=>String(a.campaignId)===cid),keywords:keywords.filter(a=>String(a.campaignId)===cid),targets:targets.filter(a=>String(a.campaignId)===cid)}));}
+ const asins=new Set(adsRows.map(a=>a.asin));for(const p of products.filter(p=>asins.has(p.asin)&&p.catalog_sync_status==='success')){const e=econs.find(e=>norm(e.sku)===norm(p.sku)&&e.asin===p.asin);console.log('SPECIFIC_PRODUCT='+JSON.stringify({id:p.id,sku:p.sku,asin:p.asin,status:p.status,fba:p.fba_inventory,pause_lock:p.campaign_pause_lock,pause_reason:p.campaign_pause_reason||p.pause_reason,offer:p.offer_status,buyable:p.is_buyable,eligibility:p.advertising_eligibility,offer_fields:Object.fromEntries(Object.entries(p).filter(([k])=>/buyab|eligib|suppres|pause_lock|offer_status/.test(k))),economics:e?{status:e.economics_status,cost:e.unit_cost,price:e.current_price,fees_at:e.fees_verified_at,policy:resolveOperatingAcos(e,20),safe_cpc:e.safe_max_cpc}:null}));}
+ const termRows=terms.filter(t=>asins.has(t.advertised_asin)&&t.same_sku_attribution_verified===true&&Number(t.same_sku_orders)>0).map(t=>({term:t.search_term,sku:t.advertised_sku,asin:t.advertised_asin,date:t.date,orders:t.same_sku_orders,sales:t.same_sku_sales,spend:t.spend,clicks:t.clicks,campaign:t.campaign_id,target:t.source_target_id||t.target_id||t.keyword_id,fresh:t.metrics_fresh_at||t.synced_at}));
+ console.log('SPECIFIC_CONVERTING_TERMS='+JSON.stringify(termRows));
+}finally{await sql.end();}
