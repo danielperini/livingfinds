@@ -1,3 +1,4 @@
+import {availableAdsStock} from '../../shared/stockAdsPolicy.ts';
 /**
  * applyAdsScopeAuthorization
  *
@@ -96,7 +97,7 @@ function isActiveCatalogProduct(product: any): boolean {
   const sku = normSku(product?.sku || '');
   const asin = String(product?.asin || '').trim();
   const status = String(product?.status || product?.offer_status || '').toLowerCase();
-  const available = Number(product?.available_quantity ?? product?.fba_inventory ?? 0);
+  const available = availableAdsStock(product);
   return !!sku && !!asin && available > 0
     && !['inactive', 'archived', 'deleted', 'closed'].includes(status)
     && product?.listing_suppressed !== true
@@ -162,7 +163,7 @@ function calcEligibility(product: any, authorized: boolean): {
 } {
   if (!authorized) return { eligibility_status: 'not_authorized', ineligibility_reason: 'SKU fora da lista de escopo autorizado' };
 
-  const available = Number(product.available_quantity ?? product.fba_inventory ?? 0);
+  const available = availableAdsStock(product);
   // Estoque inbound não conta (spec seção 11)
   if (available <= 0) return { eligibility_status: 'out_of_stock', ineligibility_reason: `Estoque disponível zero (available=${available})` };
 

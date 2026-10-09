@@ -1,4 +1,4 @@
-import { recoveredOfferLockPatch } from '../../shared/catalogRecoveryPolicy.ts';
+import { offerOnlyProductPatch } from '../../shared/offerInventoryPolicy.ts';
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { listingOfferStatus } from '../../shared/listingOfferStatus.ts';
 import { availableAdsStock } from '../../shared/stockAdsPolicy.ts';
@@ -77,7 +77,7 @@ Deno.serve(async (request) => {
   try {
     const base44 = createClientFromRequest(request);
     const body = await request.json().catch(() => ({}));
-    const maxProducts = Math.min(Math.max(Number(body.max_products || 100), 1), 500);
+    const maxProducts = Math.min(Math.max(Number(body.max_products || 25), 1), 500);
     const requestedSkus = new Set((Array.isArray(body.skus) ? body.skus : [])
       .map((value: any) => String(value || '').trim().toUpperCase()).filter(Boolean));
     if (!body._service_role) {
@@ -96,10 +96,12 @@ Deno.serve(async (request) => {
         results.push({ account_id: account.id, ok: false, error: 'seller_id não configurado' });
         continue;
       }
-      const productRows = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: account.id }, '-updated_date', requestedSkus.size ? 5000 : maxProducts).catch(() => []);
+      const productRows = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: account.id }, '-updated_date', 5000).catch(() => []);
       const products = requestedSkus.size
         ? productRows.filter((product: any) => requestedSkus.has(String(product.sku || '').trim().toUpperCase())).slice(0, maxProducts)
-        : productRows;
+        : productRows.filter((p:any)=>availableAdsStock(p)>0)
+          .sort((a:any,b:any)=>(Date.parse(a.listing_checked_at||'')||0)-(Date.parse(b.listing_checked_at||'')||0))
+          .slice(0,maxProducts);
       const now = new Date().toISOString();
       let verified = 0, unavailable = 0, failed = 0;
       for (const product of products as any[]) {
@@ -118,30 +120,8 @@ Deno.serve(async (request) => {
                 listing_buyable: product.listing_buyable,
               }
             : observed;
-          const effectiveQuantity = signal.fulfillment_channel === 'MFN'
-            ? Number(signal.mfn_quantity || 0)
-            : availableAdsStock(product);
-          const eligibility = observed.listing_status_confirmed === false ? (product.ads_eligibility_status || 'verification_pending')
-            : signal.listing_suppressed ? 'listing_suppressed'
-            : !signal.offer_active ? 'offer_inactive'
-            : !signal.listing_buyable ? 'not_buyable'
-            : effectiveQuantity <= 0 ? 'out_of_stock'
-            : 'eligible';
-          await base44.asServiceRole.entities.Product.update(product.id, {
-            ...signal,
-            ...recoveredOfferLockPatch(product, observed),
-            ...(signal.fulfillment_channel === 'MFN' ? {
-              available_quantity: effectiveQuantity,
-              fba_inventory: effectiveQuantity,
-              inventory_status: effectiveQuantity > 5 ? 'in_stock' : effectiveQuantity > 0 ? 'low_stock' : 'out_of_stock',
-              status: effectiveQuantity > 0 ? 'active' : 'inactive',
-              catalog_sync_status: 'listing_mfn_verified',
-            } : {}),
-            ads_eligibility_status: eligibility,
-            ads_ineligibility_reason: signal.reason || (eligibility === 'out_of_stock' ? 'Estoque disponível zero' : ''),
-            ads_last_eligibility_check_at: now,
-            listing_checked_at: now,
-          });
+          await base44.asServiceRole.entities.Product.update(product.id,
+            offerOnlyProductPatch(product,signal,observed,now));
           verified++;
           if (!signal.listing_buyable) unavailable++;
         } catch (error: any) {
