@@ -10,8 +10,8 @@ const MAX_BID_STEP = 0.15;
 const MAX_BUDGET_STEP = 0.15;
 const MAX_ACTIONS = 18;
 const FRESHNESS_MINUTES = 45;
-const COMPETITIVE_BID_STEP = 0.10;
-const COMPETITIVE_FLOOR_OF_SAFE_CPC = 0.90;
+const COMPETITIVE_BID_STEP = 0.15;
+const COMPETITIVE_FLOOR_OF_SAFE_CPC = 1.00;
 const ECONOMIC_CACHE_MAX_MINUTES = 7 * 24 * 60;
 
 const n = (v: unknown, f = 0) => Number.isFinite(Number(v)) ? Number(v) : f;
@@ -22,6 +22,12 @@ const r2 = (v: number) => Math.round((v + Number.EPSILON) * 100) / 100;
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
 const active = (row: any) => ['enabled', 'active'].includes(low(row?.state || row?.status));
 const campaignId = (row: any) => s(row?.amazon_campaign_id || row?.campaign_id || row?.id);
+function isAutomaticCampaign(row: any) {
+  const mode = upper(row?.targeting_type || row?.targeting_mode || row?.targetingType);
+  const name = upper(row?.name || row?.campaign_name);
+  return ['AUTO', 'AUTOMATIC', 'AUTOMATIC_TARGETING'].includes(mode)
+    || name.startsWith('AUTO |') || name.startsWith('AUTO ') || name.startsWith('AUTOMATICA ');
+}
 const todayBrt = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 const hourBrt = () => Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false }).format(new Date())) % 24;
 const minuteBrt = () => Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', minute: '2-digit' }).format(new Date()));
@@ -185,6 +191,32 @@ Deno.serve(async (request) => {
       // It does not create a blanket bid increase: it only restores an
       // economically validated entity that is failing to reach the auction.
       const competitiveCoverageActive = intradayDataFresh && campaigns.length > 0;
+      const automaticCampaignIds = campaigns.filter(isAutomaticCampaign).map(campaignId).filter(Boolean);
+      const autoTargetsByCampaign = new Map<string, any[]>();
+      // AUTO targets are not Keyword rows. Read the enabled targeting clauses
+      // directly so recovery can improve their actual Amazon bids.
+      for (let i = 0; i < automaticCampaignIds.length; i += 10) {
+        const batch = automaticCampaignIds.slice(i, i + 10);
+        const response = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
+          amazon_account_id: aid,
+          operation: 'listTargets',
+          method: 'POST',
+          path: '/sp/targets/list',
+          payload: { campaignIdFilter: { include: batch }, stateFilter: { include: ['ENABLED'] }, maxResults: 100 },
+          content_type: 'application/vnd.spTargetingClause.v3+json',
+          accept: 'application/vnd.spTargetingClause.v3+json',
+          max_attempts: 2,
+          _service_role: true,
+        }).catch(() => null);
+        const targetRows = response?.data?.payload?.targetingClauses || response?.data?.targetingClauses || [];
+        for (const target of targetRows) {
+          const cid = s(target.campaignId);
+          if (!cid || !batch.includes(cid) || !active(target)) continue;
+          const rows = autoTargetsByCampaign.get(cid) || [];
+          rows.push(target);
+          autoTargetsByCampaign.set(cid, rows);
+        }
+      }
 
       // Hora atual: usa o delta intradiário quando disponível. Para a linha de
       // base, compara a mesma hora em até 14 dias fechados; assim não confunde
@@ -298,7 +330,10 @@ Deno.serve(async (request) => {
           lowDelivery && !historicalLossConfirmed && safeMaxCpc >= configuredMinBid &&
           economicConfidence >= 0.60 && admission.sp_api_data_fresh && economicsCacheUsable && admission.economics_complete
         ) {
-          competitiveCandidates.push({ campaign, id, asin, todayM, hist, safeAcos, budget, product, econ, economicConfidence, admission, safeMaxCpc, historicalWinner, todayWinner, economicsCacheUsable, economicsDataFresh, currentHourImpressions, expectedHourImpressions, expectedHourShare, currentHourShare, hourlyImpressionGap, campaignDistributionGap });
+          const automatic = isAutomaticCampaign(campaign);
+          const autoTargets = automatic ? (autoTargetsByCampaign.get(id) || []).filter((target: any) => n(target.bid) > 0) : [];
+          if (automatic && autoTargets.length === 0) continue;
+          competitiveCandidates.push({ campaign, id, asin, todayM, hist, safeAcos, budget, product, econ, economicConfidence, admission, safeMaxCpc, historicalWinner, todayWinner, economicsCacheUsable, economicsDataFresh, currentHourImpressions, expectedHourImpressions, expectedHourShare, currentHourShare, hourlyImpressionGap, campaignDistributionGap, automatic, autoTargets });
         }
       }
 
@@ -473,41 +508,52 @@ Deno.serve(async (request) => {
         }
       }
 
-      // Competitive coverage: a lack of early sales/impressions is not a
-      // reason to disappear from the auction. Re-establish the bid toward 80%
-      // of the confirmed safe CPC, one 5% reversible step at a time. It runs
-      // through the same canonical queue and Amazon confirmation as every
-      // other bid decision, so it cannot bypass margin, cap or cooldown rules.
+      // Recover low delivery for manual keywords and automatic targeting.
+      // Each product receives at most one reversible step per hourly window.
       if (competitiveCoverageActive && body.dry_run !== true) {
-        for (const candidate of competitiveCandidates.slice(0, 10)) {
+        const actedAsins = new Set<string>();
+        for (const candidate of competitiveCandidates) {
           if (queued.length >= MAX_ACTIONS) break;
-          const campaignKeywords = keywords
-            .filter((kw: any) => active(kw) && s(kw.campaign_id || kw.amazon_campaign_id) === candidate.id)
-            .sort((a: any, b: any) => {
-              const aExact = upper(a.match_type) === 'EXACT' ? 0 : 1;
-              const bExact = upper(b.match_type) === 'EXACT' ? 0 : 1;
-              return aExact - bExact || n(a.clicks) - n(b.clicks) || n(a.current_bid ?? a.bid) - n(b.current_bid ?? b.bid);
-            });
-          const keyword = campaignKeywords[0];
-          const keywordId = s(keyword?.keyword_id || keyword?.id);
-          const currentBid = n(keyword?.current_bid ?? keyword?.bid);
+          if (actedAsins.has(candidate.asin)) continue;
+          let entityType = 'keyword';
+          let entityId = '';
+          let keyword: any = null;
+          let currentBid = 0;
+          if (candidate.automatic) {
+            const target = [...candidate.autoTargets].sort((a: any, b: any) => n(a.bid) - n(b.bid))[0];
+            entityType = 'product_target';
+            entityId = s(target?.targetId || target?.target_id || target?.id);
+            currentBid = n(target?.bid);
+          } else {
+            const campaignKeywords = keywords
+              .filter((kw: any) => active(kw) && s(kw.campaign_id || kw.amazon_campaign_id) === candidate.id)
+              .sort((a: any, b: any) => {
+                const aExact = upper(a.match_type) === 'EXACT' ? 0 : 1;
+                const bExact = upper(b.match_type) === 'EXACT' ? 0 : 1;
+                return aExact - bExact || n(a.clicks) - n(b.clicks) || n(a.current_bid ?? a.bid) - n(b.current_bid ?? b.bid);
+              });
+            keyword = campaignKeywords[0];
+            entityId = s(keyword?.keyword_id || keyword?.id);
+            currentBid = n(keyword?.current_bid ?? keyword?.bid);
+          }
           const competitiveFloor = r2(clamp(Math.min(maxBid, candidate.safeMaxCpc * COMPETITIVE_FLOOR_OF_SAFE_CPC), configuredMinBid, maxBid));
           const nextBid = r2(Math.min(competitiveFloor, Math.max(configuredMinBid, currentBid * (1 + COMPETITIVE_BID_STEP))));
-          const key = `COMPETITIVE_COVERAGE|${aid}|${keywordId}|${hourKey}|${nextBid.toFixed(2)}`;
-          if (!keywordId || currentBid <= 0 || nextBid <= currentBid + 0.009 || activeKeys.has(key)) continue;
+          const key = `COMPETITIVE_COVERAGE|${aid}|${entityId}|${hourKey}`;
+          if (!entityId || currentBid <= 0 || nextBid <= currentBid + 0.009 || activeKeys.has(key)) continue;
           const decision = await createDecision({
             admission: candidate.admission,
-            entity_type: 'keyword', entity_id: keywordId, keyword_id: keywordId,
-            keyword_text: keyword.keyword_text || keyword.keyword || null,
+            entity_type: entityType, entity_id: entityId,
+            ...(entityType === 'keyword' ? { keyword_id: entityId, keyword_text: keyword?.keyword_text || keyword?.keyword || null, ad_group_id: keyword?.ad_group_id || null } : { target_id: entityId }),
             campaign_id: candidate.id, campaign_name: candidate.campaign.name || candidate.campaign.campaign_name || null,
-            ad_group_id: keyword.ad_group_id || null, asin: candidate.asin, sku: candidate.product?.sku || null,
-            action: 'increase_bid', canonical_action_type: 'KEYWORD_BID_CHANGE',
-            rationale: `COBERTURA COMPETITIVA: sem entrega suficiente nesta hora; bid aproxima-se do piso competitivo de R$ ${competitiveFloor.toFixed(2)}, limitado pelo CPC seguro confirmado de R$ ${candidate.safeMaxCpc.toFixed(2)}.`,
+            asin: candidate.asin, sku: candidate.product?.sku || null,
+            action: 'increase_bid', canonical_action_type: entityType === 'product_target' ? 'PRODUCT_TARGET_BID_CHANGE' : 'KEYWORD_BID_CHANGE',
+            rationale: `COBERTURA COMPETITIVA ${candidate.automatic ? 'AUTO' : 'MANUAL'}: baixa entrega; lance avança 15% em etapa reversível até o teto de CPC seguro R$ ${candidate.safeMaxCpc.toFixed(2)}.`,
             rule_key: 'INTRADAY_COMPETITIVE_COVERAGE_FLOOR', reason_code: 'INTRADAY_COMPETITIVE_COVERAGE_FLOOR',
             value_before: currentBid, value_after: nextBid, current_value: currentBid, proposed_value: nextBid,
             target_acos: candidate.safeAcos, confidence: candidate.historicalWinner || candidate.todayWinner ? 0.90 : 0.78, risk: 'low',
-            idempotency_key: key, conflict_group: `${aid}|keyword|${keywordId}`,
+            idempotency_key: key, conflict_group: `${aid}|${entityType}|${entityId}`,
             data_used: JSON.stringify({
+              campaign_type: candidate.automatic ? 'AUTO' : 'MANUAL',
               competitive_floor_bid: competitiveFloor, safe_max_cpc: candidate.safeMaxCpc,
               low_delivery: true, hour_brt: hour, today_clicks: candidate.todayM.clicks,
               today_spend: candidate.todayM.spend, historical_orders: candidate.hist.orders,
@@ -518,7 +564,8 @@ Deno.serve(async (request) => {
               policy: 'all_hours_all_days_no_blind_daypart_cut',
             }),
           });
-          queued.push({ decision_id: decision.id, action: 'increase_bid', campaign_id: candidate.id, keyword_id: keywordId, asin: candidate.asin, before: currentBid, after: nextBid, reason: 'competitive_coverage' });
+          actedAsins.add(candidate.asin);
+          queued.push({ decision_id: decision.id, action: 'increase_bid', campaign_id: candidate.id, target_id: entityType === 'product_target' ? entityId : undefined, keyword_id: entityType === 'keyword' ? entityId : undefined, asin: candidate.asin, before: currentBid, after: nextBid, reason: 'competitive_coverage' });
         }
       }
 
@@ -549,7 +596,7 @@ Deno.serve(async (request) => {
         winners: winners.map((x) => ({ campaign_id: x.id, asin: x.asin, orders_14d: x.hist.orders, acos_14d: x.histAcos == null ? null : r2(x.histAcos), orders_today: x.todayM.orders, acos_today: x.todayAcos == null ? null : r2(x.todayAcos) })),
         competitive_candidates: competitiveCandidates.map((x) => ({ campaign_id: x.id, asin: x.asin, clicks_today: x.todayM.clicks, spend_today: r2(x.todayM.spend), safe_max_cpc: r2(x.safeMaxCpc), hour_impressions: x.currentHourImpressions, expected_hour_impressions: r2(x.expectedHourImpressions), hour_impression_gap: x.hourlyImpressionGap, campaign_distribution_gap: x.campaignDistributionGap, economics_cache_usable: x.economicsCacheUsable })),
         queued, serving_growth: servingGrowth,
-        policy: { canonical_sales_only: true, intraday_ads_sales_avoids_stale_zero: true, hourly_impression_baseline_days: 14, hourly_campaign_distribution_guard: true, economic_cache_max_hours: ECONOMIC_CACHE_MAX_MINUTES / 60, dedupe_campaigns: true, global_spend_increase_only_with_v18_guardrails: true, reallocate_from_losers_to_winners: true, bid_step_max_pct: 15, competitive_coverage_bid_step_pct: COMPETITIVE_BID_STEP * 100, competitive_floor_of_safe_cpc_pct: COMPETITIVE_FLOOR_OF_SAFE_CPC * 100, all_hours_all_days: true, budget_step_max_pct: 10, top_of_search_change: false, amazon_confirmation_required: true },
+        policy: { canonical_sales_only: true, intraday_ads_sales_avoids_stale_zero: true, hourly_impression_baseline_days: 14, hourly_campaign_distribution_guard: true, economic_cache_max_hours: ECONOMIC_CACHE_MAX_MINUTES / 60, dedupe_campaigns: true, global_spend_increase_only_with_v18_guardrails: true, reallocate_from_losers_to_winners: true, bid_step_max_pct: 15, competitive_coverage_bid_step_pct: COMPETITIVE_BID_STEP * 100, competitive_floor_of_safe_cpc_pct: COMPETITIVE_FLOOR_OF_SAFE_CPC * 100, auto_target_recovery_enabled: true, all_hours_all_days: true, budget_step_max_pct: 10, top_of_search_change: false, amazon_confirmation_required: true },
       });
     }
 
