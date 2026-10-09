@@ -16,3 +16,16 @@ export function listingOfferStatus(summaries: any) {
     offerActive: states.some((state) => ACTIVE_LISTING_STATES.has(state)),
   };
 }
+
+/** BUYABLE is authoritative; an invalid attribute/image is not listing suppression. */
+export function listingBuyability(summaries:any, issues:any) {
+  const status=listingOfferStatus(summaries);
+  const rows=Array.isArray(issues)?issues:[];
+  const actions=rows.flatMap((issue:any)=>[
+    ...(Array.isArray(issue.enforcementActions)?issue.enforcementActions:[]),
+    ...(Array.isArray(issue.enforcements?.actions)?issue.enforcements.actions:[]),
+  ]).map((a:any)=>String(typeof a==='string'?a:a?.action||'').toUpperCase());
+  const suppressed=actions.some((a:string)=>['LISTING_SUPPRESSED','SEARCH_SUPPRESSED','OFFER_SUPPRESSED'].includes(a));
+  return {...status,suppressed,buyable:status.states.includes('BUYABLE')&&!suppressed,
+    issueCodes:rows.map((i:any)=>String(i.code||'')).filter(Boolean)};
+}

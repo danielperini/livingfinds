@@ -1,6 +1,6 @@
 import { offerOnlyProductPatch } from '../../shared/offerInventoryPolicy.ts';
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
-import { listingOfferStatus } from '../../shared/listingOfferStatus.ts';
+import { listingBuyability } from '../../shared/listingOfferStatus.ts';
 import { availableAdsStock } from '../../shared/stockAdsPolicy.ts';
 
 const MARKETPLACE_ID = Deno.env.get('AMAZON_MARKETPLACE_ID') || 'A2Q3Y263D00KWC';
@@ -37,13 +37,7 @@ async function fetchListing(base44: any, account: any, endpoint: string, sellerI
 
 function availability(listing: any) {
   const summaries = Array.isArray(listing?.summaries) ? listing.summaries : [];
-  const { states, statusKnown, offerActive } = listingOfferStatus(summaries);
-  const issues = Array.isArray(listing?.issues) ? listing.issues : [];
-  const blockingIssues = issues.filter((issue: any) => String(issue?.severity || '').toUpperCase() === 'ERROR');
-  const suppressed = issues.some((issue: any) => {
-    const actions = Array.isArray(issue?.enforcementActions) ? issue.enforcementActions.join('|').toUpperCase() : '';
-    return actions.includes('LISTING_SUPPRESSED') || actions.includes('SEARCH_SUPPRESSED');
-  });
+  const { states,statusKnown,offerActive,buyable,suppressed,issueCodes } = listingBuyability(summaries,listing?.issues);
   const fulfillmentRows = Array.isArray(listing?.fulfillmentAvailability) ? listing.fulfillmentAvailability : [];
   const mfnRows = fulfillmentRows.filter((row: any) => {
     const channel = String(row?.fulfillmentChannelCode || row?.fulfillment_channel_code || '').toUpperCase();
@@ -57,15 +51,16 @@ function availability(listing: any) {
     offer_active: offerActive,
     listing_status_confirmed: statusKnown,
     listing_suppressed: suppressed,
-    listing_buyable: offerActive && !suppressed && blockingIssues.length === 0,
+    listing_buyable: buyable,
+    listing_issue_codes: issueCodes,
     reason: suppressed
       ? 'Listing suprimido pela Amazon'
       : !statusKnown
       ? 'Status da oferta não retornado pela Amazon'
       : !offerActive
       ? `Oferta não ativa na Amazon (${states.join(',')})`
-      : blockingIssues.length
-      ? `Listing com ${blockingIssues.length} erro(s) bloqueante(s) na Amazon`
+      : !buyable
+      ? `Oferta sem status BUYABLE na Amazon (${states.join(',')})`
       : '',
     fulfillment_channel: mfnRows.length ? 'MFN' : 'AFN',
     mfn_quantity: mfnRows.length ? mfnQuantity : null,
