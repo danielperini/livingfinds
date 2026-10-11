@@ -168,7 +168,7 @@ async function repairItem(b: any, item: any, bidCap: number): Promise<{ ok: bool
   // Verificar/criar keywords EXACT
   const kr = await adsCall(base, token, clientId, profileId, 'POST', '/sp/keywords/list', CT_KW, {
     campaignIdFilter: { include: [campaignId] }, adGroupIdFilter: { include: [adGroupId] },
-    stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] }, matchTypeFilter: ['EXACT'], maxResults: 100,
+    stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] }, matchTypeFilter: includeFilter(['EXACT']), maxResults: 100,
   });
   if (!kr.ok) throw new Error(kr?.errors?.[0]?.message || 'Falha ao listar keywords EXACT');
   const remoteExact = list(kr, 'keywords').filter((v: any) => upper(v.matchType || v.match_type) === 'EXACT');
@@ -210,7 +210,7 @@ async function repairItem(b: any, item: any, bidCap: number): Promise<{ ok: bool
   // Verificação final
   const vk = await adsCall(base, token, clientId, profileId, 'POST', '/sp/keywords/list', CT_KW, {
     campaignIdFilter: { include: [campaignId] }, adGroupIdFilter: { include: [adGroupId] },
-    stateFilter: { include: ['ENABLED'] }, matchTypeFilter: ['EXACT'], maxResults: 100,
+    stateFilter: { include: ['ENABLED'] }, matchTypeFilter: includeFilter(['EXACT']), maxResults: 100,
   });
   const va = await adsCall(base, token, clientId, profileId, 'POST', '/sp/productAds/list', CT_PA, {
     campaignIdFilter: { include: [campaignId] }, adGroupIdFilter: { include: [adGroupId] },
