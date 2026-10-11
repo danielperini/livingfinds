@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { includeFilter } from '../../shared/adsApiFilters.ts';
 
 const wait = (ms:number) => new Promise(r => setTimeout(r, ms));
 const norm = (v:any) => String(v || '').toLowerCase().trim().replace(/\s+/g, ' ');
@@ -114,7 +115,7 @@ Deno.serve(async (request) => {
 
       try {
         const groupsResp = await ads(base44, accountId, 'listAdGroupsForDefinitiveRepair', 'POST', '/sp/adGroups/list', {
-          campaignIdFilter:[campaignId], stateFilter:{ include:['ENABLED','PAUSED','ARCHIVED'] }, maxResults:100,
+          campaignIdFilter: includeFilter([campaignId]), stateFilter:{ include:['ENABLED','PAUSED','ARCHIVED'] }, maxResults:100,
         }, 'application/vnd.spAdGroup.v3+json');
         let group = listOf(groupsResp, 'adGroups').find((g:any) => String(g.state || '').toUpperCase() !== 'ARCHIVED');
         if (!group) {
@@ -128,7 +129,7 @@ Deno.serve(async (request) => {
         const adGroupId = String(group.adGroupId);
 
         const adsResp = await ads(base44, accountId, 'listProductAdsForDefinitiveRepair', 'POST', '/sp/productAds/list', {
-          campaignIdFilter:[campaignId], adGroupIdFilter:[adGroupId], stateFilter:{ include:['ENABLED','PAUSED','ARCHIVED'] }, maxResults:100,
+          campaignIdFilter: includeFilter([campaignId]), adGroupIdFilter: includeFilter([adGroupId]), stateFilter:{ include:['ENABLED','PAUSED','ARCHIVED'] }, maxResults:100,
         }, 'application/vnd.spProductAd.v3+json');
         let productAd = listOf(adsResp, 'productAds').find((a:any) => String(a.state || '').toUpperCase() !== 'ARCHIVED');
         if (!productAd) {
@@ -143,7 +144,7 @@ Deno.serve(async (request) => {
         let keywordCount = 0;
         if (String(campaign.targetingType || '').toUpperCase() === 'MANUAL') {
           const kwResp = await ads(base44, accountId, 'listKeywordsForDefinitiveRepair', 'POST', '/sp/keywords/list', {
-            campaignIdFilter:[campaignId], adGroupIdFilter:[adGroupId], stateFilter:{ include:['ENABLED','PAUSED','ARCHIVED'] }, maxResults:100,
+            campaignIdFilter: includeFilter([campaignId]), adGroupIdFilter: includeFilter([adGroupId]), stateFilter:{ include:['ENABLED','PAUSED','ARCHIVED'] }, maxResults:100,
           }, 'application/vnd.spKeyword.v3+json');
           const existing = listOf(kwResp, 'keywords');
           const active = existing.filter((k:any) => String(k.state || '').toUpperCase() === 'ENABLED');
@@ -175,7 +176,7 @@ Deno.serve(async (request) => {
         await wait(5000);
 
         const verifyCampaigns = await ads(base44, accountId, 'verifyCompletedCampaign', 'POST', '/sp/campaigns/list', {
-          campaignIdFilter:[campaignId], stateFilter:{ include:['ENABLED','PAUSED','INCOMPLETE','ARCHIVED'] }, maxResults:10,
+          campaignIdFilter: includeFilter([campaignId]), stateFilter:{ include:['ENABLED','PAUSED','INCOMPLETE','ARCHIVED'] }, maxResults:10,
         });
         const verifiedCampaign = listOf(verifyCampaigns, 'campaigns').find((c:any) => String(c.campaignId) === campaignId);
         const remoteState = String(verifiedCampaign?.state || '').toUpperCase();
