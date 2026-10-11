@@ -196,7 +196,7 @@ export default function SearchTerms() {
 
   const addToTermBank = async (kw, m, bid) => {
     setActionLoading(kw.id + '_tb');
-    const term = normalizeText(kw.keyword_text || kw.keyword);
+    const term = normalizeText(kw.search_term || kw.search_term_original || kw.keyword_text || kw.keyword);
     try {
       await base44.entities.TermBank.create({
         amazon_account_id: account.id,
@@ -217,7 +217,7 @@ export default function SearchTerms() {
         ...(m.sales == null ? {} : { sales: m.sales }),
         ...(m.orders == null ? {} : { orders: m.orders }),
         ...(m.acos == null ? {} : { acos: m.acos }),
-        roas: m.roas,
+        ...(m.roas == null ? {} : { roas: m.roas }),
         ...(m.cpc == null ? {} : { cpc: m.cpc }),
         bid_initial: bid,
         bid_current: bid,
@@ -237,7 +237,7 @@ export default function SearchTerms() {
       return;
     }
     setActionLoading(id);
-    const term = normalizeText(kw.keyword_text || kw.keyword);
+    const term = normalizeText(kw.search_term || kw.search_term_original || kw.keyword_text || kw.keyword);
     try {
       await base44.entities.KeywordSuggestion.create({
         amazon_account_id: account.id, campaign_id: kw.campaign_id || '', ad_group_id: kw.ad_group_id || '',
@@ -275,7 +275,7 @@ export default function SearchTerms() {
 
   const negateKeyword = async (kw, m) => {
     setActionLoading(kw.id + '_neg');
-    const term = normalizeText(kw.keyword_text || kw.keyword);
+    const term = normalizeText(kw.search_term || kw.search_term_original || kw.keyword_text || kw.keyword);
     try {
       await base44.entities.NegativeKeywordSuggestion.create({
         amazon_account_id: account.id,
@@ -285,7 +285,8 @@ export default function SearchTerms() {
         match_type: 'exact',
         clicks: m.clicks,
         spend: m.spend,
-        sales: m.sales,
+        ...(m.sales == null ? {} : { sales: m.sales }),
+        ...(m.orders == null ? {} : { orders: m.orders }),
         acos: m.acos,
         reason: `${m.clicks} cliques, R$${m.spend == null ? '—' : m.spend.toFixed(2)} gasto, ${m.orders} pedidos — candidato a negativação`,
         status: 'pending',
@@ -333,7 +334,7 @@ export default function SearchTerms() {
   });
 
   const filtered = processed.filter(kw => {
-    const term = normalizeText(kw.keyword_text || kw.keyword);
+    const term = normalizeText(kw.search_term || kw.search_term_original || kw.keyword_text || kw.keyword);
     const matchSearch = !search || term.includes(normalizeText(search));
     const matchClass = filterClass === 'all' || kw._cls === filterClass;
     const matchReviewFilter = matchesSearchTermFilter(kw, reviewFilter);
@@ -508,8 +509,8 @@ export default function SearchTerms() {
                     <tr key={kw.id} className="border-b border-surface-2/30 hover:bg-surface-2/20 transition-colors">
                       {/* Termo */}
                       <td className="px-3 py-2 max-w-[200px]">
-                        <p className="font-medium text-slate-200 truncate" title={kw.keyword_text || kw.keyword}>
-                          {normalizeText(kw.keyword_text || kw.keyword) || '—'}
+                        <p className="font-medium text-slate-200 truncate" title={kw.search_term || kw.search_term_original || kw.keyword_text || kw.keyword}>
+                          {normalizeText(kw.search_term || kw.search_term_original || kw.keyword_text || kw.keyword) || '—'}
                         </p>
                         <p className="text-slate-600 font-mono truncate text-[10px]">{kw.match_type || kw.keyword_match_type || ''}</p>
                         <p className="text-slate-600 mt-0.5 truncate text-[10px]" title={kw._rec}>{kw._rec}</p>
