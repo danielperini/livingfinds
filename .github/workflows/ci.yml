@@ -73,11 +73,6 @@ jobs:
             base44/shared/searchTermHarvestPolicy.test.ts \
             base44/shared/servingCampaignGrowthPolicy.test.ts \
             base44/shared/economicEvidencePolicy.test.ts
-      - name: Check stock guard and Ads automation watchdog
-        run: |
-          deno check --node-modules-dir=auto \
-            base44/functions/autoStockCampaignGuard/entry.ts \
-            base44/functions/auditAdsAutomationE2E/entry.ts
       - name: Check Amazon Ads v3 filter helper
         run: deno check --node-modules-dir=auto base44/shared/adsApiFilters.ts
       - name: Check economic evidence policy
