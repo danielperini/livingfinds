@@ -83,7 +83,7 @@ async function listCampaignsForState(
 
   do {
     const bodyPayload: any = { stateFilter: { include: [state] }, maxResults: 500 };
-    if (targetingType) bodyPayload.targetingTypeFilter = [targetingType];
+    if (targetingType) bodyPayload.targetingTypeFilter = includeFilter([targetingType]);
     if (nextToken) bodyPayload.nextToken = nextToken;
 
     const res = await fetch(`${base}/sp/campaigns/list`, {
