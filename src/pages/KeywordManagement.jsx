@@ -32,23 +32,30 @@ const idOfTermCampaign = (term) => String(term?.campaign_id || term?.amazon_camp
 const termText = (term) => String(term?.search_term || term?.keyword_text || term?.keyword || '').trim();
 const suggestionKey = (item) => `${String(item?.campaign_id || '').trim()}::${String(item?.keyword_text || '').trim().toLocaleLowerCase('pt-BR')}::exact`;
 
+function metricOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function metricsOf(term) {
   return {
-    clicks: Number(term?.clicks || 0),
-    orders: Number(term?.orders_14d ?? term?.orders ?? 0),
-    spend: Number(term?.spend || 0),
-    sales: Number(term?.sales_14d ?? term?.sales ?? 0),
-    acos: Number(term?.acos_14d ?? term?.acos ?? 0),
+    clicks: metricOrNull(term?.clicks),
+    orders: metricOrNull(term?.orders_14d ?? term?.orders),
+    spend: metricOrNull(term?.spend),
+    sales: metricOrNull(term?.sales_14d ?? term?.sales),
+    acos: metricOrNull(term?.acos_14d ?? term?.acos),
   };
 }
 
 function classifyTerm(term, acosTarget) {
   const { clicks, orders, spend, acos } = metricsOf(term);
-  if (clicks <= 0 && orders <= 0 && spend <= 0) return 'no_data';
-  if (orders >= 2 && acos > 0 && acos <= acosTarget) return 'winner';
+  if (clicks === null && orders === null && spend === null) return 'no_data';
+  if (orders === null) return 'no_data';
+  if (orders >= 2 && acos !== null && acos > 0 && acos <= acosTarget) return 'winner';
   // A negative candidate requires a server-validated economic rule, not a universal click count.
-  if (orders === 0 && term?.negative_review_eligible === true) return 'negate_candidate';
-  if (orders === 0 || (acos > 0 && acos > acosTarget * 1.5)) return 'inefficient';
+  if (orders === 0 && term?.negative_review_eligible === true && clicks !== null && spend !== null && metricsOf(term).sales === 0) return 'negate_candidate';
+  if (orders === 0 || (acos !== null && acos > 0 && acos > acosTarget * 1.5)) return 'inefficient';
   return 'promising';
 }
 
@@ -135,7 +142,7 @@ export default function KeywordManagement() {
       const campaignId = idOfTermCampaign(term);
       const campaign = campaignById.get(campaignId);
       if (!campaignId || !campaign || !campaignIsAutomatic(campaign, term)) return false;
-      if (term._class !== 'negate_candidate' || term.orders > 0 || term.sales > 0 || !term._displayTerm) return false;
+      if (term._class !== 'negate_candidate' || term.orders !== 0 || term.sales !== 0 || term.clicks == null || term.spend == null || !term._displayTerm) return false;
       return !existing.has(`${campaignId}::${term._displayTerm.toLocaleLowerCase('pt-BR')}::exact`);
     });
   }, [visibleKeywords, visibleNegatives, campaignById]);
@@ -218,7 +225,7 @@ export default function KeywordManagement() {
           sales: term.sales,
           orders: term.orders,
           acos: term.acos,
-          reason: `Regra determinística: ${term.clicks} cliques, R$ ${term.spend.toFixed(2)} gastos e zero pedidos. Negativa exata em campanha automática.`,
+          reason: `Regra validada do motor: ${term.clicks ?? '—'} cliques, gasto ${term.spend == null ? '—' : `R$ ${term.spend.toFixed(2)}`} e zero pedidos na janela do registro; negativa exata em campanha automática.`,
           status: 'pending',
         });
         await executeNegativeSuggestion(suggestion);
@@ -236,7 +243,7 @@ export default function KeywordManagement() {
     if (!silent || applied || failed) {
       setActionMsg({
         type: failed ? 'info' : 'success',
-        text: `Negativação automática: ${applied} aplicadas, ${conflicts} já existentes, ${failed} falhas. Apenas campanhas automáticas ativas e termos sem pedidos foram processados.`,
+        text: `Negativação automática: ${applied} solicitações enviadas (aguardando confirmação), ${conflicts} já existentes, ${failed} falhas. Apenas campanhas automáticas ativas e termos sem pedidos foram processados.`,
       });
     }
     await load();
@@ -328,7 +335,7 @@ export default function KeywordManagement() {
     { id: 'class', header: 'Classe', sortValue: (row) => CLASSIFICATION_CONFIG[row._class]?.label, cell: (row) => { const cfg = CLASSIFICATION_CONFIG[row._class]; return <span className={`rounded-full border px-2 py-1 text-xs font-medium ${cfg.color}`}>{cfg.label}</span>; } },
     { id: 'clicks', header: 'Cliques', sortValue: (row) => row.clicks, cell: (row) => row.clicks.toLocaleString('pt-BR') },
     { id: 'spend', header: 'Gasto', sortValue: (row) => row.spend, cell: (row) => row.spend.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) },
-    { id: 'sales', header: 'Vendas', sortValue: (row) => row.sales, cell: (row) => <span className="text-emerald-400">{row.sales.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span> },
+    { id: 'sales', header: 'Vendas', sortValue: (row) => row.sales, cell: (row) => <span className="text-emerald-400">{row.sales == null ? '—' : row.sales.toLocaleString('pt-BR', { style: 'currency', currency: account?.currency_code || 'BRL' })}</span> },
     { id: 'acos', header: 'ACoS', sortValue: (row) => row.acos, cell: (row) => row.acos > 0 ? `${row.acos.toFixed(1)}%` : '—' },
     { id: 'action', header: 'Ação', sortValue: (row) => row._class, cell: (row) => row._class === 'negate_candidate' ? <span className="text-xs text-red-400">Automática exata</span> : '—' },
   ], []);
@@ -347,7 +354,7 @@ export default function KeywordManagement() {
   const selectedNegativeItems = visibleNegatives.filter((item) => selectedNegatives.has(item.id));
   const selectedBlocked = selectedNegativeItems.filter((item) => {
     const campaign = campaignById.get(String(item.campaign_id || ''));
-    return item.status !== 'pending' || !item.campaign_id || !item.ad_group_id || !item.keyword_text?.trim()
+    return item.status !== 'pending' || item.amazon_account_id !== account?.id || !item.campaign_id || !item.ad_group_id || !item.keyword_text?.trim()
       || item.orders == null || item.sales == null || Number(item.orders || 0) > 0 || Number(item.sales || 0) > 0
       || !campaign || campaignIsArchived(campaign);
   });
@@ -422,11 +429,11 @@ export default function KeywordManagement() {
                 <tbody>{selectedNegativeItems.map((item) => {
                   const blocked = selectedBlocked.some((row) => row.id === item.id);
                   const campaign = campaignById.get(String(item.campaign_id || ''));
-                  const reason = item.status !== 'pending' ? `Status ${item.status}` : !campaign ? 'Campanha ausente/arquivada' : !item.ad_group_id ? 'Ad group ausente' : (item.orders == null || item.sales == null) ? 'Métricas incompletas' : (Number(item.orders || 0) > 0 || Number(item.sales || 0) > 0) ? 'Há conversão atribuída' : 'Elegível após validação da API';
+                  const reason = item.status !== 'pending' ? `Status ${item.status}` : item.amazon_account_id !== account?.id ? 'Conta divergente' : !campaign ? 'Campanha ausente/arquivada' : !item.ad_group_id ? 'Ad group ausente' : (item.orders == null || item.sales == null) ? 'Métricas incompletas' : (Number(item.orders) > 0 || Number(item.sales) > 0) ? 'Há conversão atribuída' : 'Elegível após validação da API';
                   return <tr key={item.id} className="border-t border-[#24324F]">
                     <td className="p-2">{item.keyword_text}<div className="text-slate-500">{campaign?.name || campaign?.campaign_name || item.campaign_name || item.campaign_id}</div></td>
-                    <td className="p-2 text-right">{Number(item.clicks || 0).toLocaleString('pt-BR')}</td>
-                    <td className="p-2 text-right">{Number(item.spend || 0).toLocaleString('pt-BR', { style: 'currency', currency: account?.currency_code || 'BRL' })}</td>
+                    <td className="p-2 text-right">{item.clicks == null ? '—' : Number(item.clicks).toLocaleString('pt-BR')}</td>
+                    <td className="p-2 text-right">{item.spend == null ? '—' : Number(item.spend).toLocaleString('pt-BR', { style: 'currency', currency: account?.currency_code || 'BRL' })}</td>
                     <td className="p-2 text-right">{item.orders ?? '—'} / {item.sales == null ? '—' : Number(item.sales).toLocaleString('pt-BR', { style: 'currency', currency: account?.currency_code || 'BRL' })}</td>
                     <td className="p-2">Pendente → negativa EXATA</td>
                     <td className={blocked ? 'p-2 text-red-300' : 'p-2 text-emerald-300'}>{reason}</td>
