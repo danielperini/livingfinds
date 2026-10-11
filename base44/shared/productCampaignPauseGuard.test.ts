@@ -18,7 +18,7 @@ assert.equal(campaignMatchesProduct({ asin: 'B0ABC', sku: 'SKU-1' }, { asin: 'B0
 assert.equal(campaignMatchesProduct({ asin: 'B0ABC', sku: 'SKU-1', amazon_account_id: 'account-a' }, { asin: 'B0ABC', sku: 'SKU-1', amazon_account_id: 'account-b' }), false, 'campaign from another account');
 assert.equal(campaignMatchesProduct({ asin: 'B0ABC' }, { asin: 'B0ABC', sku: 'SKU-2' }), false, 'missing campaign SKU cannot pause sibling SKU');
 assert.equal(campaignMatchesProduct({ asin: 'B0ABC', sku: 'SKU-1' }, { asin: 'B0ABC' }), false, 'missing product SKU cannot be guessed from ASIN');
-assert.equal(findPauseLockedProduct([{ asin: 'B0ABC', campaign_pause_lock: true }], campaign)?.asin, 'B0ABC');
+assert.equal(findPauseLockedProduct([{ asin: 'B0ABC', linked_campaign_ids: ['123'], campaign_pause_lock: true }], campaign)?.asin, 'B0ABC');
 assert.equal(productOfferEligibility({ listing_buyable: false }).reason, 'LISTING_NOT_BUYABLE');
 assert.equal(productOfferEligibility({ offer_active: false }).reason, 'OFFER_INACTIVE');
 assert.equal(productOfferEligibility({ listing_suppressed: true }).reason, 'LISTING_SUPPRESSED');
