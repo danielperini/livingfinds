@@ -28,6 +28,10 @@ jobs:
         run: npm ci
       - name: Test performance settings normalization
         run: node --test src/lib/performanceSettingsNormalization.test.js
+      - name: Test Search Terms filters and data context
+        run: node --test src/lib/searchTermReview.test.js
+      - name: Test decision execution status labels
+        run: node --test src/lib/autopilotExecutionOutcome.test.js
       - name: Test Amazon confirmation labels
         run: node --test src/lib/motorLabels.test.js
       - name: Typecheck
