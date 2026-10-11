@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getSearchTermDataContext, matchesSearchTermFilter } from './searchTermReview.js';
+import { dedupeSearchTermRows, getSearchTermDataContext, matchesSearchTermFilter } from './searchTermReview.js';
 
 test('cliques e sem pedidos exige cliques positivos e zero pedidos conhecidos', () => {
   assert.equal(matchesSearchTermFilter({ clicks: 2, orders: 0 }, 'clicks_no_orders'), true);
@@ -31,4 +31,25 @@ test('contexto exibe janela apenas quando os registros têm período conhecido e
   const unknown = getSearchTermDataContext([{ clicks: 0 }], account);
   assert.equal(unknown.periodStatus, 'not_recorded');
   assert.equal(unknown.periodStart, null);
+});
+
+test('deduplica unique_key usando a cópia de métricas mais recente', () => {
+  const rows = dedupeSearchTermRows([
+    { id: 'old', unique_key: 'same-row', clicks: 1, synced_at: '2026-10-01T00:00:00Z' },
+    { id: 'new', unique_key: 'same-row', clicks: 5, synced_at: '2026-10-02T00:00:00Z' },
+    { id: 'other', unique_key: 'other-row', clicks: 2 },
+  ]);
+  assert.equal(rows.length, 2);
+  assert.equal(rows.find((row) => row.unique_key === 'same-row').clicks, 5);
+});
+
+test('marca escopos com janela de atribuição divergente como mistos', () => {
+  const context = getSearchTermDataContext([
+    { date: '2026-10-01', attribution_window_days: 7 },
+    { date: '2026-10-02', attribution_window_days: 14 },
+  ], { id: 'acct', currency_code: 'BRL' });
+  assert.equal(context.periodStatus, 'mixed');
+  assert.equal(context.currency, 'BRL');
+  assert.equal(context.periodStart, '2026-10-01');
+  assert.equal(context.periodEnd, '2026-10-02');
 });
