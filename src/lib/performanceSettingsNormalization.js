@@ -1,6 +1,12 @@
-const positiveNumber = (value) => {
+const finiteNumber = (value) => {
+  if (value === null || value === undefined || value === '') return null;
   const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const positiveNumber = (value) => {
+  const parsed = finiteNumber(value);
+  return parsed !== null && parsed > 0 ? parsed : null;
 };
 
 const round = (value, decimals = 2) => {
@@ -32,51 +38,53 @@ export function resolveUnifiedBidCeiling(settings, fallback = 5) {
  */
 export function normalizePerformanceSettings(settings = {}, defaults = {}) {
   const merged = { ...defaults, ...settings };
-  const targetAcos = positiveNumber(settings.target_acos)
-    || deriveAcosFromRoas(settings.target_roas)
-    || positiveNumber(defaults.target_acos)
-    || deriveAcosFromRoas(defaults.target_roas);
-  const targetRoas = deriveRoasFromAcos(targetAcos);
+  // ACoS and ROAS are separate desired goals. Derive only when the field was
+  // absent in legacy data; never overwrite a deliberately configured value.
+  const hasAcos = Object.prototype.hasOwnProperty.call(settings, 'target_acos')
+    && finiteNumber(settings.target_acos) !== null;
+  const hasRoas = Object.prototype.hasOwnProperty.call(settings, 'target_roas')
+    && finiteNumber(settings.target_roas) !== null;
+  const fallbackAcos = finiteNumber(defaults.target_acos);
+  const fallbackRoas = finiteNumber(defaults.target_roas);
+  const targetAcos = hasAcos
+    ? finiteNumber(settings.target_acos)
+    : hasRoas
+      ? deriveAcosFromRoas(settings.target_roas)
+      : fallbackAcos ?? (fallbackRoas !== null ? deriveAcosFromRoas(fallbackRoas) : null);
+  const targetRoas = hasRoas
+    ? finiteNumber(settings.target_roas)
+    : hasAcos
+      ? deriveRoasFromAcos(settings.target_acos)
+      : fallbackRoas ?? (fallbackAcos !== null ? deriveRoasFromAcos(fallbackAcos) : null);
   const bidCeiling = resolveUnifiedBidCeiling(
     settings,
     defaults.max_bid ?? defaults.max_cpc ?? 5,
   );
-  const minBid = positiveNumber(merged.min_bid);
-  const targetCpc = positiveNumber(merged.target_cpc);
-  const maxAcos = positiveNumber(merged.max_acos);
-  const targetTacos = positiveNumber(merged.target_tacos);
-  const maxTacos = positiveNumber(merged.max_tacos);
 
   return {
     ...merged,
-    target_acos: targetAcos || 0,
-    target_roas: targetRoas || 0,
-    max_acos: maxAcos == null ? merged.max_acos : round(Math.max(maxAcos, targetAcos || 0), 2),
-    target_tacos: targetTacos == null ? merged.target_tacos : round(targetTacos, 2),
-    max_tacos: maxTacos == null ? merged.max_tacos : round(Math.max(maxTacos, targetTacos || 0), 2),
-    target_cpc: targetCpc == null ? merged.target_cpc : round(Math.min(targetCpc, bidCeiling), 2),
-    min_bid: minBid == null ? merged.min_bid : round(Math.min(minBid, bidCeiling), 2),
+    target_acos: targetAcos,
+    target_roas: targetRoas,
+    // Desired targets remain distinct from hard limits. Conflicts are surfaced
+    // by the shared resolver instead of silently rewriting the user's values.
+    max_acos: finiteNumber(merged.max_acos),
+    target_tacos: finiteNumber(merged.target_tacos),
+    max_tacos: finiteNumber(merged.max_tacos),
+    target_cpc: finiteNumber(merged.target_cpc),
+    target_cost_per_order: finiteNumber(merged.target_cost_per_order),
+    growth_efficiency_target: finiteNumber(merged.growth_efficiency_target),
+    target_daily_impressions: finiteNumber(merged.target_daily_impressions),
+    target_coverage_hours: finiteNumber(merged.target_coverage_hours),
     max_bid: bidCeiling,
-    max_cpc: bidCeiling,
+    max_cpc: finiteNumber(merged.max_cpc) ?? bidCeiling,
+    min_bid: finiteNumber(merged.min_bid),
   };
 }
 
 export function updateEfficiencyGoal(settings, field, value) {
-  if (field === 'target_roas') {
-    const targetRoas = Number(value) || 0;
-    return {
-      ...settings,
-      target_roas: targetRoas,
-      target_acos: deriveAcosFromRoas(targetRoas),
-    };
-  }
-
-  const targetAcos = Number(value) || 0;
-  return {
-    ...settings,
-    target_acos: targetAcos,
-    target_roas: deriveRoasFromAcos(targetAcos),
-  };
+  if (field !== 'target_acos' && field !== 'target_roas') return settings;
+  const parsed = finiteNumber(value);
+  return { ...settings, [field]: parsed };
 }
 
 export function updateUnifiedBidCeiling(settings, value) {
@@ -86,9 +94,7 @@ export function updateUnifiedBidCeiling(settings, value) {
     max_bid: round(bidCeiling, 2),
     max_cpc: round(bidCeiling, 2),
     min_bid: Math.min(Number(settings?.min_bid) || 0.02, bidCeiling),
-    target_cpc: positiveNumber(settings?.target_cpc) == null
-      ? settings?.target_cpc
-      : round(Math.min(Number(settings.target_cpc), bidCeiling), 2),
+    target_cpc: settings?.target_cpc,
   };
 }
 
