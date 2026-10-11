@@ -1,10 +1,14 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { campaignCoverageEligible } from '../../shared/campaignCoverageEligibility.ts';
+import { campaignMatchesProduct } from '../../shared/productCampaignPauseGuard.ts';
 import { assessAutomationStage } from '../../shared/adsAutomationHealth.ts';
 
 const MINUTE = 60_000;
 const isEnabled = (row: any) => ['enabled', 'active'].includes(String(row?.state || row?.status || '').toLowerCase());
-const ageMinutes = (value: string | undefined | null) => value ? Math.max(0, (Date.now() - new Date(value).getTime()) / MINUTE) : Number.POSITIVE_INFINITY;
+const ageMinutes = (value: string | undefined | null) => {
+  const timestamp = value ? Date.parse(value) : NaN;
+  return Number.isFinite(timestamp) ? Math.max(0, (Date.now() - timestamp) / MINUTE) : Number.POSITIVE_INFINITY;
+};
 
 function latest(rows: any[], ...fields: string[]) {
   return rows.reduce((best, row) => {
@@ -69,10 +73,21 @@ Deno.serve(async (request) => {
     const autos = active.filter((c: any) => String(c.amazon_targeting_type || c.targeting_type || '').toUpperCase() === 'AUTO');
     const manuals = active.filter((c: any) => String(c.amazon_targeting_type || c.targeting_type || '').toUpperCase() === 'MANUAL');
     const activeKeywords = keywords.filter(isEnabled);
-    const eligibleAsins = [...new Set(products.filter(campaignCoverageEligible)
+    const eligibleProducts = products.filter(campaignCoverageEligible);
+    const eligibleProductKeys = new Set<string>();
+    const distinctEligibleProducts = eligibleProducts.filter((product: any) => {
+      const key = `${accountId}::${String(product.sku || '').trim().toLowerCase()}`;
+      if (eligibleProductKeys.has(key)) return false;
+      eligibleProductKeys.add(key);
+      return true;
+    });
+    const missingAutoProducts = distinctEligibleProducts.filter((product: any) =>
+      !autos.some((campaign: any) => campaignMatchesProduct(campaign, product))
+    );
+    const eligibleAsins = [...new Set(distinctEligibleProducts
       .map((product: any) => String(product.asin).trim().toUpperCase()))];
-    const autoAsins = new Set(autos.map((campaign: any) => campaign.asin).filter(Boolean));
-    const missingAutoAsins = eligibleAsins.filter((asin: string) => !autoAsins.has(asin));
+    const missingAutoAsins = [...new Set(missingAutoProducts
+      .map((product: any) => String(product.asin).trim().toUpperCase()))];
     const recentDecisions = decisions.filter((d: any) => ageMinutes(d.evaluated_at || d.created_at) <= 45);
     const executed = decisions.filter((d: any) => ['executed', 'completed'].includes(d.status) && ageMinutes(d.executed_at || d.updated_at || d.created_at) <= 24 * 60);
     const confirmed = decisions.filter((d: any) => d.confirmation_status === 'confirmed' && ageMinutes(d.confirmed_at || d.updated_at || d.created_at) <= 24 * 60);
@@ -152,6 +167,7 @@ Deno.serve(async (request) => {
         active_keywords: activeKeywords.length,
         eligible_asins: eligibleAsins.length,
         missing_auto_asins: missingAutoAsins,
+        missing_auto_products: missingAutoProducts.map((product: any) => ({ asin: product.asin, sku: product.sku })),
       },
       alerts,
     };
