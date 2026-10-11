@@ -57,6 +57,7 @@ export function getSearchTermDataContext(rows = [], account = null) {
   });
   const dates = rows.map((row) => String(row?.date || '').slice(0, 10)).filter(Boolean).sort();
   const attributionWindows = new Set(rows.map((row) => Number(row?.attribution_window_days || 0)).filter((days) => days > 0));
+  const hasUnknownAttributionWindow = rows.some((row) => !Number(row?.attribution_window_days || 0));
   const knownDates = dates.length ? [dates[0], dates[dates.length - 1]] : null;
   const windows = new Set(explicitWindows.filter(Boolean));
   const window = windows.size === 1 ? [...windows][0].split('|') : null;
@@ -72,7 +73,7 @@ export function getSearchTermDataContext(rows = [], account = null) {
     periodEnd: window?.[1] || knownDates?.[1] || null,
     attributionWindowDays: attributionWindows.size === 1 ? [...attributionWindows][0] : null,
     currency: account?.currency_code || null,
-    periodStatus: !rows.length ? 'no_data' : windows.size > 1 || (hasUnknownWindow && windows.size > 0) || attributionWindows.size > 1 ? 'mixed' : window || knownDates ? 'known' : 'not_recorded',
+    periodStatus: !rows.length ? 'no_data' : windows.size > 1 || (hasUnknownWindow && windows.size > 0) || attributionWindows.size > 1 || (hasUnknownAttributionWindow && attributionWindows.size > 0) ? 'mixed' : window || knownDates ? 'known' : 'not_recorded',
     updatedAt: latest,
   };
 }
