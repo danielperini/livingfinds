@@ -54,6 +54,7 @@ jobs:
         run: |
           deno test --node-modules-dir=auto \
             base44/shared/listingOfferStatus.test.ts \
+            base44/shared/productCampaignPauseGuard.test.ts \
             base44/shared/offerInventoryPolicy.test.ts \
             base44/shared/accountDailySpend.test.ts \
             base44/shared/campaignBudgetPolicy.test.ts \
