@@ -51,13 +51,16 @@ export function isProductCampaignPauseLocked(product: any): boolean {
 
 export function campaignMatchesProduct(campaign: any, product: any): boolean {
   if (!campaign || !product) return false;
-  if (campaign.sku && product.sku) return norm(campaign.sku) === norm(product.sku);
   const campaignIds = [
     campaign.id,
     campaign.campaign_id,
     campaign.amazon_campaign_id,
   ].filter(Boolean).map(String);
+  // Explicit campaign linkage is authoritative even if an imported SKU field
+  // is stale or differs in formatting. Without that linkage, a conflicting
+  // SKU must still block ASIN-only matching to protect sibling SKUs.
   if (campaignIds.some(id => ids(product).has(id))) return true;
+  if (campaign.sku && product.sku) return norm(campaign.sku) === norm(product.sku);
   const campaignAsin = norm(campaign.asin || campaign.advertised_asin);
   const campaignSku = norm(campaign.sku);
   return Boolean(
