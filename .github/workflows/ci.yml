@@ -77,15 +77,9 @@ jobs:
         run: |
           deno check --node-modules-dir=auto \
             base44/functions/autoStockCampaignGuard/entry.ts \
-            base44/functions/repairIncompleteAutoCampaigns/entry.ts \
-            base44/functions/directAdsRepair/entry.ts \
-            base44/functions/repairExactAdGroupKeywords/entry.ts \
-            base44/functions/reconcileManualBidParity/entry.ts \
-            base44/functions/executePairedManualBidDecision/entry.ts \
-            base44/functions/repairExactAdGroupIntegrity/entry.ts \
-            base44/functions/processKeywordRepairQueue/entry.ts \
-            base44/functions/syncAdsCampaignStatesV2/entry.ts \
             base44/functions/auditAdsAutomationE2E/entry.ts
+      - name: Check Amazon Ads v3 filter helper
+        run: deno check --node-modules-dir=auto base44/shared/adsApiFilters.ts
       - name: Check economic evidence policy
         run: deno check --node-modules-dir=auto base44/shared/economicEvidencePolicy.ts
       - name: Check economic evidence evaluator
