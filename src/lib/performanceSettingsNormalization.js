@@ -60,6 +60,8 @@ export function normalizePerformanceSettings(settings = {}, defaults = {}) {
     settings,
     defaults.max_bid ?? defaults.max_cpc ?? 5,
   );
+  const configuredMinBid = finiteNumber(merged.min_bid);
+  const minBid = configuredMinBid === null ? null : Math.min(configuredMinBid, bidCeiling);
 
   return {
     ...merged,
@@ -77,7 +79,7 @@ export function normalizePerformanceSettings(settings = {}, defaults = {}) {
     target_coverage_hours: finiteNumber(merged.target_coverage_hours),
     max_bid: bidCeiling,
     max_cpc: finiteNumber(merged.max_cpc) ?? bidCeiling,
-    min_bid: finiteNumber(merged.min_bid),
+    min_bid: minBid,
   };
 }
 
