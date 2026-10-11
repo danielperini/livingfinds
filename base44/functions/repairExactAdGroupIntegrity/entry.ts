@@ -99,7 +99,7 @@ Deno.serve(async (req) => {
     } else {
       const cr = await adsCall(base, token, clientId, profileId, 'POST', '/sp/campaigns/list', CT_C, {
         stateFilter: { include: ['ENABLED', 'PAUSED'] },
-        targetingTypeFilter: ['MANUAL'],
+        targetingTypeFilter: includeFilter(['MANUAL']),
         maxResults: 500,
       });
       campaigns = list(cr, 'campaigns').filter((v: any) => String(v.name || '').includes(asin));
@@ -168,7 +168,7 @@ Deno.serve(async (req) => {
           campaignIdFilter: { include: [campaignId] },
           adGroupIdFilter: { include: [adGroupId] },
           stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] },
-          matchTypeFilter: ['EXACT'],
+          matchTypeFilter: includeFilter(['EXACT']),
           maxResults: 100,
         });
         let activeKw = list(kr, 'keywords').filter((v: any) => String(v.state || '').toUpperCase() === 'ENABLED');
@@ -195,7 +195,7 @@ Deno.serve(async (req) => {
         // Verificação final
         const vk = await adsCall(base, token, clientId, profileId, 'POST', '/sp/keywords/list', CT_KW, {
           campaignIdFilter: { include: [campaignId] }, adGroupIdFilter: { include: [adGroupId] },
-          stateFilter: { include: ['ENABLED'] }, matchTypeFilter: ['EXACT'], maxResults: 100,
+          stateFilter: { include: ['ENABLED'] }, matchTypeFilter: includeFilter(['EXACT']), maxResults: 100,
         });
         const va = await adsCall(base, token, clientId, profileId, 'POST', '/sp/productAds/list', CT_PA, {
           campaignIdFilter: { include: [campaignId] }, adGroupIdFilter: { include: [adGroupId] },
