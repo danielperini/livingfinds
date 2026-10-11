@@ -44,9 +44,10 @@ function metricsOf(term) {
 
 function classifyTerm(term, acosTarget) {
   const { clicks, orders, spend, acos } = metricsOf(term);
-  if (clicks < 5) return 'no_data';
+  if (clicks <= 0 && orders <= 0 && spend <= 0) return 'no_data';
   if (orders >= 2 && acos > 0 && acos <= acosTarget) return 'winner';
-  if (orders === 0 && clicks >= 10 && spend > 2) return 'negate_candidate';
+  // A negative candidate requires a server-validated economic rule, not a universal click count.
+  if (orders === 0 && term?.negative_review_eligible === true) return 'negate_candidate';
   if (orders === 0 || (acos > 0 && acos > acosTarget * 1.5)) return 'inefficient';
   return 'promising';
 }
@@ -69,6 +70,7 @@ export default function KeywordManagement() {
   const [actionMsg, setActionMsg] = useState(null);
   const [actionLoading, setActionLoading] = useState(null);
   const [selectedNegatives, setSelectedNegatives] = useState(new Set());
+  const [bulkResults, setBulkResults] = useState(null);
   const [bulkApplying, setBulkApplying] = useState(false);
   const [importing, setImporting] = useState(false);
   const [fetchingApi, setFetchingApi] = useState(false);
@@ -133,15 +135,68 @@ export default function KeywordManagement() {
       const campaignId = idOfTermCampaign(term);
       const campaign = campaignById.get(campaignId);
       if (!campaignId || !campaign || !campaignIsAutomatic(campaign, term)) return false;
-      if (term._class !== 'negate_candidate' || term.orders > 0 || !term._displayTerm) return false;
+      if (term._class !== 'negate_candidate' || term.orders > 0 || term.sales > 0 || !term._displayTerm) return false;
       return !existing.has(`${campaignId}::${term._displayTerm.toLocaleLowerCase('pt-BR')}::exact`);
     });
   }, [visibleKeywords, visibleNegatives, campaignById]);
 
   const executeNegativeSuggestion = useCallback(async (suggestion) => {
-    await base44.entities.NegativeKeywordSuggestion.update(suggestion.id, { status: 'approved' });
-    await base44.functions.invoke('executeAgentAction', { action_id: suggestion.id, approve: true });
-  }, []);
+    if (!account || suggestion.amazon_account_id !== account.id) throw new Error('Conta da sugestão difere da conta selecionada.');
+    if (!suggestion.campaign_id || !suggestion.ad_group_id) throw new Error('Campanha ou grupo de anúncios ausente; item bloqueado para revisão manual.');
+    if (!suggestion.keyword_text?.trim()) throw new Error('Termo ausente; item bloqueado.');
+    if (suggestion.orders == null || suggestion.sales == null) throw new Error('Pedidos ou vendas ausentes; não é possível validar elegibilidade para negativação.');
+    if (Number(suggestion.orders) > 0 || Number(suggestion.sales) > 0) throw new Error('Item bloqueado: há pedido ou venda atribuída na janela registrada.');
+    if (!['pending', 'approved', 'failed'].includes(String(suggestion.status || 'pending'))) {
+      throw new Error(`Status ${suggestion.status} não permite executar esta sugestão.`);
+    }
+
+    const created = await base44.entities.AgentAction.create({
+      amazon_account_id: account.id,
+      action: 'negative_keyword',
+      campaign_id: String(suggestion.campaign_id),
+      ad_group_id: String(suggestion.ad_group_id),
+      keyword: suggestion.keyword_text.trim(),
+      reason: suggestion.reason || 'Negativação exata revisada pelo usuário.',
+      evidence: JSON.stringify({ clicks: suggestion.clicks, spend: suggestion.spend, sales: suggestion.sales, orders: suggestion.orders, suggestion_id: suggestion.id }),
+      risk_level: 'medium',
+      requires_approval: false,
+      status: 'pending',
+      source: 'KeywordManagement',
+    });
+    const actionId = created?.id || created?.data?.id;
+    if (!actionId) throw new Error('A ação foi registrada sem identificador; nenhuma execução foi solicitada.');
+
+    await base44.entities.NegativeKeywordSuggestion.update(suggestion.id, {
+      execution_status: 'sending',
+      execution_error: null,
+      agent_action_id: actionId,
+    });
+    try {
+      const response = await base44.functions.invoke('executeAgentAction', { action_id: actionId, approve: true });
+      const result = response?.data || response || {};
+      if (result.ok !== true || result.status !== 'executed') {
+        throw new Error(result.error || result.message || 'A API não confirmou a execução.');
+      }
+      await base44.entities.NegativeKeywordSuggestion.update(suggestion.id, {
+        status: 'applied',
+        execution_status: 'confirmed',
+        execution_error: null,
+        amazon_request_id: result.request_id || null,
+        applied_at: new Date().toISOString(),
+      });
+      return { ok: true, suggestion_id: suggestion.id, action_id: actionId, request_id: result.request_id || null };
+    } catch (error) {
+      await base44.entities.AgentAction.update(actionId, {
+        status: 'failed',
+        error_message: String(error?.message || error).slice(0, 500),
+      }).catch(() => {});
+      await base44.entities.NegativeKeywordSuggestion.update(suggestion.id, {
+        execution_status: 'failed',
+        execution_error: String(error?.message || error).slice(0, 500),
+      }).catch(() => {});
+      throw error;
+    }
+  }, [account]);
 
   const autoNegateEligible = useCallback(async (silent = false) => {
     if (!account || autoNegating || eligibleAutoNegatives.length === 0) return;
@@ -162,6 +217,7 @@ export default function KeywordManagement() {
           clicks: term.clicks,
           spend: term.spend,
           sales: term.sales,
+          orders: term.orders,
           acos: term.acos,
           reason: `Regra determinística: ${term.clicks} cliques, R$ ${term.spend.toFixed(2)} gastos e zero pedidos. Negativa exata em campanha automática.`,
           status: 'pending',
@@ -209,16 +265,25 @@ export default function KeywordManagement() {
   };
 
   const bulkApproveNegatives = async () => {
+    const selected = visibleNegatives.filter((item) => selectedNegatives.has(item.id));
+    if (!selected.length || bulkApplying) return;
     setBulkApplying(true);
-    let success = 0;
-    for (const id of selectedNegatives) {
-      const item = visibleNegatives.find((candidate) => candidate.id === id);
-      if (!item || item.status !== 'pending') continue;
-      try { await executeNegativeSuggestion(item); success += 1; await sleep(350); } catch {}
+    const results = [];
+    for (const item of selected) {
+      try {
+        const result = await executeNegativeSuggestion(item);
+        results.push({ id: item.id, term: item.keyword_text, campaign: item.campaign_name || item.campaign_id, status: 'confirmed', request_id: result.request_id });
+        await sleep(350);
+      } catch (error) {
+        results.push({ id: item.id, term: item.keyword_text, campaign: item.campaign_name || item.campaign_id, status: 'failed_or_blocked', error: error?.message || String(error) });
+      }
     }
-    setSelectedNegatives(new Set());
+    setBulkResults(results);
+    setSelectedNegatives(new Set(results.filter((item) => item.status === 'failed_or_blocked').map((item) => item.id)));
     setBulkApplying(false);
-    setActionMsg({ type: 'success', text: `${success} negativas exatas aplicadas.` });
+    const succeeded = results.filter((item) => item.status === 'confirmed').length;
+    const failures = results.length - succeeded;
+    setActionMsg({ type: failures ? 'info' : 'success', text: `Lote: ${succeeded} confirmadas, ${failures} falhas ou bloqueios. Cada item mantém seu próprio status; falhas permanecem para revisão.` });
     await load();
   };
 
@@ -278,6 +343,24 @@ export default function KeywordManagement() {
     { id: 'actions', header: 'Ações', sortValue: (row) => row.status, cell: (row) => row.status === 'pending' ? <div className="flex gap-2"><Button size="sm" variant="outline" disabled={actionLoading === row.id} onClick={() => approveNegative(row)}><Check className="h-3 w-3" /> Aprovar</Button><Button size="sm" variant="outline" disabled={actionLoading === row.id} onClick={() => rejectNegative(row)}><X className="h-3 w-3" /> Rejeitar</Button></div> : '—' },
   ], [selectedNegatives, actionLoading]);
 
+  const selectedNegativeItems = visibleNegatives.filter((item) => selectedNegatives.has(item.id));
+  const selectedBlocked = selectedNegativeItems.filter((item) => {
+    const campaign = campaignById.get(String(item.campaign_id || ''));
+    return item.status !== 'pending' || !item.campaign_id || !item.ad_group_id || !item.keyword_text?.trim()
+      || item.orders == null || item.sales == null || Number(item.orders || 0) > 0 || Number(item.sales || 0) > 0
+      || !campaign || campaignIsArchived(campaign);
+  });
+  const canSelectAllPending = visibleNegatives.filter((item) => item.status === 'pending').map((item) => item.id);
+  const toggleAllVisiblePending = () => setSelectedNegatives((current) => {
+    const allSelected = canSelectAllPending.length > 0 && canSelectAllPending.every((id) => current.has(id));
+    if (allSelected) return new Set([...current].filter((id) => !canSelectAllPending.includes(id)));
+    return new Set([...current, ...canSelectAllPending]);
+  });
+  useEffect(() => {
+    const pendingIds = new Set(visibleNegatives.filter((item) => item.status === 'pending').map((item) => item.id));
+    setSelectedNegatives((current) => new Set([...current].filter((id) => pendingIds.has(id))));
+  }, [visibleNegatives]);
+
   const pendingNegatives = visibleNegatives.filter((item) => item.status === 'pending').length;
 
   return (
@@ -319,7 +402,44 @@ export default function KeywordManagement() {
         <PremiumDataTable columns={keywordColumns} data={visibleKeywords} searchable searchPlaceholder="Pesquisar termo ou campanha..." initialSort={{ id: 'clicks', direction: 'desc' }} emptyMessage="Nenhum termo de campanha atual encontrado." />
       ) : (
         <div className="space-y-3">
-          {selectedNegatives.size > 0 && <div className="flex items-center justify-between rounded-xl border border-[#24324F] bg-[#0B1224] p-3"><span>{selectedNegatives.size} selecionadas</span><Button size="sm" onClick={bulkApproveNegatives} disabled={bulkApplying}>{bulkApplying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Aplicar negativas exatas</Button></div>}
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#24324F] bg-[#0B1224] p-3">
+            <div className="text-xs text-slate-300">
+              <div>{selectedNegatives.size} selecionadas · {selectedBlocked.length} bloqueadas · {Math.max(0, selectedNegatives.size - selectedBlocked.length)} elegíveis</div>
+              <div className="text-slate-500">A seleção abrange todos os resultados pendentes deste escopo, inclusive outras páginas da tabela.</div>
+              <div className="text-slate-500">Proposta: status pendente → negativa exata na campanha/grupo selecionados. Só se executa após este comando e validação por item.</div>
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={toggleAllVisiblePending} disabled={canSelectAllPending.length === 0}>
+                {canSelectAllPending.length > 0 && canSelectAllPending.every((id) => selectedNegatives.has(id)) ? 'Desmarcar pendentes' : `Selecionar pendentes (${canSelectAllPending.length})`}
+              </Button>
+              <Button size="sm" onClick={bulkApproveNegatives} disabled={bulkApplying || selectedNegatives.size === 0 || selectedBlocked.length > 0}>
+                {bulkApplying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Aplicar lote
+              </Button>
+            </div>
+            {selectedNegativeItems.length > 0 && <div className="w-full overflow-x-auto">
+              <table className="w-full text-xs"><thead><tr><th className="p-2 text-left">Termo / campanha</th><th className="p-2 text-right">Cliques</th><th className="p-2 text-right">Gasto</th><th className="p-2 text-right">Pedidos / vendas</th><th className="p-2 text-left">Antes → proposta</th><th className="p-2 text-left">Elegibilidade</th></tr></thead>
+                <tbody>{selectedNegativeItems.map((item) => {
+                  const blocked = selectedBlocked.some((row) => row.id === item.id);
+                  const campaign = campaignById.get(String(item.campaign_id || ''));
+                  const reason = item.status !== 'pending' ? `Status ${item.status}` : !campaign ? 'Campanha ausente/arquivada' : !item.ad_group_id ? 'Ad group ausente' : (item.orders == null || item.sales == null) ? 'Métricas incompletas' : (Number(item.orders || 0) > 0 || Number(item.sales || 0) > 0) ? 'Há conversão atribuída' : 'Elegível após validação da API';
+                  return <tr key={item.id} className="border-t border-[#24324F]">
+                    <td className="p-2">{item.keyword_text}<div className="text-slate-500">{campaign?.name || campaign?.campaign_name || item.campaign_name || item.campaign_id}</div></td>
+                    <td className="p-2 text-right">{Number(item.clicks || 0).toLocaleString('pt-BR')}</td>
+                    <td className="p-2 text-right">{Number(item.spend || 0).toLocaleString('pt-BR', { style: 'currency', currency: account?.currency_code || 'BRL' })}</td>
+                    <td className="p-2 text-right">{item.orders ?? '—'} / {item.sales == null ? '—' : Number(item.sales).toLocaleString('pt-BR', { style: 'currency', currency: account?.currency_code || 'BRL' })}</td>
+                    <td className="p-2">Pendente → negativa EXATA</td>
+                    <td className={blocked ? 'p-2 text-red-300' : 'p-2 text-emerald-300'}>{reason}</td>
+                  </tr>;
+                })}</tbody>
+              </table>
+            </div>}
+            {bulkResults && <div className="w-full space-y-1 rounded-lg border border-[#24324F] p-2">
+              <div className="font-semibold text-slate-200">Resultado individual do último lote</div>
+              {bulkResults.map((item) => <div key={item.id} className={item.status === 'confirmed' ? 'text-emerald-300' : 'text-amber-300'}>
+                {item.term || item.id}: {item.status === 'confirmed' ? `confirmada (request ${item.request_id || 'sem ID'})` : `falha/bloqueio — ${item.error}`}
+              </div>)}
+            </div>}
+          </div>
           <PremiumDataTable columns={negativeColumns} data={visibleNegatives} searchable searchPlaceholder="Pesquisar negativa ou campanha..." initialSort={{ id: 'status', direction: 'asc' }} emptyMessage="Nenhuma negativa de campanha atual encontrada." />
         </div>
       )}
