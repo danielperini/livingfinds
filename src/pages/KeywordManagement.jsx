@@ -52,10 +52,10 @@ function classifyTerm(term, acosTarget) {
   const { clicks, orders, spend, acos } = metricsOf(term);
   if (clicks === null && orders === null && spend === null) return 'no_data';
   if (orders === null) return 'no_data';
-  if (orders >= 2 && acos !== null && acos > 0 && acos <= acosTarget) return 'winner';
+  if (orders >= 2 && acosTarget !== null && acos !== null && acos > 0 && acos <= acosTarget) return 'winner';
   // A negative candidate requires a server-validated economic rule, not a universal click count.
   if (orders === 0 && term?.negative_review_eligible === true && clicks !== null && spend !== null && metricsOf(term).sales === 0) return 'negate_candidate';
-  if (orders === 0 || (acos !== null && acos > 0 && acos > acosTarget * 1.5)) return 'inefficient';
+  if (orders === 0 || (acosTarget !== null && acos !== null && acos > 0 && acos > acosTarget * 1.5)) return 'inefficient';
   return 'promising';
 }
 
@@ -83,7 +83,7 @@ export default function KeywordManagement() {
   const [fetchingApi, setFetchingApi] = useState(false);
   const [harvesting, setHarvesting] = useState(false);
   const [autoNegating, setAutoNegating] = useState(false);
-  const [acosTarget, setAcosTarget] = useState(30);
+  const [acosTarget, setAcosTarget] = useState(null);
   const fileInputRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -104,7 +104,8 @@ export default function KeywordManagement() {
         campaignScope ? loadAllRows(base44.entities.Keyword, { amazon_account_id: acc.id, campaign_id: campaignScope }) : Promise.resolve([]),
       ]);
 
-      if (rules[0]?.target_acos) setAcosTarget(Number(rules[0].target_acos));
+      if (rules[0]?.target_acos !== null && rules[0]?.target_acos !== undefined) setAcosTarget(Number(rules[0].target_acos));
+      else setAcosTarget(null);
       setKeywords(searchTerms);
       setConfiguredKeywords(configured.filter(k => String(k.state || k.status).toLowerCase() !== 'archived'));
       setNegatives(suggestions);
