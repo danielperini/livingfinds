@@ -35,74 +35,71 @@ const CLASSIFICATION_CONFIG = {
   no_data:          { label: 'Sem Dados',   color: 'text-slate-500 bg-slate-500/10 border-slate-500/20' },
 };
 
+function metric(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function calcMetrics(kw) {
-  const clicks     = kw.clicks     || 0;
-  const orders     = kw.orders     || 0;
-  const spend      = kw.spend      || 0;
-  const sales      = kw.sales      || 0;
-  const impressions= kw.impressions|| 0;
-
-  const ctr    = impressions > 0 ? (clicks / impressions) * 100 : (kw.ctr || 0);
-  const cpc    = clicks > 0 ? spend / clicks : (kw.cpc || 0);
-  const cvr    = clicks > 0 ? (orders / clicks) * 100 : 0;
-  const cpa    = orders > 0 ? spend / orders : 0;
-  const acos   = sales > 0 ? (spend / sales) * 100 : (kw.acos || 0);
-  const roas   = spend > 0 ? sales / spend : (kw.roas || 0);
-  const rpc    = clicks > 0 ? sales / clicks : 0; // receita por clique
-
+  const clicks = metric(kw.clicks);
+  const orders = metric(kw.orders);
+  const spend = metric(kw.spend);
+  const sales = metric(kw.sales);
+  const impressions = metric(kw.impressions);
+  const ctr = impressions > 0 && clicks !== null ? (clicks / impressions) * 100 : metric(kw.ctr);
+  const cpc = clicks > 0 && spend !== null ? spend / clicks : metric(kw.cpc);
+  const cvr = clicks > 0 && orders !== null ? (orders / clicks) * 100 : null;
+  const cpa = orders > 0 && spend !== null ? spend / orders : null;
+  const acos = sales > 0 && spend !== null ? (spend / sales) * 100 : metric(kw.acos);
+  const roas = spend > 0 && sales !== null ? sales / spend : metric(kw.roas);
+  const rpc = clicks > 0 && sales !== null ? sales / clicks : null;
   return { clicks, orders, spend, sales, impressions, ctr, cpc, cvr, cpa, acos, roas, rpc };
 }
 
 function classifyTerm(m, cfg) {
-  const { clicks, orders, spend, acos, roas, cpc } = m;
-  const { meta_acos, limite_cliques, limite_custo } = cfg;
-
-  if (clicks === 0 && orders === 0) return 'no_data';
-  if (clicks < 3 && orders === 0) return 'exploratory';
-  if (orders >= 2 && (acos <= meta_acos || roas >= 5)) return 'winner';
-  if (orders === 1 && acos <= meta_acos) return 'migrate_exact';
-  if (orders === 1 && acos > meta_acos) return 'promising';
-  if (Number.isFinite(Number(limite_cliques)) && Number.isFinite(Number(limite_custo))
-      && clicks >= Number(limite_cliques) && spend >= Number(limite_custo) && orders === 0) return 'negate_candidate';
-  if (clicks >= 5 && orders === 0) return 'inefficient';
-  if (clicks < 10 && orders === 0) return 'exploratory';
+  const clicks = m.clicks ?? 0;
+  const orders = m.orders ?? 0;
+  const spend = m.spend ?? 0;
+  const acos = m.acos;
+  const roas = m.roas;
+  const hasEvidence = [m.clicks, m.orders, m.spend, m.sales, m.impressions].some((value) => value !== null);
+  if (!hasEvidence || (clicks === 0 && orders === 0 && spend === 0)) return 'no_data';
+  if (orders < 3 && clicks < 3 && orders === 0) return 'exploratory';
+  const acosWinner = cfg.meta_acos != null && acos != null && acos <= cfg.meta_acos;
+  const roasWinner = cfg.meta_roas != null && roas != null && roas >= cfg.meta_roas;
+  if (orders >= 2 && (acosWinner || roasWinner)) return 'winner';
+  if (orders === 1 && acosWinner) return 'migrate_exact';
+  if (orders === 1) return 'promising';
+  if (orders === 0 && m.negative_review_eligible === true) return 'negate_candidate';
+  if (orders === 0 && clicks > 0) return 'inefficient';
   return 'promising';
 }
 
-function calcBidSuggested(m, cls, cfg) {
-  const { cpc, roas, acos, orders, clicks, spend } = m;
-  const baseBid = cpc > 0 ? cpc : 0.25;
-  const { aumento_vencedor, reducao_fraco, meta_acos } = cfg;
-
-  if (cls === 'winner' && roas >= 5) return +(baseBid * (1 + aumento_vencedor / 100)).toFixed(2);
-  if (cls === 'winner' && acos <= meta_acos) return +(baseBid * 1.10).toFixed(2);
-  if (cls === 'migrate_exact') return +(baseBid * 1.10).toFixed(2);
-  if (cls === 'negate_candidate') return +(baseBid * (1 - reducao_fraco / 100)).toFixed(2);
-  if (cls === 'inefficient') return +(baseBid * 0.75).toFixed(2);
-  return +baseBid.toFixed(2);
+function calcBidSuggested(m, cls, cfg, kw) {
+  const baseBid = metric(kw.suggested_bid) ?? metric(kw.current_bid) ?? metric(kw.bid);
+  if (baseBid === null || baseBid <= 0) return null;
+  if (cls === 'winner' && cfg.aumento_vencedor != null) return +(baseBid * (1 + cfg.aumento_vencedor / 100)).toFixed(2);
+  if (cls === 'migrate_exact' && cfg.aumento_vencedor != null) return +(baseBid * (1 + cfg.aumento_vencedor / 100)).toFixed(2);
+  if ((cls === 'negate_candidate' || cls === 'inefficient') && cfg.reducao_fraco != null) return +(baseBid * (1 - cfg.reducao_fraco / 100)).toFixed(2);
+  return null;
 }
 
 function getRecommendation(cls, m) {
-  if (cls === 'winner') return `Termo vencedor. ROAS ${m.roas.toFixed(1)}x. Migrar para EXACT e aumentar bid.`;
-  if (cls === 'migrate_exact') return `1 venda com ACoS ${m.acos.toFixed(1)}%. Criar versão EXACT.`;
-  if (cls === 'negate_candidate') return `${m.clicks} cliques, R$${m.spend.toFixed(2)} gasto, zero compras. Negativar.`;
-  if (cls === 'inefficient') return `Sem pedidos nesta janela e gasto de R$ ${m.spend.toFixed(2)}. Revisar oferta, janela e histórico; sem negativação automática.`;
-  if (cls === 'promising') return `${m.orders > 0 ? `${m.orders} venda(s), manter observando` : 'Potencial. Aguardar mais dados'}.`;
-  if (cls === 'exploratory') return 'Poucos dados. Manter rodando.';
+  if (cls === 'winner') return `Vencedor conforme meta efetiva: ROAS ${m.roas == null ? '—' : `${m.roas.toFixed(1)}x`}, ACoS ${m.acos == null ? '—' : `${m.acos.toFixed(1)}%`}.`;
+  if (cls === 'migrate_exact') return `Uma venda atribuída e dentro da meta ACoS configurada (${m.acos?.toFixed(1) ?? '—'}%).`;
+  if (cls === 'negate_candidate') return 'Elegível para revisão segundo regra validada pelo motor; requer conferência antes de negativar.';
+  if (cls === 'inefficient') return 'Sem pedidos registrados nesta janela. Revise janela de atribuição, dados e oferta; sem ação automática.';
+  if (cls === 'promising') return `${(m.orders ?? 0) > 0 ? `${m.orders} venda(s), manter observando` : 'Aguardar mais dados'}.`;
+  if (cls === 'exploratory') return 'Amostra pequena; manter em observação.';
   return 'Dados insuficientes.';
 }
 
 // ─── Parâmetros padrão ───────────────────────────────────────────────────────
 
 const DEFAULT_CFG = {
-  meta_acos: 20,
-  limite_cliques: null,
-  limite_custo: null,
-  aumento_vencedor: 20,
-  reducao_fraco: 30,
-  mult_exact: 1.00,
-  mult_phrase: 0.70,
-  mult_broad: 0.45,
+  meta_acos: null, meta_roas: null, limite_cliques: null, limite_custo: null,
+  aumento_vencedor: null, reducao_fraco: null,
 };
 
 // ─── Componente ───────────────────────────────────────────────────────────────
@@ -120,6 +117,7 @@ export default function SearchTerms() {
   const [actionMsg, setActionMsg] = useState(null);
   const [actionLoading, setActionLoading] = useState(null);
   const [cfg, setCfg] = useState(DEFAULT_CFG);
+  const [configSource, setConfigSource] = useState('não carregada');
   const [showCfg, setShowCfg] = useState(false);
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef(null);
@@ -150,10 +148,22 @@ export default function SearchTerms() {
         kws.push(...(rows || []));
         if (!rows || rows.length < pageSize) break;
       }
-      const apCfgs = await base44.entities.AutopilotConfig.filter({ amazon_account_id: acc.id }, null, 1);
-      const ap = apCfgs[0];
-      if (ap?.target_acos !== null && ap?.target_acos !== undefined) {
-        setCfg(p => ({ ...p, meta_acos: Number(ap.target_acos) }));
+      const apCfgs = await base44.entities.AutopilotConfig.filter({ amazon_account_id: acc.id }, '-updated_date', 1);
+      const ap = apCfgs[0] || null;
+      if (ap) {
+        setCfg({
+          ...DEFAULT_CFG,
+          meta_acos: metric(ap.target_acos ?? ap.acos_target),
+          meta_roas: metric(ap.target_roas ?? ap.roas_target),
+          aumento_vencedor: metric(ap.max_bid_increase_pct),
+          reducao_fraco: metric(ap.max_bid_decrease_pct),
+          limite_cliques: metric(ap.min_clicks_for_decision),
+          limite_custo: metric(ap.min_spend_for_decision),
+        });
+        setConfigSource(`AutopilotConfig ${ap.id} · ${ap.updated_date || ap.updated_at || 'atualização não informada'}`);
+      } else {
+        setCfg(DEFAULT_CFG);
+        setConfigSource('nenhuma configuração salva para esta conta');
       }
       setKeywords(kws);
       setMetricContext(getSearchTermDataContext(kws, acc));
@@ -275,7 +285,7 @@ export default function SearchTerms() {
         spend: m.spend,
         sales: m.sales,
         acos: m.acos,
-        reason: `${m.clicks} cliques, R$${m.spend.toFixed(2)} gasto, ${m.orders} pedidos — candidato a negativação`,
+        reason: `${m.clicks} cliques, R$${m.spend == null ? '—' : m.spend.toFixed(2)} gasto, ${m.orders} pedidos — candidato a negativação`,
         status: 'pending',
       });
       notify('success', `✓ Negativação sugerida para "${term}"`);
@@ -312,7 +322,7 @@ export default function SearchTerms() {
   const processed = keywords.map(kw => {
     const m = calcMetrics(kw);
     const cls = classifyTerm(m, cfg);
-    const bidSuggested = calcBidSuggested(m, cls, cfg);
+    const bidSuggested = calcBidSuggested(m, cls, cfg, kw);
     const recommendation = getRecommendation(cls, m);
     return { ...kw, _m: m, _cls: cls, _bidSuggested: bidSuggested, _rec: recommendation };
   });
@@ -342,7 +352,7 @@ export default function SearchTerms() {
   const toNegate  = classCounts.negate_candidate || 0;
   const totalSpend = processed.reduce((s, k) => s + k._m.spend, 0);
   const totalSales = processed.reduce((s, k) => s + k._m.sales, 0);
-  const overallRoas = totalSpend > 0 ? totalSales / totalSpend : 0;
+  const overallRoas = totalSpend > 0 ? totalSales / totalSpend : null;
 
   return (
     <div className="p-5 space-y-5 animate-fade-in">
@@ -356,7 +366,7 @@ export default function SearchTerms() {
           <div>
             <h1 className="text-lg font-bold text-white">Análise de Search Terms</h1>
             <p className="text-xs text-slate-400">
-              {keywords.length} registros da conta · {winners} vencedores · {toNegate} para revisar · ROAS agregado {overallRoas.toFixed(1)}x
+              {keywords.length} registros da conta · {winners} vencedores · {toNegate} para revisar · ROAS agregado {overallRoas == null ? 'sem base de cálculo' : `${overallRoas.toFixed(1)}x`}
             </p>
           </div>
         </div>
@@ -384,14 +394,12 @@ export default function SearchTerms() {
           <h3 className="text-sm font-semibold text-slate-300 mb-3">Parâmetros de decisão</h3>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
-              { key: 'meta_acos',       label: 'ACoS alvo (%)',      step: 1 },
-              { key: 'limite_cliques',  label: 'Cliques (opcional p/ rótulo)', step: 1 },
-              { key: 'limite_custo',    label: 'Gasto (opcional p/ rótulo)', step: 1 },
-              { key: 'aumento_vencedor',label: 'Aumento bid (%)',     step: 5 },
-              { key: 'reducao_fraco',   label: 'Redução bid (%)',     step: 5 },
-              { key: 'mult_exact',      label: 'Mult EXACT',          step: 0.05 },
-              { key: 'mult_phrase',     label: 'Mult PHRASE',         step: 0.05 },
-              { key: 'mult_broad',      label: 'Mult BROAD',          step: 0.05 },
+              { key: 'meta_acos', label: 'ACoS alvo efetivo (%)', step: 1 },
+              { key: 'meta_roas', label: 'ROAS alvo efetivo', step: 0.1 },
+              { key: 'limite_cliques', label: 'Cliques mínimos p/ decisão', step: 1 },
+              { key: 'limite_custo', label: 'Gasto mínimo p/ decisão', step: 1 },
+              { key: 'aumento_vencedor', label: 'Teto aumento bid (%)', step: 1 },
+              { key: 'reducao_fraco', label: 'Teto redução bid (%)', step: 1 },
             ].map(f => (
               <div key={f.key}>
                 <label className="text-[10px] text-slate-500 block mb-1">{f.label}</label>
@@ -401,6 +409,7 @@ export default function SearchTerms() {
               </div>
             ))}
           </div>
+          <p className="mt-3 text-[10px] text-slate-500">Origem: {configSource}. Campos ausentes permanecem sem valor; esta tela não grava alterações de configuração.</p>
         </div>
       )}
 
@@ -486,7 +495,7 @@ export default function SearchTerms() {
                   const roasColor = m.roas >= 5 ? 'text-emerald-400' : m.roas >= 2 ? 'text-cyan' : m.roas > 0 ? 'text-amber-400' : 'text-slate-600';
                   const isWinner = cls === 'winner' || cls === 'migrate_exact';
                   const isNegate = cls === 'negate_candidate';
-                  const bidCurrent = m.cpc > 0 ? m.cpc : (kw.current_bid || kw.bid || 0);
+                  const bidCurrent = metric(kw.current_bid) ?? metric(kw.bid);
                   const loadingPrefix = actionLoading?.startsWith(kw.id);
 
                   return (
@@ -505,35 +514,35 @@ export default function SearchTerms() {
                       </td>
                       {/* Métricas */}
                       <td className="px-3 py-2 text-slate-400">{m.impressions > 0 ? m.impressions.toLocaleString('pt-BR') : '—'}</td>
-                      <td className="px-3 py-2 text-slate-400">{m.clicks}</td>
+                      <td className="px-3 py-2 text-slate-400">{m.clicks == null ? '—' : m.clicks.toLocaleString('pt-BR')}</td>
                       <td className="px-3 py-2 text-slate-400">{m.ctr > 0 ? `${m.ctr.toFixed(2)}%` : '—'}</td>
                       <td className="px-3 py-2 text-slate-300">R${m.spend.toFixed(2)}</td>
                       <td className="px-3 py-2 text-slate-400">{m.cpc > 0 ? `R$${m.cpc.toFixed(2)}` : '—'}</td>
-                      <td className="px-3 py-2 font-semibold text-slate-200">{m.orders}</td>
-                      <td className="px-3 py-2 text-slate-400">{m.cvr > 0 ? `${m.cvr.toFixed(2)}%` : '—'}</td>
-                      <td className="px-3 py-2 text-slate-400">{m.cpa > 0 ? `R$${m.cpa.toFixed(2)}` : '—'}</td>
-                      <td className="px-3 py-2 text-emerald-400 font-semibold">{m.sales > 0 ? `R$${m.sales.toFixed(2)}` : '—'}</td>
-                      <td className="px-3 py-2"><span className={`font-semibold ${acosColor}`}>{m.acos > 0 ? `${m.acos.toFixed(1)}%` : '—'}</span></td>
-                      <td className="px-3 py-2"><span className={`font-semibold ${roasColor}`}>{m.roas > 0 ? `${m.roas.toFixed(1)}x` : '—'}</span></td>
-                      <td className="px-3 py-2 text-slate-400">{m.rpc > 0 ? `R$${m.rpc.toFixed(2)}` : '—'}</td>
-                      <td className="px-3 py-2 text-slate-300">{bidCurrent > 0 ? `R$${bidCurrent.toFixed(2)}` : '—'}</td>
+                      <td className="px-3 py-2 font-semibold text-slate-200">{m.orders == null ? '—' : m.orders}</td>
+                      <td className="px-3 py-2 text-slate-400">{m.cvr == null ? '—' : `${m.cvr.toFixed(2)}%`}</td>
+                      <td className="px-3 py-2 text-slate-400">{m.cpa == null ? '—' : `R${m.cpa.toFixed(2)}`}</td>
+                      <td className="px-3 py-2 text-emerald-400 font-semibold">{m.sales == null ? '—' : `R${m.sales.toFixed(2)}`}</td>
+                      <td className="px-3 py-2"><span className={`font-semibold ${acosColor}`}>{m.acos == null ? '—' : `${m.acos.toFixed(1)}%`}</span></td>
+                      <td className="px-3 py-2"><span className={`font-semibold ${roasColor}`}>{m.roas == null ? '—' : `${m.roas.toFixed(1)}x`}</span></td>
+                      <td className="px-3 py-2 text-slate-400">{m.rpc == null ? '—' : `R${m.rpc.toFixed(2)}`}</td>
+                      <td className="px-3 py-2 text-slate-300">{bidCurrent != null && bidCurrent > 0 ? `R${bidCurrent.toFixed(2)}` : '—'}</td>
                       <td className="px-3 py-2">
                         <span className={`font-semibold ${kw._bidSuggested > bidCurrent ? 'text-emerald-400' : kw._bidSuggested < bidCurrent ? 'text-amber-400' : 'text-slate-400'}`}>
-                          R${kw._bidSuggested.toFixed(2)}
+                          {kw._bidSuggested == null ? '—' : `R${kw._bidSuggested.toFixed(2)}`}
                         </span>
                       </td>
                       {/* Ações */}
                       <td className="px-3 py-2">
                         <div className="flex items-center gap-1 flex-wrap">
                           {/* TermBank */}
-                          <button onClick={() => addToTermBank(kw, m, kw._bidSuggested)} disabled={!!actionLoading}
+                          <button onClick={() => addToTermBank(kw, m, kw._bidSuggested)} disabled={!!actionLoading || kw._bidSuggested == null}
                             className="flex items-center gap-0.5 px-1.5 py-1 bg-surface-2 border border-surface-3 text-slate-400 hover:text-cyan hover:border-cyan/30 rounded transition-colors disabled:opacity-40"
                             title="Adicionar ao TermBank">
                             {actionLoading === kw.id + '_tb' ? <Loader2 className="w-3 h-3 animate-spin" /> : <BookOpen className="w-3 h-3" />}
                           </button>
 
                           {/* EXACT */}
-                          <button onClick={() => createVariant(kw, m, 'EXACT')} disabled={!!actionLoading}
+                          <button onClick={() => createVariant(kw, m, 'EXACT')} disabled={!!actionLoading || cfg.aumento_vencedor == null}
                             className="px-1.5 py-1 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 rounded text-[10px] font-bold transition-colors disabled:opacity-40"
                             title={`Criar EXACT · bid R$${(m.cpc * cfg.mult_exact).toFixed(2)}`}>
                             {actionLoading === kw.id + '_EXACT' ? <Loader2 className="w-3 h-3 animate-spin" /> : 'E'}
