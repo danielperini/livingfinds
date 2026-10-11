@@ -178,13 +178,12 @@ export default function KeywordManagement() {
         throw new Error(result.error || result.message || 'A API não confirmou a execução.');
       }
       await base44.entities.NegativeKeywordSuggestion.update(suggestion.id, {
-        status: 'applied',
-        execution_status: 'confirmed',
+        status: 'sent',
+        execution_status: 'sent',
         execution_error: null,
         amazon_request_id: result.request_id || null,
-        applied_at: new Date().toISOString(),
       });
-      return { ok: true, suggestion_id: suggestion.id, action_id: actionId, request_id: result.request_id || null };
+      return { ok: true, status: 'sent', suggestion_id: suggestion.id, action_id: actionId, request_id: result.request_id || null };
     } catch (error) {
       await base44.entities.AgentAction.update(actionId, {
         status: 'failed',
@@ -246,10 +245,11 @@ export default function KeywordManagement() {
 
 
   const approveNegative = async (item) => {
+    if (!window.confirm(`Enviar negativa EXATA para “${item.keyword_text}” na campanha selecionada? A Amazon ainda precisará confirmar o estado.`)) return;
     setActionLoading(item.id);
     try {
       await executeNegativeSuggestion(item);
-      setActionMsg({ type: 'success', text: `“${item.keyword_text}” negativada como exata na Amazon.` });
+      setActionMsg({ type: 'info', text: `Solicitação de negativa exata enviada para “${item.keyword_text}”. A resposta ainda não confirma o estado final na Amazon.` });
       await load();
     } catch (error) {
       setActionMsg({ type: 'error', text: error?.message || 'Falha ao negativar termo.' });
@@ -267,12 +267,13 @@ export default function KeywordManagement() {
   const bulkApproveNegatives = async () => {
     const selected = visibleNegatives.filter((item) => selectedNegatives.has(item.id));
     if (!selected.length || bulkApplying) return;
+    if (!window.confirm(`Enviar ${selected.length} negativa(s) EXATA(s) à Amazon? Os resultados serão mostrados por item; envio não significa confirmação final.`)) return;
     setBulkApplying(true);
     const results = [];
     for (const item of selected) {
       try {
         const result = await executeNegativeSuggestion(item);
-        results.push({ id: item.id, term: item.keyword_text, campaign: item.campaign_name || item.campaign_id, status: 'confirmed', request_id: result.request_id });
+        results.push({ id: item.id, term: item.keyword_text, campaign: item.campaign_name || item.campaign_id, status: 'sent', request_id: result.request_id });
         await sleep(350);
       } catch (error) {
         results.push({ id: item.id, term: item.keyword_text, campaign: item.campaign_name || item.campaign_id, status: 'failed_or_blocked', error: error?.message || String(error) });
@@ -281,9 +282,9 @@ export default function KeywordManagement() {
     setBulkResults(results);
     setSelectedNegatives(new Set(results.filter((item) => item.status === 'failed_or_blocked').map((item) => item.id)));
     setBulkApplying(false);
-    const succeeded = results.filter((item) => item.status === 'confirmed').length;
+    const succeeded = results.filter((item) => item.status === 'sent').length;
     const failures = results.length - succeeded;
-    setActionMsg({ type: failures ? 'info' : 'success', text: `Lote: ${succeeded} confirmadas, ${failures} falhas ou bloqueios. Cada item mantém seu próprio status; falhas permanecem para revisão.` });
+    setActionMsg({ type: failures ? 'info' : 'success', text: `Lote: ${succeeded} solicitações enviadas (aguardando confirmação), ${failures} falhas ou bloqueios. Cada item mantém seu próprio status; falhas permanecem para revisão.` });
     await load();
   };
 
@@ -335,7 +336,7 @@ export default function KeywordManagement() {
   const negativeColumns = useMemo(() => [
     { id: 'select', header: 'Sel.', sortValue: (row) => selectedNegatives.has(row.id) ? 1 : 0, cell: (row) => row.status === 'pending' ? <input type="checkbox" checked={selectedNegatives.has(row.id)} onChange={() => setSelectedNegatives((current) => { const next = new Set(current); next.has(row.id) ? next.delete(row.id) : next.add(row.id); return next; })} /> : null },
     { id: 'term', header: 'Termo', sortValue: (row) => row.keyword_text, cell: (row) => <span className="font-medium text-white">{row.keyword_text}</span> },
-    { id: 'status', header: 'Status', sortValue: (row) => row.status, cell: (row) => <span className={row.status === 'approved' ? 'text-emerald-400' : row.status === 'rejected' ? 'text-red-400' : 'text-amber-400'}>{row.status || 'pending'}</span> },
+    { id: 'status', header: 'Status', sortValue: (row) => row.status, cell: (row) => <span className={row.status === 'approved' ? 'text-emerald-400' : row.status === 'rejected' ? 'text-red-400' : 'text-amber-400'}>{row.execution_status === 'sent' ? 'enviada · confirmar' : row.execution_status === 'confirmed' ? 'confirmada' : row.execution_status === 'failed' ? 'falhou · revisar' : row.status || 'pending'}</span> },
     { id: 'campaign', header: 'Campanha', sortValue: (row) => row.campaign_name, cell: (row) => row.campaign_name || '—' },
     { id: 'clicks', header: 'Cliques', sortValue: (row) => Number(row.clicks || 0), cell: (row) => Number(row.clicks || 0).toLocaleString('pt-BR') },
     { id: 'spend', header: 'Gasto', sortValue: (row) => Number(row.spend || 0), cell: (row) => Number(row.spend || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) },
@@ -435,8 +436,8 @@ export default function KeywordManagement() {
             </div>}
             {bulkResults && <div className="w-full space-y-1 rounded-lg border border-[#24324F] p-2">
               <div className="font-semibold text-slate-200">Resultado individual do último lote</div>
-              {bulkResults.map((item) => <div key={item.id} className={item.status === 'confirmed' ? 'text-emerald-300' : 'text-amber-300'}>
-                {item.term || item.id}: {item.status === 'confirmed' ? `confirmada (request ${item.request_id || 'sem ID'})` : `falha/bloqueio — ${item.error}`}
+              {bulkResults.map((item) => <div key={item.id} className={item.status === 'sent' ? 'text-amber-300' : 'text-red-300'}>
+                {item.term || item.id}: {item.status === 'sent' ? `enviada, aguardando confirmação (request ${item.request_id || 'sem ID'})` : `falha/bloqueio — ${item.error}`}
               </div>)}
             </div>}
           </div>
