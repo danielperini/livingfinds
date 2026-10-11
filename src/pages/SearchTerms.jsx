@@ -93,7 +93,7 @@ function classifyTerm(m, cfg) {
 }
 
 function calcBidSuggested(m, cls, cfg, kw) {
-  const baseBid = metric(kw.suggested_bid) ?? (kw.synced_at ? metric(kw.current_bid) ?? metric(kw.bid) : null);
+  const baseBid = metric(kw._target?.suggested_bid) ?? (kw._target?.synced_at ? metric(kw._target.current_bid) ?? metric(kw._target.bid) : null);
   if (baseBid === null || baseBid <= 0) return null;
   if (cls === 'winner' && cfg.aumento_vencedor != null) return +(baseBid * (1 + cfg.aumento_vencedor / 100)).toFixed(2);
   if (cls === 'migrate_exact' && cfg.aumento_vencedor != null) return +(baseBid * (1 + cfg.aumento_vencedor / 100)).toFixed(2);
@@ -210,15 +210,15 @@ export default function SearchTerms() {
         term_type: m.orders >= 2 ? 'primary_high_conversion' : 'mid_tail',
         status: 'active',
         promotion_status: 'kickoff_candidate',
-        confidence: m.orders >= 2 ? 92 : 78,
-        impressions: m.impressions,
-        clicks: m.clicks,
-        spend: m.spend,
-        sales: m.sales,
-        orders: m.orders,
-        acos: m.acos,
+        
+        ...(m.impressions == null ? {} : { impressions: m.impressions }),
+        ...(m.clicks == null ? {} : { clicks: m.clicks }),
+        ...(m.spend == null ? {} : { spend: m.spend }),
+        ...(m.sales == null ? {} : { sales: m.sales }),
+        ...(m.orders == null ? {} : { orders: m.orders }),
+        ...(m.acos == null ? {} : { acos: m.acos }),
         roas: m.roas,
-        cpc: m.cpc,
+        ...(m.cpc == null ? {} : { cpc: m.cpc }),
         bid_initial: bid,
         bid_current: bid,
         classification: m.orders > 0 ? 'winner' : 'learning',
@@ -325,7 +325,7 @@ export default function SearchTerms() {
   const processed = keywords.map(kw => {
     const m = calcMetrics(kw);
     const target = bidTargetById.get(String(kw.keyword_id || '')) || null;
-    const enriched = { ...kw, asin: kw.advertised_asin || kw.asin, sku: kw.advertised_sku || kw.sku, _target: target };
+    const enriched = { ...kw, orders: m.orders, sales: m.sales, asin: kw.advertised_asin || kw.asin, sku: kw.advertised_sku || kw.sku, _target: target };
     const cls = classifyTerm(m, cfg);
     const bidSuggested = calcBidSuggested(m, cls, cfg, target || {});
     const recommendation = getRecommendation(cls, m);
@@ -497,8 +497,8 @@ export default function SearchTerms() {
                   const m = kw._m;
                   const cls = kw._cls;
                   const cfg_ = CLASSIFICATION_CONFIG[cls] || CLASSIFICATION_CONFIG.no_data;
-                  const acosColor = m.acos > cfg.meta_acos * 1.5 ? 'text-red-400' : m.acos > cfg.meta_acos ? 'text-amber-400' : m.acos > 0 ? 'text-emerald-400' : 'text-slate-600';
-                  const roasColor = m.roas >= 5 ? 'text-emerald-400' : m.roas >= 2 ? 'text-cyan' : m.roas > 0 ? 'text-amber-400' : 'text-slate-600';
+                  const acosColor = m.acos != null && cfg.meta_acos != null && m.acos > cfg.meta_acos * 1.5 ? 'text-red-400' : m.acos != null && cfg.meta_acos != null && m.acos > cfg.meta_acos ? 'text-amber-400' : m.acos != null && m.acos > 0 ? 'text-emerald-400' : 'text-slate-600';
+                  const roasColor = m.roas != null && cfg.meta_roas != null && m.roas >= cfg.meta_roas ? 'text-emerald-400' : m.roas != null && m.roas > 0 ? 'text-amber-400' : 'text-slate-600';
                   const isWinner = cls === 'winner' || cls === 'migrate_exact';
                   const isNegate = cls === 'negate_candidate';
                   const bidCurrent = kw._target?.synced_at ? metric(kw._target.current_bid) ?? metric(kw._target.bid) : null;
