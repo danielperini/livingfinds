@@ -42,7 +42,8 @@
         "pending",
         "approved",
         "rejected",
-        "applied"
+        "applied",
+        "sent"
       ],
       "default": "pending"
     },
