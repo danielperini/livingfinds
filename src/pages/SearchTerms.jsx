@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
-import { getSearchTermDataContext, matchesSearchTermFilter, SEARCH_TERM_FILTERS } from '@/lib/searchTermReview.js';
+import { dedupeSearchTermRows, getSearchTermDataContext, matchesSearchTermFilter, SEARCH_TERM_FILTERS } from '@/lib/searchTermReview.js';
 import {
   Search, Filter, RefreshCw, Loader2, TrendingUp, TrendingDown,
   ArrowUpRight, X, CheckCircle, AlertCircle, Brain, Upload,
@@ -35,6 +35,22 @@ const CLASSIFICATION_CONFIG = {
   no_data:          { label: 'Sem Dados',   color: 'text-slate-500 bg-slate-500/10 border-slate-500/20' },
 };
 
+async function loadAllRows(entity, filter) {
+  const rows = [];
+  const ids = new Set();
+  const pageSize = 500;
+  for (let page = 0; page < 1000; page += 1) {
+    const result = await entity.filter(filter, 'id', pageSize, page * pageSize);
+    for (const row of result || []) {
+      if (ids.has(row.id)) throw new Error('A paginação repetiu registros; atualize os dados antes de analisar.');
+      ids.add(row.id);
+      rows.push(row);
+    }
+    if (!result || result.length < pageSize) return dedupeSearchTermRows(rows);
+  }
+  throw new Error('O conjunto ultrapassa o limite seguro de páginas. Refine o escopo para evitar uma análise parcial.');
+}
+
 function metric(value) {
   if (value === null || value === undefined || value === '') return null;
   const parsed = Number(value);
@@ -43,9 +59,9 @@ function metric(value) {
 
 function calcMetrics(kw) {
   const clicks = metric(kw.clicks);
-  const orders = metric(kw.orders);
+  const orders = metric(kw.orders_14d ?? kw.orders);
   const spend = metric(kw.spend);
-  const sales = metric(kw.sales);
+  const sales = metric(kw.sales_14d ?? kw.sales);
   const impressions = metric(kw.impressions);
   const ctr = impressions > 0 && clicks !== null ? (clicks / impressions) * 100 : metric(kw.ctr);
   const cpc = clicks > 0 && spend !== null ? spend / clicks : metric(kw.cpc);
@@ -77,7 +93,7 @@ function classifyTerm(m, cfg) {
 }
 
 function calcBidSuggested(m, cls, cfg, kw) {
-  const baseBid = metric(kw.suggested_bid) ?? metric(kw.current_bid) ?? metric(kw.bid);
+  const baseBid = metric(kw.suggested_bid) ?? (kw.synced_at ? metric(kw.current_bid) ?? metric(kw.bid) : null);
   if (baseBid === null || baseBid <= 0) return null;
   if (cls === 'winner' && cfg.aumento_vencedor != null) return +(baseBid * (1 + cfg.aumento_vencedor / 100)).toFixed(2);
   if (cls === 'migrate_exact' && cfg.aumento_vencedor != null) return +(baseBid * (1 + cfg.aumento_vencedor / 100)).toFixed(2);
@@ -107,6 +123,7 @@ const DEFAULT_CFG = {
 export default function SearchTerms() {
   const [account, setAccount] = useState(null);
   const [keywords, setKeywords] = useState([]);
+  const [bidTargets, setBidTargets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
   const [metricContext, setMetricContext] = useState({ periodStatus: 'no_data', updatedAt: null, marketplace: null, accountId: null });
@@ -137,17 +154,15 @@ export default function SearchTerms() {
       setAccount(acc);
       if (!acc) {
         setKeywords([]);
+        setBidTargets([]);
         setMetricContext({ periodStatus: 'no_data', updatedAt: null, marketplace: null, accountId: null });
         return;
       }
 
-      const kws = [];
-      const pageSize = 500;
-      for (let offset = 0, page = 0; page < 1000; offset += pageSize, page += 1) {
-        const rows = await base44.entities.Keyword.filter({ amazon_account_id: acc.id }, 'id', pageSize, offset);
-        kws.push(...(rows || []));
-        if (!rows || rows.length < pageSize) break;
-      }
+      const [searchTerms, targets] = await Promise.all([
+        loadAllRows(base44.entities.SearchTerm, { amazon_account_id: acc.id }),
+        loadAllRows(base44.entities.Keyword, { amazon_account_id: acc.id }),
+      ]);
       const apCfgs = await base44.entities.AutopilotConfig.filter({ amazon_account_id: acc.id }, '-updated_date', 1);
       const ap = apCfgs[0] || null;
       if (ap) {
@@ -165,8 +180,9 @@ export default function SearchTerms() {
         setCfg(DEFAULT_CFG);
         setConfigSource('nenhuma configuração salva para esta conta');
       }
-      setKeywords(kws);
-      setMetricContext(getSearchTermDataContext(kws, acc));
+      setKeywords(searchTerms);
+      setBidTargets(targets);
+      setMetricContext(getSearchTermDataContext(searchTerms, acc));
     } catch (error) {
       setLoadError(error?.message || 'Falha ao carregar os termos e métricas desta conta.');
     } finally {
@@ -236,7 +252,7 @@ export default function SearchTerms() {
   };
 
   const adjustBid = async (kw, m, direction) => {
-    const current = metric(kw.current_bid) ?? metric(kw.bid);
+    const current = kw._target?.synced_at ? metric(kw._target.current_bid) ?? metric(kw._target.bid) : null;
     const pct = direction === 'up' ? cfg.aumento_vencedor : cfg.reducao_fraco;
     if (current === null || current <= 0 || pct === null || pct === undefined) {
       notify('info', 'Bid ou limite de variação ausente na configuração efetiva; nenhuma ação foi proposta.');
@@ -305,12 +321,15 @@ export default function SearchTerms() {
 
   // ── Dados processados ─────────────────────────────────────────────────────
 
+  const bidTargetById = new Map(bidTargets.filter((row) => row.keyword_id).map((row) => [String(row.keyword_id), row]));
   const processed = keywords.map(kw => {
     const m = calcMetrics(kw);
+    const target = bidTargetById.get(String(kw.keyword_id || '')) || null;
+    const enriched = { ...kw, asin: kw.advertised_asin || kw.asin, sku: kw.advertised_sku || kw.sku, _target: target };
     const cls = classifyTerm(m, cfg);
-    const bidSuggested = calcBidSuggested(m, cls, cfg, kw);
+    const bidSuggested = calcBidSuggested(m, cls, cfg, target || {});
     const recommendation = getRecommendation(cls, m);
-    return { ...kw, _m: m, _cls: cls, _bidSuggested: bidSuggested, _rec: recommendation };
+    return { ...enriched, _m: m, _cls: cls, _bidSuggested: bidSuggested, _rec: recommendation };
   });
 
   const filtered = processed.filter(kw => {
@@ -336,9 +355,11 @@ export default function SearchTerms() {
 
   const winners   = (classCounts.winner || 0) + (classCounts.migrate_exact || 0);
   const toNegate  = classCounts.negate_candidate || 0;
-  const totalSpend = processed.reduce((s, k) => s + k._m.spend, 0);
-  const totalSales = processed.reduce((s, k) => s + k._m.sales, 0);
-  const overallRoas = totalSpend > 0 ? totalSales / totalSpend : null;
+  const completeSpend = processed.every((row) => row._m.spend !== null);
+  const completeSales = processed.every((row) => row._m.sales !== null);
+  const totalSpend = completeSpend ? processed.reduce((sum, row) => sum + row._m.spend, 0) : null;
+  const totalSales = completeSales ? processed.reduce((sum, row) => sum + row._m.sales, 0) : null;
+  const overallRoas = totalSpend > 0 && totalSales !== null ? totalSales / totalSpend : null;
 
   return (
     <div className="p-5 space-y-5 animate-fade-in">
@@ -352,7 +373,7 @@ export default function SearchTerms() {
           <div>
             <h1 className="text-lg font-bold text-white">Análise de Search Terms</h1>
             <p className="text-xs text-slate-400">
-              {keywords.length} registros da conta · {winners} vencedores · {toNegate} para revisar · ROAS agregado {overallRoas == null ? 'sem base de cálculo' : `${overallRoas.toFixed(1)}x`}
+              {keywords.length} termos da conta (todas as páginas) · {winners} vencedores · {toNegate} para revisar · ROAS agregado {overallRoas == null ? 'sem base de cálculo' : `${overallRoas.toFixed(1)}x`}
             </p>
           </div>
         </div>
@@ -420,8 +441,8 @@ export default function SearchTerms() {
 
       {/* Escopo dos dados */}
       <div className="rounded-lg border border-surface-2 bg-surface-1 px-3 py-2 text-[11px] text-slate-400">
-        <div>Conta: {account?.name || account?.account_name || account?.id || '—'} · Marketplace: {metricContext.marketplace || 'não informado'} · Registros: {keywords.length} (todas as páginas carregadas)</div>
-        <div>Janela: {metricContext.periodStatus === 'known' ? `${metricContext.periodStart} a ${metricContext.periodEnd}` : metricContext.periodStatus === 'mixed' ? 'períodos mistos nos registros' : metricContext.periodStatus === 'no_data' ? 'sem dados' : 'não registrada pela origem'} · Métricas atualizadas: {metricContext.updatedAt ? new Date(metricContext.updatedAt).toLocaleString('pt-BR') : 'data não informada'}</div>
+        <div>Conta: {account?.name || account?.account_name || account?.id || '—'} · Marketplace: {metricContext.marketplace || 'não informado'} · Moeda: {metricContext.currency || 'não informada'} · Termos: {keywords.length} distintos (unique_key) · Alvos carregados: {bidTargets.length}</div>
+        <div>Janela: {metricContext.periodStatus === 'known' ? `${metricContext.periodStart} a ${metricContext.periodEnd}${metricContext.attributionWindowDays ? ` · atribuição ${metricContext.attributionWindowDays}d` : ''}` : metricContext.periodStatus === 'mixed' ? 'períodos mistos nos registros' : metricContext.periodStatus === 'no_data' ? 'sem dados' : 'não registrada pela origem'} · Métricas atualizadas: {metricContext.updatedAt ? new Date(metricContext.updatedAt).toLocaleString('pt-BR') : 'data não informada'}</div>
       </div>
       {loadError && <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">{loadError} · Atualize ou verifique a conexão Amazon.</div>}
 
@@ -480,7 +501,7 @@ export default function SearchTerms() {
                   const roasColor = m.roas >= 5 ? 'text-emerald-400' : m.roas >= 2 ? 'text-cyan' : m.roas > 0 ? 'text-amber-400' : 'text-slate-600';
                   const isWinner = cls === 'winner' || cls === 'migrate_exact';
                   const isNegate = cls === 'negate_candidate';
-                  const bidCurrent = metric(kw.current_bid) ?? metric(kw.bid);
+                  const bidCurrent = kw._target?.synced_at ? metric(kw._target.current_bid) ?? metric(kw._target.bid) : null;
                   const loadingPrefix = actionLoading?.startsWith(kw.id);
 
                   return (
