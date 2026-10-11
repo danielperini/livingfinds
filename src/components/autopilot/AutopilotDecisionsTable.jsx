@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { base44 } from '@/api/base44Client';
 import { CheckCircle, XCircle, Loader2, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Play, AlertCircle } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
@@ -64,7 +64,8 @@ function DecisionRow({ d, onUpdate }) {
     } finally { setLoading(false); }
   };
 
-  const shownStatus = executionOutcome?.status === 'sent' ? 'confirming' : executionOutcome?.status || d.status;
+  const serverAwaitingConfirmation = d.status === 'executed' && d.confirmation_status !== 'confirmed';
+  const shownStatus = executionOutcome?.status === 'sent' || serverAwaitingConfirmation ? 'confirming' : executionOutcome?.status || d.status;
   return (
     <>
       <tr className="border-b border-surface-2/40 hover:bg-surface-2/50 transition-colors">
@@ -130,7 +131,7 @@ export default function AutopilotDecisionsTable({ decisions, onRefresh }) {
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkResults, setBulkResults] = useState([]);
 
-  if (decisions !== localDecisions && decisions.length !== localDecisions.length) setLocalDecisions(decisions);
+  useEffect(() => { setLocalDecisions(decisions); }, [decisions]);
 
   const updateDecision = (id, status, error_message = null) => setLocalDecisions((prev) => prev.map((item) =>
     item.id === id ? { ...item, status, error_message } : item
@@ -143,15 +144,15 @@ export default function AutopilotDecisionsTable({ decisions, onRefresh }) {
     filter === 'all' ? true :
     filter === 'pending' ? item.status === 'pending' :
     filter === 'approved' ? item.status === 'approved' :
-    filter === 'executed' ? item.status === 'executed' :
-    filter === 'sent' ? item.status === 'confirming' :
+    filter === 'executed' ? item.status === 'executed' && item.confirmation_status === 'confirmed' :
+    filter === 'sent' ? item.status === 'confirming' || (item.status === 'executed' && item.confirmation_status !== 'confirmed') :
     ['rejected', 'failed', 'blocked', 'skipped'].includes(item.status)
   );
   const counts = {
     pending: pending.length,
     approved: localDecisions.filter(item => item.status === 'approved').length,
-    executed: localDecisions.filter(item => item.status === 'executed').length,
-    sent: localDecisions.filter(item => item.status === 'confirming').length,
+    executed: localDecisions.filter(item => item.status === 'executed' && item.confirmation_status === 'confirmed').length,
+    sent: localDecisions.filter(item => item.status === 'confirming' || (item.status === 'executed' && item.confirmation_status !== 'confirmed')).length,
     failures: localDecisions.filter(item => ['rejected', 'failed', 'blocked', 'skipped'].includes(item.status)).length,
   };
 
@@ -207,7 +208,7 @@ export default function AutopilotDecisionsTable({ decisions, onRefresh }) {
             <tbody>{reviewSummary.map((item) => <tr key={item.id} className="border-t border-surface-2/50"><td className="p-2 text-slate-200">{item.name}<div className="text-slate-500">{item.action}</div></td><td className="p-2 text-slate-400">{item.before == null ? '—' : Number(item.before).toLocaleString('pt-BR')}</td><td className="p-2 text-white">{item.after == null ? '—' : Number(item.after).toLocaleString('pt-BR')}</td><td className="p-2">Baixo</td><td className="p-2 text-slate-400">{localDecisions.find(row => row.id === item.id)?.rationale || 'Sem justificativa registrada'}</td></tr>)}</tbody>
           </table>
         </div>
-        {blocked.length > 0 && <div className="text-xs text-amber-300">Bloqueados/retidos: {blocked.map(item => item.keyword_text || item.entity_name || item.entity_id || item.id).join(', ')} — risco médio/alto não entra na aprovação em lote.</div>}
+        {blocked.length > 0 && <div className="text-xs text-amber-300">Fora dos critérios do lote (risco médio/alto): {blocked.map(item => item.keyword_text || item.entity_name || item.entity_id || item.id).join(', ')} — risco médio/alto não entra na aprovação em lote.</div>}
         <div className="flex justify-end gap-2"><button onClick={() => setBulkReviewOpen(false)} className="px-3 py-1.5 text-xs text-slate-300">Cancelar</button><button onClick={approveAll} disabled={bulkLoading || lowRisk.length === 0} className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50">{bulkLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle className="h-3 w-3" />} Confirmar aprovação ({lowRisk.length})</button></div>
       </div>}
       {bulkResults.length > 0 && <div className="px-5 py-2 text-xs space-y-1 border-b border-surface-2">{bulkResults.map(item => <div key={item.id} className={item.status === 'approved' ? 'text-emerald-300' : 'text-red-300'}>{item.name || item.id}: {item.status === 'approved' ? 'aprovada' : `falha — ${item.error}`}</div>)}</div>}
