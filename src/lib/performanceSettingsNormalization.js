@@ -89,12 +89,14 @@ export function updateEfficiencyGoal(settings, field, value) {
 
 export function updateUnifiedBidCeiling(settings, value) {
   const bidCeiling = Math.max(0.02, Number(value) || 0.02);
+  const targetCpc = finiteNumber(settings?.target_cpc);
+  const coherentTargetCpc = targetCpc === null ? null : Math.min(targetCpc, bidCeiling);
   return {
     ...settings,
     max_bid: round(bidCeiling, 2),
     max_cpc: round(bidCeiling, 2),
     min_bid: Math.min(Number(settings?.min_bid) || 0.02, bidCeiling),
-    target_cpc: settings?.target_cpc,
+    target_cpc: coherentTargetCpc,
   };
 }
 
