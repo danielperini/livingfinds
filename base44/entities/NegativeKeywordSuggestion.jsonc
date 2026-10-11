@@ -51,7 +51,14 @@
     "applied_at": {
       "type": "string",
       "format": "date-time"
-    }
+    },
+    "execution_status": {
+      "type": "string",
+      "enum": ["not_started", "sending", "confirmed", "failed"]
+    },
+    "execution_error": { "type": "string" },
+    "agent_action_id": { "type": "string" },
+    "amazon_request_id": { "type": "string" }
   },
   "required": [
     "amazon_account_id",
