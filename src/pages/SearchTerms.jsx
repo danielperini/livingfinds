@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
+import { getSearchTermDataContext, matchesSearchTermFilter, SEARCH_TERM_FILTERS } from '@/lib/searchTermReview.js';
 import {
   Search, Filter, RefreshCw, Loader2, TrendingUp, TrendingDown,
   ArrowUpRight, X, CheckCircle, AlertCircle, Brain, Upload,
@@ -56,11 +57,13 @@ function classifyTerm(m, cfg) {
   const { clicks, orders, spend, acos, roas, cpc } = m;
   const { meta_acos, limite_cliques, limite_custo } = cfg;
 
-  if (clicks < 3) return 'no_data';
+  if (clicks === 0 && orders === 0) return 'no_data';
+  if (clicks < 3 && orders === 0) return 'exploratory';
   if (orders >= 2 && (acos <= meta_acos || roas >= 5)) return 'winner';
   if (orders === 1 && acos <= meta_acos) return 'migrate_exact';
   if (orders === 1 && acos > meta_acos) return 'promising';
-  if (clicks >= limite_cliques && spend >= limite_custo && orders === 0) return 'negate_candidate';
+  if (Number.isFinite(Number(limite_cliques)) && Number.isFinite(Number(limite_custo))
+      && clicks >= Number(limite_cliques) && spend >= Number(limite_custo) && orders === 0) return 'negate_candidate';
   if (clicks >= 5 && orders === 0) return 'inefficient';
   if (clicks < 10 && orders === 0) return 'exploratory';
   return 'promising';
@@ -83,7 +86,7 @@ function getRecommendation(cls, m) {
   if (cls === 'winner') return `Termo vencedor. ROAS ${m.roas.toFixed(1)}x. Migrar para EXACT e aumentar bid.`;
   if (cls === 'migrate_exact') return `1 venda com ACoS ${m.acos.toFixed(1)}%. Criar versão EXACT.`;
   if (cls === 'negate_candidate') return `${m.clicks} cliques, R$${m.spend.toFixed(2)} gasto, zero compras. Negativar.`;
-  if (cls === 'inefficient') return `Cliques sem conversão. Reduzir bid ${m.acos > 0 ? `(ACoS ${m.acos.toFixed(1)}%)` : ''}.`;
+  if (cls === 'inefficient') return `Sem pedidos nesta janela e gasto de R$ ${m.spend.toFixed(2)}. Revisar oferta, janela e histórico; sem negativação automática.`;
   if (cls === 'promising') return `${m.orders > 0 ? `${m.orders} venda(s), manter observando` : 'Potencial. Aguardar mais dados'}.`;
   if (cls === 'exploratory') return 'Poucos dados. Manter rodando.';
   return 'Dados insuficientes.';
@@ -93,8 +96,8 @@ function getRecommendation(cls, m) {
 
 const DEFAULT_CFG = {
   meta_acos: 20,
-  limite_cliques: 10,
-  limite_custo: 15,
+  limite_cliques: null,
+  limite_custo: null,
   aumento_vencedor: 20,
   reducao_fraco: 30,
   mult_exact: 1.00,
@@ -108,6 +111,9 @@ export default function SearchTerms() {
   const [account, setAccount] = useState(null);
   const [keywords, setKeywords] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [metricContext, setMetricContext] = useState({ periodStatus: 'no_data', updatedAt: null, marketplace: null, accountId: null });
+  const [reviewFilter, setReviewFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [filterClass, setFilterClass] = useState('all');
   const [sortBy, setSortBy] = useState('roas');
@@ -125,22 +131,34 @@ export default function SearchTerms() {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const me = await base44.auth.me();
       const accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
       const acc = accounts[0] || null;
       setAccount(acc);
-      if (!acc) return;
+      if (!acc) {
+        setKeywords([]);
+        setMetricContext({ periodStatus: 'no_data', updatedAt: null, marketplace: null, accountId: null });
+        return;
+      }
 
-      const [kws, apCfgs] = await Promise.all([
-        base44.entities.Keyword.filter({ amazon_account_id: acc.id }, '-spend', 1000),
-        base44.entities.AutopilotConfig.filter({ amazon_account_id: acc.id }, null, 1),
-      ]);
-
+      const kws = [];
+      const pageSize = 500;
+      for (let offset = 0, page = 0; page < 1000; offset += pageSize, page += 1) {
+        const rows = await base44.entities.Keyword.filter({ amazon_account_id: acc.id }, 'id', pageSize, offset);
+        kws.push(...(rows || []));
+        if (!rows || rows.length < pageSize) break;
+      }
+      const apCfgs = await base44.entities.AutopilotConfig.filter({ amazon_account_id: acc.id }, null, 1);
       const ap = apCfgs[0];
-      if (ap?.target_acos) setCfg(p => ({ ...p, meta_acos: ap.target_acos }));
-
+      if (ap?.target_acos !== null && ap?.target_acos !== undefined) {
+        setCfg(p => ({ ...p, meta_acos: Number(ap.target_acos) }));
+      }
       setKeywords(kws);
+      setMetricContext(getSearchTermDataContext(kws, acc));
+    } catch (error) {
+      setLoadError(error?.message || 'Falha ao carregar os termos e métricas desta conta.');
     } finally {
       setLoading(false);
     }
@@ -303,7 +321,8 @@ export default function SearchTerms() {
     const term = normalizeText(kw.keyword_text || kw.keyword);
     const matchSearch = !search || term.includes(normalizeText(search));
     const matchClass = filterClass === 'all' || kw._cls === filterClass;
-    return matchSearch && matchClass;
+    const matchReviewFilter = matchesSearchTermFilter(kw, reviewFilter);
+    return matchSearch && matchClass && matchReviewFilter;
   }).sort((a, b) => {
     if (sortBy === 'roas')   return (b._m.roas || 0) - (a._m.roas || 0);
     if (sortBy === 'acos')   return (a._m.acos || 0) - (b._m.acos || 0);
@@ -337,7 +356,7 @@ export default function SearchTerms() {
           <div>
             <h1 className="text-lg font-bold text-white">Análise de Search Terms</h1>
             <p className="text-xs text-slate-400">
-              {keywords.length} termos · {winners} vencedores · {toNegate} para negativar · ROAS geral {overallRoas.toFixed(1)}x
+              {keywords.length} registros da conta · {winners} vencedores · {toNegate} para revisar · ROAS agregado {overallRoas.toFixed(1)}x
             </p>
           </div>
         </div>
@@ -366,8 +385,8 @@ export default function SearchTerms() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
               { key: 'meta_acos',       label: 'ACoS alvo (%)',      step: 1 },
-              { key: 'limite_cliques',  label: 'Cliques sem venda',  step: 1 },
-              { key: 'limite_custo',    label: 'Custo limite (R$)',   step: 1 },
+              { key: 'limite_cliques',  label: 'Cliques (opcional p/ rótulo)', step: 1 },
+              { key: 'limite_custo',    label: 'Gasto (opcional p/ rótulo)', step: 1 },
               { key: 'aumento_vencedor',label: 'Aumento bid (%)',     step: 5 },
               { key: 'reducao_fraco',   label: 'Redução bid (%)',     step: 5 },
               { key: 'mult_exact',      label: 'Mult EXACT',          step: 0.05 },
@@ -376,8 +395,8 @@ export default function SearchTerms() {
             ].map(f => (
               <div key={f.key}>
                 <label className="text-[10px] text-slate-500 block mb-1">{f.label}</label>
-                <input type="number" step={f.step} value={cfg[f.key]}
-                  onChange={e => setCfg(p => ({ ...p, [f.key]: parseFloat(e.target.value) }))}
+                <input type="number" step={f.step} value={cfg[f.key] ?? ''}
+                  onChange={e => setCfg(p => ({ ...p, [f.key]: e.target.value === '' ? null : Number(e.target.value) }))}
                   className="w-full px-2 py-1.5 bg-surface-2 border border-surface-3 text-slate-300 text-xs rounded-lg focus:outline-none focus:border-cyan/50" />
               </div>
             ))}
@@ -405,6 +424,13 @@ export default function SearchTerms() {
         ))}
       </div>
 
+      {/* Escopo dos dados */}
+      <div className="rounded-lg border border-surface-2 bg-surface-1 px-3 py-2 text-[11px] text-slate-400">
+        <div>Conta: {account?.name || account?.account_name || account?.id || '—'} · Marketplace: {metricContext.marketplace || 'não informado'} · Registros: {keywords.length} (todas as páginas carregadas)</div>
+        <div>Janela: {metricContext.periodStatus === 'known' ? `${metricContext.periodStart} a ${metricContext.periodEnd}` : metricContext.periodStatus === 'mixed' ? 'períodos mistos nos registros' : metricContext.periodStatus === 'no_data' ? 'sem dados' : 'não registrada pela origem'} · Métricas atualizadas: {metricContext.updatedAt ? new Date(metricContext.updatedAt).toLocaleString('pt-BR') : 'data não informada'}</div>
+      </div>
+      {loadError && <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">{loadError} · Atualize ou verifique a conexão Amazon.</div>}
+
       {/* Filtros */}
       <div className="flex flex-col sm:flex-row gap-2">
         <div className="relative">
@@ -412,6 +438,10 @@ export default function SearchTerms() {
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pesquisar termo..."
             className="w-full sm:w-56 pl-9 pr-4 py-2 bg-surface-1 border border-surface-2 rounded-lg text-xs text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyan/50" />
         </div>
+        <select aria-label="Filtro de métricas" value={reviewFilter} onChange={e => setReviewFilter(e.target.value)}
+          className="text-xs bg-surface-2 border border-surface-3 text-slate-300 rounded-lg px-2 py-2 focus:outline-none">
+          {Object.entries(SEARCH_TERM_FILTERS).map(([key, item]) => <option key={key} value={key}>{item.label}</option>)}
+        </select>
         <select value={sortBy} onChange={e => setSortBy(e.target.value)}
           className="text-xs bg-surface-2 border border-surface-3 text-slate-300 rounded-lg px-2 py-2 focus:outline-none">
           <option value="roas">↓ ROAS</option>
@@ -421,16 +451,20 @@ export default function SearchTerms() {
           <option value="sales">↓ Vendas</option>
           <option value="clicks">↓ Cliques</option>
         </select>
-        <span className="text-xs text-slate-500 self-center ml-auto">{filtered.length} termos exibidos</span>
+        <span className="text-xs text-slate-500 self-center ml-auto">{filtered.length} de {processed.length} registros · filtro aplicado antes da tabela</span>
       </div>
+
+      <p className="-mt-3 text-[10px] text-slate-500">Definição: {SEARCH_TERM_FILTERS[reviewFilter].definition} · Sem limiar de cliques ou gasto predefinido; filtros apenas identificam linhas para revisão.</p>
 
       {/* Tabela */}
       {loading ? (
         <div className="flex items-center justify-center py-16"><Loader2 className="w-7 h-7 text-cyan animate-spin" /></div>
+      ) : loadError ? (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-8 text-center text-sm text-red-300">Os resultados podem estar incompletos porque houve falha de carregamento. Corrija a conexão e tente novamente.</div>
       ) : filtered.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
           <Search className="w-10 h-10 text-slate-600" />
-          <p className="text-sm text-slate-400">Nenhum termo encontrado. Importe um relatório CSV da Amazon Ads.</p>
+          <p className="text-sm text-slate-400">Nenhum registro corresponde ao filtro atual nesta janela. Isso não confirma ausência de gasto, clique ou venda fora da janela importada.</p>
         </div>
       ) : (
         <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
