@@ -67,8 +67,8 @@ function calcMetrics(kw) {
   const cpc = clicks > 0 && spend !== null ? spend / clicks : metric(kw.cpc);
   const cvr = clicks > 0 && orders !== null ? (orders / clicks) * 100 : null;
   const cpa = orders > 0 && spend !== null ? spend / orders : null;
-  const acos = sales > 0 && spend !== null ? (spend / sales) * 100 : metric(kw.acos);
-  const roas = spend > 0 && sales !== null ? sales / spend : metric(kw.roas);
+  const acos = sales > 0 && spend !== null ? (spend / sales) * 100 : metric(kw.acos_14d ?? kw.acos);
+  const roas = spend > 0 && sales !== null ? sales / spend : metric(kw.roas_14d ?? kw.roas);
   const rpc = clicks > 0 && sales !== null ? sales / clicks : null;
   return { clicks, orders, spend, sales, impressions, ctr, cpc, cvr, cpa, acos, roas, rpc, negative_review_eligible: kw.negative_review_eligible === true };
 }
@@ -231,7 +231,7 @@ export default function SearchTerms() {
 
   const createVariant = async (kw, m, matchType) => {
     const id = kw.id + '_' + matchType;
-    const baseBid = metric(kw.suggested_bid) ?? metric(kw.current_bid) ?? metric(kw.bid);
+    const baseBid = metric(kw._target?.suggested_bid) ?? (kw._target?.synced_at ? metric(kw._target.current_bid) ?? metric(kw._target.bid) : null);
     if (baseBid === null || baseBid <= 0) {
       notify('info', 'Sem lance atual ou sugerido da Amazon; não foi criada uma sugestão com valor inventado.');
       return;
@@ -244,7 +244,7 @@ export default function SearchTerms() {
         keyword_text: term, match_type: matchType.toLowerCase(), bid: baseBid, status: 'pending',
         source: 'search_term_analysis',
         rationale: `Proposta EXACT usando bid de referência ${baseBid}; pedidos ${m.orders ?? 'ausentes'}, ROAS ${m.roas == null ? 'ausente' : m.roas.toFixed(1)}, ACoS ${m.acos == null ? 'ausente' : m.acos.toFixed(1)}.`,
-        orders: m.orders, acos: m.acos, roas: m.roas, created_at: new Date().toISOString(),
+        orders: m.orders, acos: m.acos, ...(m.roas == null ? {} : { roas: m.roas }), created_at: new Date().toISOString(),
       });
       notify('success', `Sugestão ${matchType} criada com bid de referência Amazon R$${baseBid.toFixed(2)}; requer revisão.`);
     } catch (e) { notify('error', e.message); }
@@ -356,11 +356,7 @@ export default function SearchTerms() {
 
   const winners   = (classCounts.winner || 0) + (classCounts.migrate_exact || 0);
   const toNegate  = classCounts.negate_candidate || 0;
-  const completeSpend = processed.every((row) => row._m.spend !== null);
-  const completeSales = processed.every((row) => row._m.sales !== null);
-  const totalSpend = completeSpend ? processed.reduce((sum, row) => sum + row._m.spend, 0) : null;
-  const totalSales = completeSales ? processed.reduce((sum, row) => sum + row._m.sales, 0) : null;
-  const overallRoas = totalSpend > 0 && totalSales !== null ? totalSales / totalSpend : null;
+  const overallRoas = null; // Linhas diárias podem compartilhar a janela de atribuição; somá-las criaria dupla contagem.
 
   return (
     <div className="p-5 space-y-5 animate-fade-in">
@@ -374,7 +370,7 @@ export default function SearchTerms() {
           <div>
             <h1 className="text-lg font-bold text-white">Análise de Search Terms</h1>
             <p className="text-xs text-slate-400">
-              {keywords.length} termos da conta (todas as páginas) · {winners} vencedores · {toNegate} para revisar · ROAS agregado {overallRoas == null ? 'sem base de cálculo' : `${overallRoas.toFixed(1)}x`}
+              {keywords.length} termos da conta (todas as páginas) · {winners} vencedores · {toNegate} para revisar · ROAS agregado indisponível (janelas podem se sobrepor)
             </p>
           </div>
         </div>
@@ -443,7 +439,7 @@ export default function SearchTerms() {
       {/* Escopo dos dados */}
       <div className="rounded-lg border border-surface-2 bg-surface-1 px-3 py-2 text-[11px] text-slate-400">
         <div>Conta: {account?.name || account?.account_name || account?.id || '—'} · Marketplace: {metricContext.marketplace || 'não informado'} · Moeda: {metricContext.currency || 'não informada'} · Termos: {keywords.length} distintos (unique_key) · Alvos carregados: {bidTargets.length}</div>
-        <div>Janela: {metricContext.periodStatus === 'known' ? `${metricContext.periodStart} a ${metricContext.periodEnd}${metricContext.attributionWindowDays ? ` · atribuição ${metricContext.attributionWindowDays}d` : ''}` : metricContext.periodStatus === 'mixed' ? 'períodos mistos nos registros' : metricContext.periodStatus === 'no_data' ? 'sem dados' : 'não registrada pela origem'} · Métricas atualizadas: {metricContext.updatedAt ? new Date(metricContext.updatedAt).toLocaleString('pt-BR') : 'data não informada'}</div>
+        <div>Métricas de pedido/venda usam a janela 14d do SearchTerm; período dos registros: {metricContext.periodStatus === 'known' ? `${metricContext.periodStart} a ${metricContext.periodEnd}${metricContext.attributionWindowDays ? ` · janela origem ${metricContext.attributionWindowDays}d` : ''}` : metricContext.periodStatus === 'mixed' ? 'períodos mistos nos registros' : metricContext.periodStatus === 'no_data' ? 'sem dados' : 'não registrada pela origem'} · Métricas atualizadas: {metricContext.updatedAt ? new Date(metricContext.updatedAt).toLocaleString('pt-BR') : 'data não informada'}</div>
       </div>
       {loadError && <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">{loadError} · Atualize ou verifique a conexão Amazon.</div>}
 
