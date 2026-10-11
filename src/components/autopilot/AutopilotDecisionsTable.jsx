@@ -117,6 +117,7 @@ function DecisionRow({ d, onUpdate }) {
       {expanded && <tr className="border-b border-surface-2/40 bg-surface-2/20"><td colSpan={6} className="px-8 py-2.5 space-y-1">
         {d.rationale && <p className="text-xs text-slate-400">💡 {d.rationale}</p>}
         {d.data_used && <p className="text-xs text-slate-500">📊 {d.data_used}</p>}
+        {d.settings_snapshot && <p className="text-xs text-slate-500">Parâmetros efetivos: {d.settings_snapshot}</p>}
         {d.settings_source && <p className="text-xs text-slate-500">Configuração: {d.settings_source}</p>}
         {d.idempotency_key && <p className="text-[10px] font-mono text-slate-600">🔑 {d.idempotency_key}</p>}
       </td></tr>}
@@ -138,8 +139,8 @@ export default function AutopilotDecisionsTable({ decisions, onRefresh }) {
   ));
 
   const pending = localDecisions.filter((item) => item.status === 'pending');
-  const lowRisk = pending.filter((item) => ['low', 'very_low'].includes(item.risk));
-  const blocked = pending.filter((item) => !['low', 'very_low'].includes(item.risk));
+  const lowRisk = pending.filter((item) => ['low', 'very_low'].includes(item.risk) && !(item.blocked_reason || item.block_reason || item.execution_block_reason));
+  const blocked = pending.filter((item) => !lowRisk.some((eligible) => eligible.id === item.id));
   const filtered = localDecisions.filter((item) =>
     filter === 'all' ? true :
     filter === 'pending' ? item.status === 'pending' :
@@ -162,6 +163,8 @@ export default function AutopilotDecisionsTable({ decisions, onRefresh }) {
     action: ACTION_LABELS[item.action] || item.action || '—',
     before: item.value_before,
     after: item.value_after,
+    risk: item.risk,
+    reason: item.blocked_reason || item.block_reason || item.execution_block_reason || item.rationale || item.reason || 'Sem justificativa registrada',
   })), [localDecisions]);
 
   const approveAll = async () => {
@@ -205,10 +208,10 @@ export default function AutopilotDecisionsTable({ decisions, onRefresh }) {
         <p className="text-xs text-slate-400">Escopo: decisões carregadas nesta tabela; não inclui páginas ou registros que não foram carregados. {lowRisk.length} elegíveis por risco baixo/muito baixo · {blocked.length} retidas para revisão individual.</p>
         <div className="max-h-64 overflow-auto">
           <table className="w-full text-xs"><thead><tr className="text-slate-500"><th className="p-2 text-left">Item / ação</th><th className="p-2 text-left">Valor anterior</th><th className="p-2 text-left">Proposto</th><th className="p-2 text-left">Risco</th><th className="p-2 text-left">Motivo</th></tr></thead>
-            <tbody>{reviewSummary.map((item) => <tr key={item.id} className="border-t border-surface-2/50"><td className="p-2 text-slate-200">{item.name}<div className="text-slate-500">{item.action}</div></td><td className="p-2 text-slate-400">{item.before == null ? '—' : Number(item.before).toLocaleString('pt-BR')}</td><td className="p-2 text-white">{item.after == null ? '—' : Number(item.after).toLocaleString('pt-BR')}</td><td className="p-2">Baixo</td><td className="p-2 text-slate-400">{localDecisions.find(row => row.id === item.id)?.rationale || 'Sem justificativa registrada'}</td></tr>)}</tbody>
+            <tbody>{reviewSummary.map((item) => <tr key={item.id} className="border-t border-surface-2/50"><td className="p-2 text-slate-200">{item.name}<div className="text-slate-500">{item.action}</div></td><td className="p-2 text-slate-400">{item.before == null ? '—' : Number(item.before).toLocaleString('pt-BR')}</td><td className="p-2 text-white">{item.after == null ? '—' : Number(item.after).toLocaleString('pt-BR')}</td><td className="p-2">{RISK_LABELS[item.risk] || item.risk || '—'}</td><td className="p-2 text-slate-400">{item.reason}</td></tr>)}</tbody>
           </table>
         </div>
-        {blocked.length > 0 && <div className="text-xs text-amber-300">Fora dos critérios do lote (risco médio/alto): {blocked.map(item => item.keyword_text || item.entity_name || item.entity_id || item.id).join(', ')} — risco médio/alto não entra na aprovação em lote.</div>}
+        {blocked.length > 0 && <div className="text-xs text-amber-300">Retidos/bloqueados: {blocked.map(item => `${item.keyword_text || item.entity_name || item.entity_id || item.id} (${item.blocked_reason || item.block_reason || item.execution_block_reason || `risco ${RISK_LABELS[item.risk] || item.risk}`})`).join('; ')}</div>}
         <div className="flex justify-end gap-2"><button onClick={() => setBulkReviewOpen(false)} className="px-3 py-1.5 text-xs text-slate-300">Cancelar</button><button onClick={approveAll} disabled={bulkLoading || lowRisk.length === 0} className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50">{bulkLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle className="h-3 w-3" />} Confirmar aprovação ({lowRisk.length})</button></div>
       </div>}
       {bulkResults.length > 0 && <div className="px-5 py-2 text-xs space-y-1 border-b border-surface-2">{bulkResults.map(item => <div key={item.id} className={item.status === 'approved' ? 'text-emerald-300' : 'text-red-300'}>{item.name || item.id}: {item.status === 'approved' ? 'aprovada' : `falha — ${item.error}`}</div>)}</div>}
