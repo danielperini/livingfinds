@@ -54,7 +54,7 @@ function calcMetrics(kw) {
   const acos = sales > 0 && spend !== null ? (spend / sales) * 100 : metric(kw.acos);
   const roas = spend > 0 && sales !== null ? sales / spend : metric(kw.roas);
   const rpc = clicks > 0 && sales !== null ? sales / clicks : null;
-  return { clicks, orders, spend, sales, impressions, ctr, cpc, cvr, cpa, acos, roas, rpc };
+  return { clicks, orders, spend, sales, impressions, ctr, cpc, cvr, cpa, acos, roas, rpc, negative_review_eligible: kw.negative_review_eligible === true };
 }
 
 function classifyTerm(m, cfg) {
@@ -64,7 +64,7 @@ function classifyTerm(m, cfg) {
   const acos = m.acos;
   const roas = m.roas;
   const hasEvidence = [m.clicks, m.orders, m.spend, m.sales, m.impressions].some((value) => value !== null);
-  if (!hasEvidence || (clicks === 0 && orders === 0 && spend === 0)) return 'no_data';
+  if (!hasEvidence || m.orders === null || (clicks === 0 && orders === 0 && spend === 0)) return 'no_data';
   if (orders < 3 && clicks < 3 && orders === 0) return 'exploratory';
   const acosWinner = cfg.meta_acos != null && acos != null && acos <= cfg.meta_acos;
   const roasWinner = cfg.meta_roas != null && roas != null && roas >= cfg.meta_roas;
@@ -215,58 +215,44 @@ export default function SearchTerms() {
 
   const createVariant = async (kw, m, matchType) => {
     const id = kw.id + '_' + matchType;
+    const baseBid = metric(kw.suggested_bid) ?? metric(kw.current_bid) ?? metric(kw.bid);
+    if (baseBid === null || baseBid <= 0) {
+      notify('info', 'Sem lance atual ou sugerido da Amazon; não foi criada uma sugestão com valor inventado.');
+      return;
+    }
     setActionLoading(id);
     const term = normalizeText(kw.keyword_text || kw.keyword);
-    const baseBid = m.cpc > 0 ? m.cpc : 0.25;
-    const mult = matchType === 'EXACT' ? cfg.mult_exact : matchType === 'PHRASE' ? cfg.mult_phrase : cfg.mult_broad;
-    const bid = +(baseBid * mult).toFixed(2);
-
     try {
       await base44.entities.KeywordSuggestion.create({
-        amazon_account_id: account.id,
-        campaign_id: kw.campaign_id || '',
-        ad_group_id: kw.ad_group_id || '',
-        keyword_text: term,
-        match_type: matchType.toLowerCase(),
-        bid,
-        status: 'pending',
+        amazon_account_id: account.id, campaign_id: kw.campaign_id || '', ad_group_id: kw.ad_group_id || '',
+        keyword_text: term, match_type: matchType.toLowerCase(), bid: baseBid, status: 'pending',
         source: 'search_term_analysis',
-        rationale: `Derivado de termo com ${m.orders} compra(s), ROAS ${m.roas.toFixed(1)}x, ACoS ${m.acos.toFixed(1)}%`,
-        orders: m.orders,
-        acos: m.acos,
-        roas: m.roas,
-        created_at: new Date().toISOString(),
+        rationale: `Proposta EXACT usando bid de referência ${baseBid}; pedidos ${m.orders ?? 'ausentes'}, ROAS ${m.roas == null ? 'ausente' : m.roas.toFixed(1)}, ACoS ${m.acos == null ? 'ausente' : m.acos.toFixed(1)}.`,
+        orders: m.orders, acos: m.acos, roas: m.roas, created_at: new Date().toISOString(),
       });
-      notify('success', `✓ Sugestão ${matchType} criada: "${term}" bid R$${bid.toFixed(2)}`);
+      notify('success', `Sugestão ${matchType} criada com bid de referência Amazon R$${baseBid.toFixed(2)}; requer revisão.`);
     } catch (e) { notify('error', e.message); }
     finally { setActionLoading(null); }
   };
 
   const adjustBid = async (kw, m, direction) => {
-    setActionLoading(kw.id + '_bid');
-    const current = m.cpc > 0 ? m.cpc : 0.25;
+    const current = metric(kw.current_bid) ?? metric(kw.bid);
     const pct = direction === 'up' ? cfg.aumento_vencedor : cfg.reducao_fraco;
-    const newBid = direction === 'up'
-      ? +(current * (1 + pct / 100)).toFixed(2)
-      : +(current * (1 - pct / 100)).toFixed(2);
-
+    if (current === null || current <= 0 || pct === null || pct === undefined) {
+      notify('info', 'Bid ou limite de variação ausente na configuração efetiva; nenhuma ação foi proposta.');
+      return;
+    }
+    setActionLoading(kw.id + '_bid');
+    const newBid = direction === 'up' ? +(current * (1 + pct / 100)).toFixed(2) : +(current * (1 - pct / 100)).toFixed(2);
     try {
       await base44.entities.AmazonActionQueue.create({
-        amazon_account_id: account.id,
-        operation: 'keyword_bid_update',
-        entity_type: 'keyword',
-        entity_id: kw.keyword_id || kw.id,
-        keyword_id: kw.keyword_id || kw.id,
-        campaign_id: kw.campaign_id || '',
+        amazon_account_id: account.id, operation: 'keyword_bid_update', entity_type: 'keyword',
+        entity_id: kw.keyword_id || kw.id, keyword_id: kw.keyword_id || kw.id, campaign_id: kw.campaign_id || '',
         payload: JSON.stringify({ bid: newBid, bid_before: current, reason: `search_term_analysis_${direction}` }),
-        status: 'pending',
-        priority: direction === 'up' ? 'high' : 'normal',
-        confidence: direction === 'up' ? 85 : 90,
-        source: 'SearchTerms',
-        created_at: new Date().toISOString(),
-        max_attempts: 3,
+        status: 'pending', priority: direction === 'up' ? 'high' : 'normal', confidence: 85,
+        source: 'SearchTerms', created_at: new Date().toISOString(), max_attempts: 3,
       });
-      notify('success', `✓ Bid ${direction === 'up' ? 'aumentado' : 'reduzido'}: R$${current.toFixed(2)} → R$${newBid.toFixed(2)} (+${pct}%)`);
+      notify('info', `Proposta enfileirada para revisão: R$${current.toFixed(2)} → R$${newBid.toFixed(2)}. Ainda não confirmada na Amazon.`);
     } catch (e) { notify('error', e.message); }
     finally { setActionLoading(null); }
   };
@@ -403,8 +389,7 @@ export default function SearchTerms() {
             ].map(f => (
               <div key={f.key}>
                 <label className="text-[10px] text-slate-500 block mb-1">{f.label}</label>
-                <input type="number" step={f.step} value={cfg[f.key] ?? ''}
-                  onChange={e => setCfg(p => ({ ...p, [f.key]: e.target.value === '' ? null : Number(e.target.value) }))}
+                <input type="number" step={f.step} value={cfg[f.key] ?? ''} readOnly aria-readonly="true"
                   className="w-full px-2 py-1.5 bg-surface-2 border border-surface-3 text-slate-300 text-xs rounded-lg focus:outline-none focus:border-cyan/50" />
               </div>
             ))}
@@ -513,11 +498,11 @@ export default function SearchTerms() {
                         <span className={`px-2 py-0.5 rounded-full border font-medium ${cfg_.color}`}>{cfg_.label}</span>
                       </td>
                       {/* Métricas */}
-                      <td className="px-3 py-2 text-slate-400">{m.impressions > 0 ? m.impressions.toLocaleString('pt-BR') : '—'}</td>
+                      <td className="px-3 py-2 text-slate-400">{m.impressions == null || m.impressions <= 0 ? '—' : m.impressions.toLocaleString('pt-BR')}</td>
                       <td className="px-3 py-2 text-slate-400">{m.clicks == null ? '—' : m.clicks.toLocaleString('pt-BR')}</td>
-                      <td className="px-3 py-2 text-slate-400">{m.ctr > 0 ? `${m.ctr.toFixed(2)}%` : '—'}</td>
-                      <td className="px-3 py-2 text-slate-300">R${m.spend.toFixed(2)}</td>
-                      <td className="px-3 py-2 text-slate-400">{m.cpc > 0 ? `R$${m.cpc.toFixed(2)}` : '—'}</td>
+                      <td className="px-3 py-2 text-slate-400">{m.ctr == null || m.ctr <= 0 ? '—' : `${m.ctr.toFixed(2)}%`}</td>
+                      <td className="px-3 py-2 text-slate-300">R${m.spend == null ? '—' : m.spend.toFixed(2)}</td>
+                      <td className="px-3 py-2 text-slate-400">{m.cpc == null || m.cpc <= 0 ? '—' : `R${m.cpc.toFixed(2)}`}</td>
                       <td className="px-3 py-2 font-semibold text-slate-200">{m.orders == null ? '—' : m.orders}</td>
                       <td className="px-3 py-2 text-slate-400">{m.cvr == null ? '—' : `${m.cvr.toFixed(2)}%`}</td>
                       <td className="px-3 py-2 text-slate-400">{m.cpa == null ? '—' : `R${m.cpa.toFixed(2)}`}</td>
@@ -542,29 +527,15 @@ export default function SearchTerms() {
                           </button>
 
                           {/* EXACT */}
-                          <button onClick={() => createVariant(kw, m, 'EXACT')} disabled={!!actionLoading || cfg.aumento_vencedor == null}
+                          <button onClick={() => createVariant(kw, m, 'EXACT')} disabled={!!actionLoading || bidCurrent == null || bidCurrent <= 0}
                             className="px-1.5 py-1 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 rounded text-[10px] font-bold transition-colors disabled:opacity-40"
-                            title={`Criar EXACT · bid R$${(m.cpc * cfg.mult_exact).toFixed(2)}`}>
+                            title={bidCurrent == null ? 'Bid da Amazon indisponível' : `Criar sugestão EXACT com bid de referência R$${bidCurrent.toFixed(2)}`}>
                             {actionLoading === kw.id + '_EXACT' ? <Loader2 className="w-3 h-3 animate-spin" /> : 'E'}
-                          </button>
-
-                          {/* PHRASE */}
-                          <button onClick={() => createVariant(kw, m, 'PHRASE')} disabled={!!actionLoading}
-                            className="px-1.5 py-1 bg-blue-500/10 border border-blue-500/20 text-blue-400 hover:bg-blue-500/20 rounded text-[10px] font-bold transition-colors disabled:opacity-40"
-                            title={`Criar PHRASE · bid R$${(m.cpc * cfg.mult_phrase).toFixed(2)}`}>
-                            P
-                          </button>
-
-                          {/* BROAD */}
-                          <button onClick={() => createVariant(kw, m, 'BROAD')} disabled={!!actionLoading}
-                            className="px-1.5 py-1 bg-violet-500/10 border border-violet-500/20 text-violet-400 hover:bg-violet-500/20 rounded text-[10px] font-bold transition-colors disabled:opacity-40"
-                            title={`Criar BROAD · bid R$${(m.cpc * cfg.mult_broad).toFixed(2)}`}>
-                            B
                           </button>
 
                           {/* Aumentar bid */}
                           {isWinner && (
-                            <button onClick={() => adjustBid(kw, m, 'up')} disabled={!!actionLoading}
+                            <button onClick={() => adjustBid(kw, m, 'up')} disabled={!!actionLoading || cfg.aumento_vencedor == null || bidCurrent == null}
                               className="p-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 rounded transition-colors disabled:opacity-40"
                               title={`Aumentar bid +${cfg.aumento_vencedor}%`}>
                               {actionLoading === kw.id + '_bid' ? <Loader2 className="w-3 h-3 animate-spin" /> : <TrendingUp className="w-3 h-3" />}
@@ -573,7 +544,7 @@ export default function SearchTerms() {
 
                           {/* Reduzir bid */}
                           {(cls === 'inefficient' || cls === 'negate_candidate') && (
-                            <button onClick={() => adjustBid(kw, m, 'down')} disabled={!!actionLoading}
+                            <button onClick={() => adjustBid(kw, m, 'down')} disabled={!!actionLoading || cfg.reducao_fraco == null || bidCurrent == null}
                               className="p-1 bg-amber-500/10 border border-amber-500/20 text-amber-400 hover:bg-amber-500/20 rounded transition-colors disabled:opacity-40"
                               title={`Reduzir bid -${cfg.reducao_fraco}%`}>
                               <TrendingDown className="w-3 h-3" />
