@@ -9,12 +9,12 @@ import {
   updateUnifiedBidCeiling,
 } from './performanceSettingsNormalization.js';
 
-test('ACoS e ROAS permanecem equivalentes', () => {
+test('ACoS e ROAS são preservados como metas separadas', () => {
   assert.equal(deriveRoasFromAcos(15), 6.67);
   assert.equal(deriveAcosFromRoas(5), 20);
   assert.deepEqual(
     updateEfficiencyGoal({ target_acos: 10, target_roas: 10 }, 'target_roas', 4),
-    { target_acos: 25, target_roas: 4 },
+    { target_acos: 10, target_roas: 4 },
   );
 });
 
@@ -24,7 +24,7 @@ test('ACoS salvo prevalece sobre ROAS legado divergente', () => {
     { target_acos: 10, max_bid: 5 },
   );
   assert.equal(normalized.target_acos, 15);
-  assert.equal(normalized.target_roas, 6.67);
+  assert.equal(normalized.target_roas, 5);
   assert.equal(normalized.max_bid, 1.1);
   assert.equal(normalized.max_cpc, 1.1);
 });
@@ -48,8 +48,19 @@ test('normalização mantém limites de segurança acima das respectivas metas',
     max_cpc: 1,
     target_cpc: 1.5,
   });
-  assert.equal(normalized.max_acos, 20);
-  assert.equal(normalized.max_tacos, 8);
+  assert.equal(normalized.max_acos, 10);
+  assert.equal(normalized.max_tacos, 5);
   assert.equal(normalized.min_bid, 1);
-  assert.equal(normalized.target_cpc, 1);
+  assert.equal(normalized.target_cpc, 1.5);
+});
+
+test('preserva zero explícito e distingue de ausência', () => {
+  const normalized = normalizePerformanceSettings(
+    { target_acos: 0, target_roas: 0, target_daily_impressions: 0, max_acos: 0 },
+    { target_acos: 12, target_roas: 8, max_acos: 20 },
+  );
+  assert.equal(normalized.target_acos, 0);
+  assert.equal(normalized.target_roas, 0);
+  assert.equal(normalized.target_daily_impressions, 0);
+  assert.equal(normalized.max_acos, 0);
 });
