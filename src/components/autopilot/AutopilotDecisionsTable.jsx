@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { base44 } from '@/api/base44Client';
 import { CheckCircle, XCircle, Loader2, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Play, AlertCircle } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
+import { getExecutionOutcome } from '@/lib/autopilotExecutionOutcome.js';
 
 const DECISION_LABELS = {
   bid_change: '💰 Ajuste de Bid', budget_change: '📊 Ajuste de Orçamento', pause: '⏸️ Pausar',
@@ -22,19 +23,6 @@ const RISK_COLORS = {
   very_high: 'text-red-600 bg-red-500/10 border-red-500/20',
 };
 const RISK_LABELS = { very_low: 'Muito Baixo', low: 'Baixo', medium: 'Médio', high: 'Alto', very_high: 'Muito Alto' };
-
-function outcomeFromResult(result) {
-  if (!result) return { status: 'failed', text: 'A API não retornou resultado individual.' };
-  if (result.skipped || result.status === 'blocked') return { status: 'blocked', text: result.reason || result.error || 'Ação bloqueada.' };
-  if (result.status === 'failed' || result.ok === false) return { status: 'failed', text: result.error || result.reason || 'Falha informada pela API.' };
-  if (result.status === 'confirming' || result.confirmation_status === 'pending' || result.confirmation_required) {
-    return { status: 'confirming', text: 'Enviada; aguardando confirmação do estado na Amazon.' };
-  }
-  if (result.status === 'executed' || result.ok === true) {
-    return { status: 'sent', text: 'Solicitação aceita/enviada; confirmação do estado não informada.' };
-  }
-  return { status: 'failed', text: result.error || result.reason || 'Estado da resposta não reconhecido.' };
-}
 
 function DecisionRow({ d, onUpdate }) {
   const [loading, setLoading] = useState(false);
@@ -65,7 +53,7 @@ function DecisionRow({ d, onUpdate }) {
       const response = await base44.functions.invoke('executeAutopilotDecision', { decision_ids: [d.id] });
       const payload = response?.data || response || {};
       const item = (payload.results || []).find((row) => String(row.id || row.decision_id) === String(d.id)) || (payload.results || [])[0];
-      const outcome = outcomeFromResult(item);
+      const outcome = getExecutionOutcome(item);
       setExecutionOutcome({ ...outcome, requestId: item?.request_id || item?.amazon_request_id || null });
       const persistedStatus = outcome.status === 'sent' ? 'confirming' : outcome.status;
       onUpdate(d.id, persistedStatus, outcome.status === 'failed' || outcome.status === 'blocked' ? outcome.text : null);
