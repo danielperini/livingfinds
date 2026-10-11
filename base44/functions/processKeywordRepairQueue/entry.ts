@@ -1,5 +1,6 @@
 // v3 — reparo 1:1 com ativação de componentes existentes e bid econômico explícito.
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { includeFilter } from '../../shared/adsApiFilters.ts';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const upper = (value: unknown) => String(value || '').trim().toUpperCase();
