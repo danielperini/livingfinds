@@ -67,8 +67,8 @@ function calcMetrics(kw) {
   const cpc = clicks > 0 && spend !== null ? spend / clicks : metric(kw.cpc);
   const cvr = clicks > 0 && orders !== null ? (orders / clicks) * 100 : null;
   const cpa = orders > 0 && spend !== null ? spend / orders : null;
-  const acos = sales > 0 && spend !== null ? (spend / sales) * 100 : metric(kw.acos_14d ?? kw.acos);
-  const roas = spend > 0 && sales !== null ? sales / spend : metric(kw.roas_14d ?? kw.roas);
+  const acos = sales !== null ? (sales > 0 && spend !== null ? (spend / sales) * 100 : null) : metric(kw.acos_14d ?? kw.acos);
+  const roas = spend !== null ? (spend > 0 && sales !== null ? sales / spend : null) : metric(kw.roas_14d ?? kw.roas);
   const rpc = clicks > 0 && sales !== null ? sales / clicks : null;
   return { clicks, orders, spend, sales, impressions, ctr, cpc, cvr, cpa, acos, roas, rpc, negative_review_eligible: kw.negative_review_eligible === true };
 }
@@ -283,12 +283,12 @@ export default function SearchTerms() {
         ad_group_id: kw.ad_group_id || '',
         keyword_text: term,
         match_type: 'exact',
-        clicks: m.clicks,
-        spend: m.spend,
+        ...(m.clicks == null ? {} : { clicks: m.clicks }),
+        ...(m.spend == null ? {} : { spend: m.spend }),
         ...(m.sales == null ? {} : { sales: m.sales }),
         ...(m.orders == null ? {} : { orders: m.orders }),
-        acos: m.acos,
-        reason: `${m.clicks} cliques, R$${m.spend == null ? '—' : m.spend.toFixed(2)} gasto, ${m.orders} pedidos — candidato a negativação`,
+        ...(m.acos == null ? {} : { acos: m.acos }),
+        reason: `${m.clicks ?? '—'} cliques, gasto ${m.spend == null ? '—' : `R${m.spend.toFixed(2)}`}, ${m.orders ?? '—'} pedidos — candidato a negativação`,
         status: 'pending',
       });
       notify('success', `✓ Negativação sugerida para "${term}"`);
@@ -356,7 +356,6 @@ export default function SearchTerms() {
 
   const winners   = (classCounts.winner || 0) + (classCounts.migrate_exact || 0);
   const toNegate  = classCounts.negate_candidate || 0;
-  const overallRoas = null; // Linhas diárias podem compartilhar a janela de atribuição; somá-las criaria dupla contagem.
 
   return (
     <div className="p-5 space-y-5 animate-fade-in">
