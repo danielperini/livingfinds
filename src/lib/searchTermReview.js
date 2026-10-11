@@ -53,7 +53,7 @@ export function getSearchTermDataContext(rows = [], account = null) {
     marketplace: marketplace ? String(marketplace) : null,
     periodStart: window?.[0] || null,
     periodEnd: window?.[1] || null,
-    periodStatus: !rows.length ? 'no_data' : window ? 'known' : 'not_recorded',
+    periodStatus: !rows.length ? 'no_data' : windows.size > 1 ? 'mixed' : window ? 'known' : 'not_recorded',
     updatedAt: latest,
   };
 }
