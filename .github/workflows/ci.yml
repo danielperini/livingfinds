@@ -124,3 +124,15 @@ jobs:
             base44/functions/runSalesMode/entry.ts
       - name: Test scheduler and Hostinger OpenAI routing
         run: deno test --node-modules-dir=auto server/src/scheduler.test.ts server/src/sdk/integrations.test.ts
+
+  agents-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install isolated Agents SDK dependencies
+        run: npm ci --prefix agents
+      - name: Test engineer agent safety boundaries
+        run: npm test --prefix agents
