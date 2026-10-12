@@ -520,8 +520,12 @@ Deno.serve(async (request) => {
       completed_at: new Date().toISOString(),
       duration_ms: Date.now() - t0,
       records_processed: executed,
-      error_message: failed > 0 ? `${failed} decisões falharam` : null,
-      result_summary: `${executed} executadas, ${failed} com erro, ${skipped} agendadas, ${preAutoCancel} pré-canceladas`,
+      error_message: failed > 0
+        ? JSON.stringify(results.filter((item: any) => item.error_class).map((item: any) => ({
+            id: item.id, action: item.action, error_class: item.error_class, error: item.error,
+          }))).slice(0, 1800)
+        : null,
+      result_summary: `V6SIA: ${executed} executadas, ${failed} com erro, ${skipped} agendadas, ${preAutoCancel} pré-canceladas`,
     }).catch(() => {});
 
     return Response.json({
