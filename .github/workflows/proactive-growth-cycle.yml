@@ -2,7 +2,7 @@ name: Proactive campaign growth cycle
 
 on:
   schedule:
-    # 07:15 and 15:15 America/Sao_Paulo (UTC-3).  GitHub Actions cron is UTC.
+    # 07:15 and 15:15 America/Sao_Paulo (UTC-3). GitHub Actions cron is UTC.
     - cron: '15 10,18 * * *'
   workflow_dispatch:
 
@@ -13,6 +13,7 @@ concurrency:
 jobs:
   grow:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Prepare secure VPS connection
         run: |
@@ -20,25 +21,34 @@ jobs:
           echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
 
-      - name: Run the canonical growth cycle and confirm Amazon
+      - name: Run the canonical cycle, drain approved decisions, and confirm Amazon
         env:
           TARGET: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
           VPS_PATH: ${{ secrets.VPS_PATH }}
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 "$TARGET" "cd '$VPS_PATH' && docker compose -f server/docker-compose.yml exec -T app deno eval '
             const token = Deno.env.get(\"API_TOKEN\") || Deno.env.get(\"ADMIN_PASSWORD\") || \"\";
+            const safeText = value => String(value ?? \"\").replace(/Bearer\\s+\\S+/gi, \"Bearer [redacted]\").replace(/Atza\\|[^\\s]+/gi, \"[redacted]\").replace(/(?:token|secret|password|authorization)\\s*[:=]\\s*[^,\\s\\\"]+/gi, \"[redacted]\").slice(0, 300);
             const call = async (name, payload) => {
-              const response = await fetch(\"http://127.0.0.1:8000/functions/\" + name, {
-                method: \"POST\",
-                headers: { \"content-type\": \"application/json\", \"x-api-token\": token },
-                body: JSON.stringify(payload),
-              });
-              const data = await response.json().catch(() => ({}));
-              if (!response.ok || data.ok === false) throw new Error(name + \": \" + (data.error || response.status));
-              return data;
+              try {
+                const response = await fetch(\"http://127.0.0.1:8000/functions/\" + name, {
+                  method: \"POST\",
+                  headers: { \"content-type\": \"application/json\", \"x-api-token\": token },
+                  body: JSON.stringify(payload),
+                });
+                const data = await response.json().catch(() => ({}));
+                return { ok: response.ok && data?.ok !== false, status: response.status, data,
+                  error: response.ok && data?.ok !== false ? null : safeText(data?.error || data?.message || (\"HTTP \" + response.status + \"; ok=\" + String(data?.ok))) };
+              } catch (error) {
+                return { ok: false, status: null, data: {}, error: safeText(error?.message || error) };
+              }
             };
-            const common = { _service_role: true, _canonical_orchestrator: \"runUnifiedDecisionEngine\", dry_run: false };
-            const engine = await call(\"runUnifiedDecisionEngine\", {
+            const failedStages = result => Object.entries(result?.data?.stages || {})
+              .filter(([, stage]) => stage?.ok === false)
+              .map(([name, stage]) => ({ name, error: safeText(stage?.error || stage?.message || stage?.reason || \"stage_returned_ok_false\") }));
+            const cycleId = \"proactive-growth-\" + new Date().toISOString().slice(0, 13);
+            const common = { _service_role: true, _canonical_orchestrator: \"runUnifiedDecisionEngine\", correlation_id: cycleId, dry_run: false };
+            const engineResult = await call(\"runUnifiedDecisionEngine\", {
               ...common,
               force_campaign_lifecycle: true,
               serving_campaign_growth_target_pct: 40,
@@ -46,16 +56,40 @@ jobs:
               max_auto_budget_expansions: 5,
               trigger_type: \"scheduled_twice_daily_proactive_growth\",
             });
-            const execution = await call(\"executeApprovedDecisionQueue\", {
+            // A failed analysis stage must not strand already validated decisions.
+            // The queue executor revalidates, claims, and serializes each item before mutation.
+            const executionResult = await call(\"executeApprovedDecisionQueue\", {
               _service_role: true, max_decisions: 50,
               trigger_type: \"scheduled_twice_daily_proactive_growth\",
             });
             await new Promise(resolve => setTimeout(resolve, 5000));
-            const confirmation = await call(\"confirmExecutedDecisions\", {
+            const confirmationResult = await call(\"confirmExecutedDecisions\", {
               _service_role: true, trigger_type: \"scheduled_twice_daily_proactive_growth\",
             });
+            const engine = engineResult.data || {};
+            const execution = executionResult.data || {};
+            const confirmation = confirmationResult.data || {};
+            const problems = [];
+            if (!engineResult.ok) problems.push({ step: \"decision_engine\", status: engineResult.status, error: engineResult.error, failed_stages: failedStages(engineResult) });
+            if (!executionResult.ok) problems.push({ step: \"execute_approved_queue\", status: executionResult.status, error: executionResult.error });
+            if (!confirmationResult.ok) problems.push({ step: \"confirm_executions\", status: confirmationResult.status, error: confirmationResult.error });
+            let supervision = null;
+            if (problems.length) {
+              const failures = problems.flatMap(problem => problem.failed_stages?.length
+                ? problem.failed_stages.map(stage => ({ queue_id: cycleId, queue_entity: \"ProactiveGrowthCycle\", action: stage.name, error_class: \"workflow_stage_failure\", error_code: String(problem.status || \"STAGE_FAILED\"), error: stage.error, attempt_count: 1, max_attempts: 2 }))
+                : [{ queue_id: cycleId, queue_entity: \"ProactiveGrowthCycle\", action: problem.step, error_class: \"workflow_step_failure\", error_code: String(problem.status || \"STEP_FAILED\"), error: problem.error || problem.step, attempt_count: 1, max_attempts: 2 }]);
+              const review = await call(\"superviseV6SIA\", {
+                _service_role: true, supervision_type: \"execution_failure\", correlation_id: cycleId,
+                trigger_type: \"proactive_growth_cycle_failure\", failures,
+              });
+              supervision = { ok: review.ok, status: review.status, error: review.error, review_id: review.data?.review_id || review.data?.id || null };
+            }
             console.log(\"PROACTIVE_GROWTH=\" + JSON.stringify({
+              cycle_date: new Date().toISOString(),
+              correlation_id: cycleId,
               engine: engine.engine_version || engine.engine,
+              engine_ok: engineResult.ok,
+              failed_stages: failedStages(engineResult),
               lifecycle_due: engine.campaign_lifecycle?.due,
               growth_goal: engine.serving_campaign_growth_goal,
               promotions: engine.stages?.campaignLifecycle?.results?.[0]?.stages?.harvesting?.promoted ?? null,
@@ -63,6 +97,9 @@ jobs:
               remaining: execution.remaining ?? 0,
               confirmed: confirmation.confirmed ?? 0,
               divergences: confirmation.divergences ?? 0,
+              v6sia_supervision: supervision,
+              problems,
               note: \"No eligible economic opportunity is a valid outcome; the cycle must not manufacture bids or campaigns.\",
             }));
+            if (problems.length) throw new Error(\"growth cycle partially failed; sanitized step diagnostics are in PROACTIVE_GROWTH above\");
           ' </dev/null"
