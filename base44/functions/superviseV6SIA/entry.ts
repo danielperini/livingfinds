@@ -489,17 +489,89 @@ Deno.serve(async (request) => {
       console.error('[superviseV6SIA] V6SIAReviewLog persistence failed:', sanitizeV6SIAError(error));
     }
 
+    const evidenceLinkErrors: any[] = [];
+    let evidenceLinksCreated = 0;
+    const evidenceLinksByTable: Record<string, number> = {};
     if (reviewLog?.id) {
+      const links: any[] = [];
+      for (const [table, rows] of Object.entries(evidence.by_table as Record<string, any[] | null>)) {
+        for (const row of rows || []) {
+          if (!row?.id) {
+            evidenceLinkErrors.push({ table, error: 'source_record_id ausente' });
+            continue;
+          }
+          links.push({
+            amazon_account_id: account.id,
+            profile_id: account.ads_profile_id || account.profile_id || null,
+            marketplace_id: account.marketplace_id || account.marketplace || null,
+            correlation_id: correlationId || String(reviewLog.id),
+            review_log_id: reviewLog.id,
+            source_table: table,
+            source_record_id: String(row.id),
+            source_report_id: row.source_report_id || row.report_id || null,
+            source_job_id: row.report_job_id || row.job_id || null,
+            source_date: row.date || row.assessment_date || row.spend_date || row.created_at || null,
+            campaign_id: row.campaign_id || row.amazon_campaign_id || null,
+            ad_group_id: row.ad_group_id || null,
+            asin: row.asin || row.advertised_asin || row.advertised_product_id || null,
+            sku: row.sku || row.advertised_sku || null,
+            created_at: now,
+          });
+        }
+      }
+      for (let offset = 0; offset < links.length; offset += 250) {
+        const batch = links.slice(offset, offset + 250);
+        let persisted = false;
+        let lastError: any = null;
+        for (let attempt = 0; attempt < 3 && !persisted; attempt++) {
+          try {
+            await base44.asServiceRole.entities.V6SIAEvidenceLink.bulkCreate(batch);
+            persisted = true;
+          } catch (error: any) {
+            lastError = error;
+            if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+          }
+        }
+        if (persisted) {
+          evidenceLinksCreated += batch.length;
+          for (const link of batch) evidenceLinksByTable[link.source_table] = (evidenceLinksByTable[link.source_table] || 0) + 1;
+        } else {
+          evidenceLinkErrors.push({ batch_start: offset, batch_count: batch.length, error: sanitizeV6SIAError(lastError) });
+        }
+      }
+      for (const [table, ref] of Object.entries(evidence.refs as Record<string, any>)) {
+        ref.evidence_links_persisted = evidenceLinksByTable[table] || 0;
+        ref.evidence_links_expected = (evidence.by_table as Record<string, any[] | null>)[table]?.filter((row) => Boolean(row?.id)).length ?? 0;
+        ref.evidence_links_complete = ref.evidence_links_persisted === ref.evidence_links_expected && ref.complete !== false;
+      }
+      if (evidence.query_errors.length || evidenceLinkErrors.length) {
+        evidence.data_quality_status = 'partial';
+        status = 'partial';
+      }
+      await base44.asServiceRole.entities.V6SIAReviewLog.update(reviewLog.id, {
+        status,
+        data_quality_status: evidence.data_quality_status,
+        source_refs_json: JSON.stringify(evidence.refs),
+        source_counts_json: JSON.stringify(Object.fromEntries(Object.entries(evidence.refs).map(([table, ref]: [string, any]) => [table, ref.record_count]))),
+        data_query_errors_json: JSON.stringify([...evidence.query_errors, ...evidenceLinkErrors]),
+        updated_at: new Date().toISOString(),
+      }).catch((error: any) => evidenceLinkErrors.push({ table: 'V6SIAReviewLog', error: sanitizeV6SIAError(error) }));
+
       const refsJson = JSON.stringify({ review_log_id: reviewLog.id, evidence_table: 'V6SIAEvidenceLink', correlation_id: correlationId });
       await Promise.all(evidence.decisions.map((decision) =>
         base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
           v6sia_review_log_id: reviewLog.id,
-          ai_supervision_status: success ? 'completed' : gate.allowed === false ? 'deferred' : 'failed',
+          ai_supervision_status: success ? status === 'partial' ? 'partial' : 'completed' : gate.allowed === false ? 'deferred' : 'failed',
           ai_reviewed_at: now,
           data_evidence_refs: refsJson,
-        }).catch(() => null)
+        }).catch((error: any) => evidenceLinkErrors.push({ table: 'OptimizationDecision', id: decision.id, error: sanitizeV6SIAError(error) }))
       ));
     }
+    report.status = status;
+    report.data_quality_status = evidence.data_quality_status;
+    report.evidence_links_created = evidenceLinksCreated;
+    report.evidence_link_errors = evidenceLinkErrors;
+    report.ai_recommendation_status = success ? 'diagnostic_only' : analysis?.incomplete ? 'incomplete' : 'failed';
 
     const log = await base44.asServiceRole.entities.SyncExecutionLog.create({
       amazon_account_id: account.id,
@@ -516,6 +588,9 @@ Deno.serve(async (request) => {
 
     return Response.json({
       ok: (status === 'success' || status === 'deferred') && Boolean(reviewLog?.id),
+      partial: status === 'partial',
+      evidence_links_created: evidenceLinksCreated,
+      evidence_link_errors: evidenceLinkErrors,
       engine_version: 'V6SIA',
       status: reviewLog?.id ? status : 'error',
       reason: gate.reason || (!reviewLog?.id ? 'Falha ao persistir trilha de auditoria' : null),
