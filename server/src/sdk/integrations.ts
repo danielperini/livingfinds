@@ -99,7 +99,7 @@ async function invokeOpenAI(key: string, payload: Json): Promise<Json> {
   const choice = raw?.choices?.[0] ?? {};
   const metadata = {
     provider: 'openai',
-    model: raw?.model || openaiModel(),
+    model: raw?.model || String(body.model || openaiModel()),
     request_id: raw?.id || null,
     usage: raw?.usage || null,
     finish_reason: choice?.finish_reason || null,
