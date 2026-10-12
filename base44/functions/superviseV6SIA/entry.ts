@@ -176,7 +176,7 @@ async function collectCanonicalEvidence(base44: any, account: any, correlationId
     keyOf(row, ['date', 'hour', 'campaign_id', 'ad_group_id', 'advertised_asin', 'advertised_sku', 'targeting']),
     rowTime,
   );
-  const termRowsRaw = byTable.SearchTerm || [];
+  const termRowsRaw: any[] = Array.isArray(byTable.SearchTerm) ? byTable.SearchTerm : [];
   const termRows = latestRowsByKey(termRowsRaw, (row) =>
     String(row.unique_key || keyOf(row, ['date', 'campaign_id', 'ad_group_id', 'advertised_asin', 'advertised_sku', 'normalized_search_term', 'search_term'])),
     rowTime,
