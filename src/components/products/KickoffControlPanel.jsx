@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
+import { dateKeyInSaoPaulo, filterKickoffByDate } from '@/lib/kickoffPeriod';
 import {
   Rocket, Clock, CheckCircle2, XCircle, Pause, RefreshCw,
   Loader2, AlertTriangle, ChevronDown, ChevronUp, Package, Ban, Zap
@@ -220,6 +221,7 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('all');
+  const [periodDate, setPeriodDate] = useState(() => dateKeyInSaoPaulo());
   const [collapsed, setCollapsed] = useState(false);
   const [stockMap, setStockMap] = useState({});
   const [cancelling, setCancelling] = useState(null);
@@ -267,7 +269,8 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
   }, [accountId]);
 
   // Jobs agendados com scheduled_at > 1h no passado
-  const stuckJobs = items.filter(i => {
+  const periodItems = filterKickoffByDate(items, periodDate);
+  const stuckJobs = periodItems.filter(i => {
     if (i.status !== 'scheduled') return false;
     if (!i.scheduled_at) return false;
     return new Date(i.scheduled_at).getTime() < Date.now() - 60 * 60 * 1000;
@@ -326,25 +329,25 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
 
   // Contar "awaiting_stock" separado de "failed" para a aba
   const awaitingStockAsins = new Set(
-    items.filter(i => (i.status === 'failed' || i.status === 'waiting_stock') && stockMap[i.asin] && (stockMap[i.asin].inventory_status === 'out_of_stock' || (stockMap[i.asin].fba_inventory ?? 1) === 0)).map(i => i.asin)
+    periodItems.filter(i => (i.status === 'failed' || i.status === 'waiting_stock') && stockMap[i.asin] && (stockMap[i.asin].inventory_status === 'out_of_stock' || (stockMap[i.asin].fba_inventory ?? 1) === 0)).map(i => i.asin)
   );
 
   const counts = {
-    all: items.length,
-    scheduled: items.filter(i => i.status === 'scheduled').length,
-    processing: items.filter(i => i.status === 'processing').length,
-    completed: items.filter(i => i.status === 'completed').length,
-    failed: items.filter(i => i.status === 'failed' && !awaitingStockAsins.has(i.asin)).length,
-    awaiting_stock: items.filter(i => i.status === 'waiting_stock' || (i.status === 'failed' && awaitingStockAsins.has(i.asin))).length,
-    held_portfolio_saturation: items.filter(i => i.status === 'held_portfolio_saturation').length,
-    cancelled: items.filter(i => i.status === 'cancelled').length,
+    all: periodItems.length,
+    scheduled: periodItems.filter(i => i.status === 'scheduled').length,
+    processing: periodItems.filter(i => i.status === 'processing').length,
+    completed: periodItems.filter(i => i.status === 'completed').length,
+    failed: periodItems.filter(i => i.status === 'failed' && !awaitingStockAsins.has(i.asin)).length,
+    awaiting_stock: periodItems.filter(i => i.status === 'waiting_stock' || (i.status === 'failed' && awaitingStockAsins.has(i.asin))).length,
+    held_portfolio_saturation: periodItems.filter(i => i.status === 'held_portfolio_saturation').length,
+    cancelled: periodItems.filter(i => i.status === 'cancelled').length,
   };
 
   const filtered = activeTab === 'all'
-    ? items
+    ? periodItems
     : activeTab === 'awaiting_stock'
-      ? items.filter(i => i.status === 'waiting_stock' || (i.status === 'failed' && awaitingStockAsins.has(i.asin)))
-      : items.filter(i => i.status === activeTab);
+      ? periodItems.filter(i => i.status === 'waiting_stock' || (i.status === 'failed' && awaitingStockAsins.has(i.asin)))
+      : periodItems.filter(i => i.status === activeTab);
 
   // Ordenar: failed (sem estoque) > failed > processing > scheduled > completed > cancelled
   const ORDER = { failed: 0, waiting_stock: 1, held_portfolio_saturation: 2, processing: 3, scheduled: 4, completed: 5, cancelled: 6, awaiting_stock: 1 };
@@ -446,33 +449,50 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
       {!collapsed && (
         <>
           {/* Tabs */}
-          <div className="flex items-center gap-1.5 px-5 pb-3 flex-wrap border-t border-violet-500/10 pt-3">
-            <button
-              type="button"
-              onClick={() => setActiveTab('all')}
-              className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
-                activeTab === 'all'
-                  ? 'bg-violet-500/15 border-violet-500/30 text-violet-400'
-                  : 'bg-surface-2 border-surface-3 text-slate-500 hover:text-slate-300'
-              }`}
-            >
-              Todos
-              <span className={`ml-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold ${activeTab === 'all' ? 'bg-white/10' : 'bg-surface-3'}`}>
-                {counts.all}
-              </span>
-            </button>
+          <div className="flex items-center justify-between gap-3 px-5 pb-3 flex-wrap border-t border-violet-500/10 pt-3">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setActiveTab('all')}
+                className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                  activeTab === 'all'
+                    ? 'bg-violet-500/15 border-violet-500/30 text-violet-400'
+                    : 'bg-surface-2 border-surface-3 text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                Todos
+                <span className={`ml-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold ${activeTab === 'all' ? 'bg-white/10' : 'bg-surface-3'}`}>
+                  {counts.all}
+                </span>
+              </button>
 
-            {['scheduled', 'processing', 'failed', 'awaiting_stock', 'held_portfolio_saturation', 'completed', 'cancelled'].map(s =>
-              counts[s] > 0 ? (
-                <StatusTab
-                  key={s}
-                  status={s}
-                  count={counts[s]}
-                  active={activeTab === s}
-                  onClick={() => setActiveTab(s)}
-                />
-              ) : null
-            )}
+              {['scheduled', 'processing', 'failed', 'awaiting_stock', 'held_portfolio_saturation', 'completed', 'cancelled'].map(s =>
+                counts[s] > 0 ? (
+                  <StatusTab
+                    key={s}
+                    status={s}
+                    count={counts[s]}
+                    active={activeTab === s}
+                    onClick={() => setActiveTab(s)}
+                  />
+                ) : null
+              )}
+            </div>
+            <label className="inline-flex items-center gap-2 text-xs text-slate-400">
+              <span>Período</span>
+              <input
+                type="date"
+                value={periodDate}
+                onChange={event => setPeriodDate(event.target.value)}
+                aria-label="Filtrar Kick-off pela data de atividade"
+                className="rounded-lg border border-surface-3 bg-surface-2 px-2 py-1.5 text-xs text-slate-200 [color-scheme:dark]"
+              />
+              {periodDate && (
+                <button type="button" onClick={() => setPeriodDate('')} className="text-violet-300 hover:text-violet-200">
+                  Todos
+                </button>
+              )}
+            </label>
           </div>
 
           {/* List */}

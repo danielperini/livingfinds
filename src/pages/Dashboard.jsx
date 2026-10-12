@@ -1,17 +1,16 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useReportPolling } from '@/hooks/useReportPolling';
-import { base44 } from '@/api/base44Client';
 import { classifyCampaigns } from '@/lib/campaignUtils';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAccountData, invalidateAccountData } from '@/hooks/useAccountData';
 import { Link } from 'react-router-dom';
 import {
-  ComposedChart, AreaChart, Area, BarChart, Bar, LineChart, Line,
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine
+  ComposedChart, Area, Line,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import {
   RefreshCw, AlertCircle, Loader2,
-  AlertTriangle, BarChart2, Megaphone, BookOpen, Terminal, Zap
+  BarChart2, Megaphone, BookOpen, Terminal, Zap
 } from 'lucide-react';
 import TokenExpiredBanner from '@/components/amazon/TokenExpiredBanner';
 import MoMComparisonChart from '@/components/dashboard/MoMComparisonChart';
@@ -243,6 +242,7 @@ export default function Dashboard() {
   const queryClient = useQueryClient();
   const [period, setPeriod] = useState('7');
   const [justUpdated, setJustUpdated] = useState(false);
+  const [refreshingCurrentData, setRefreshingCurrentData] = useState(false);
   const justUpdatedTimerRef = useRef(null);
 
   // Camada única de dados compartilhada — React Query cuida de cache e dedup
@@ -259,8 +259,18 @@ export default function Dashboard() {
 
   const loadData = useCallback(() => {
     if (!account?.id) return;
-    invalidateAccountData(queryClient, account.id);
+    return invalidateAccountData(queryClient, account.id);
   }, [queryClient, account?.id]);
+
+  const refreshCurrentData = useCallback(async () => {
+    if (!account?.id || refreshingCurrentData) return;
+    setRefreshingCurrentData(true);
+    try {
+      await loadData();
+    } finally {
+      setRefreshingCurrentData(false);
+    }
+  }, [account?.id, loadData, refreshingCurrentData]);
 
   // Auto-refresh no mount: se os dados tiverem > 6h de idade (stale), invalida o cache silenciosamente
   const autoRefreshDoneRef = useRef(false);
@@ -415,21 +425,6 @@ export default function Dashboard() {
     }
     return { source, quality, label, lastDate, reportGapDays, daysCount: datesWithData.size, syncAgeHours, syncRecenteButStaleReport };
   }, [allMetrics, account]);
-
-  // Campanhas com métricas acumuladas (complemento quando metrics diárias estão desatualizadas)
-  const campAggregated = useMemo(() => {
-    const active = campaigns.filter(c => {
-      const st = String(c.state || c.status || '').toLowerCase();
-      return st !== 'archived' && !c.archived;
-    });
-    return active.reduce((acc, c) => ({
-      spend: acc.spend + (c.spend || 0),
-      sales: acc.sales + (c.sales || 0),
-      orders: acc.orders + (c.orders || 0),
-      clicks: acc.clicks + (c.clicks || 0),
-      impressions: acc.impressions + (c.impressions || 0),
-    }), { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 });
-  }, [campaigns]);
 
   // Top campanhas por gasto
   const topCampaigns = useMemo(() =>
@@ -781,6 +776,16 @@ export default function Dashboard() {
           )}
         </div>
         <div className="flex items-center gap-2 flex-wrap xl:justify-end">
+          <button
+            type="button"
+            onClick={refreshCurrentData}
+            disabled={!account?.id || refreshingCurrentData}
+            title="Atualiza os dados mais recentes disponíveis; relatórios da Amazon podem ter atraso de publicação."
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-cyan/25 bg-cyan/5 text-xs font-semibold text-cyan hover:bg-cyan/10 disabled:opacity-50 transition-colors"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${refreshingCurrentData ? 'animate-spin' : ''}`} />
+            {refreshingCurrentData ? 'Atualizando…' : 'Atualizar dados atuais'}
+          </button>
           <AutoWindowStatus
             justUpdated={justUpdated}
             dashboardUpdatedAt={dashboardUpdatedLabel}
