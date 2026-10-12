@@ -73,7 +73,8 @@ jobs:
             base44/shared/v6siaFailurePolicy.test.ts \
             base44/shared/v6siaReviewEvidence.test.ts \
             base44/shared/v6siaEvidencePaging.test.ts \
-            base44/shared/v6siaLifecycle.e2e.test.ts
+            base44/shared/v6siaLifecycle.e2e.test.ts \
+            base44/shared/metricsToAmazonMutation.e2e.test.ts
       - name: Check economic evidence policy
         run: deno check --node-modules-dir=auto base44/shared/economicEvidencePolicy.ts
       - name: Check economic evidence evaluator
@@ -93,6 +94,7 @@ jobs:
             base44/shared/v6siaLifecycle.ts \
             base44/functions/superviseV6SIA/entry.ts \
             base44/functions/executeApprovedDecisionQueue/entry.ts \
+            base44/functions/executeAutopilotDecisionV2/entry.ts \
             base44/functions/confirmExecutedDecisions/entry.ts \
             base44/functions/reconcileAndRetryDecisions/entry.ts
       - name: Check canonical weekly review
