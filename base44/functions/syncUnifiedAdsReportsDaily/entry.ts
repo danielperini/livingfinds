@@ -167,6 +167,10 @@ Deno.serve(async (req) => {
     const toSave = records.map((r: any) => ({
       amazon_account_id: account.id,
       profile_id: profileId,
+      marketplace_id: account.marketplace_id || account.marketplace || null,
+      source_report_id: String(reportId),
+      source_window_start: startDate,
+      source_window_end: endDate,
       date: r.date,
       ad_product: 'SPONSORED_PRODUCTS',
       campaign_id: String(r.campaignId || ''),
