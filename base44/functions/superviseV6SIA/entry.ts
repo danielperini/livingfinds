@@ -307,7 +307,7 @@ Deno.serve(async (request) => {
     const gate = gateResponse?.data || gateResponse || {};
 
     let analysis: any = null;
-    let model = 'cache';
+    let model = gate.cached === true ? 'cache' : gate.allowed === false ? 'deferred' : 'pending';
     if (gate.cached === true) {
       analysis = gate.result || null;
     } else if (gate.allowed === true) {
@@ -375,7 +375,7 @@ Deno.serve(async (request) => {
     const now = new Date().toISOString();
     const success = Boolean(analysis && (analysis.ok !== false));
     let status: 'success' | 'deferred' | 'error' | 'partial' = success ? 'success' : gate.allowed === false ? 'deferred' : 'error';
-    const aiCallStatus = model === 'cache' ? 'cache_reused' : model === 'incomplete' ? 'incomplete' : analysis?.provider === 'openai' && Boolean(analysis?.request_id) ? 'called' : gate.allowed === false ? 'budget_deferred' : 'failed';
+    const aiCallStatus = gate.cached === true ? 'cache_reused' : gate.allowed === false ? 'budget_deferred' : model === 'incomplete' ? 'incomplete' : analysis?.provider === 'openai' && Boolean(analysis?.request_id) ? 'called' : 'failed';
     const report = {
       engine_version: 'V6SIA',
       supervision_type: supervisionType,
@@ -389,7 +389,7 @@ Deno.serve(async (request) => {
       data_as_of: evidence.data_as_of,
       data_quality_status: evidence.data_quality_status,
       implementation_status: implementationStatus,
-      ai_recommendation_status: 'diagnostic_only',
+      ai_recommendation_status: success ? 'diagnostic_only' : analysis?.incomplete ? 'incomplete' : gate.allowed === false ? 'not_generated' : 'failed',
       decision_outcomes: actionOutcomes,
       findings: analysis,
     };
@@ -473,7 +473,7 @@ Deno.serve(async (request) => {
         decision_ids_json: JSON.stringify(evidence.decisions.map((item) => item.id).filter(Boolean)),
         decision_outcomes_json: JSON.stringify(actionOutcomes),
         implementation_status: implementationStatus,
-        ai_recommendation_status: success ? 'diagnostic_only' : analysis?.incomplete ? 'incomplete' : 'failed',
+        ai_recommendation_status: success ? 'diagnostic_only' : analysis?.incomplete ? 'incomplete' : gate.allowed === false ? 'not_generated' : 'failed',
         findings_json: JSON.stringify(analysis),
         gate_reason: gate.reason ? sanitizeV6SIAError(gate.reason) : null,
         started_at: startedAt,
