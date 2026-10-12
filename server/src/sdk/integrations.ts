@@ -100,7 +100,7 @@ export async function invokeOpenAI(key: string, payload: Json, fetchImpl: typeof
   const metadata = {
     provider: 'openai',
     model: raw?.model || String(body.model || openaiModel()),
-    request_id: raw?.id || null,
+    request_id: raw?.id || res.headers.get('x-request-id') || null,
     usage: raw?.usage || null,
     finish_reason: choice?.finish_reason || null,
   };
