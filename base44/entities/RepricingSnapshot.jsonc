@@ -11,6 +11,7 @@
     "snapshot_key": { "type": "string" },
     "profile_id": { "type": "string" },
     "correlation_id": { "type": "string" },
+    "data_source_refs_json": { "type": "string" },
     "run_id": { "type": "string" },
     "decision_window": { "type": "string" },
     "window_start": { "type": "string", "format": "date-time" },
