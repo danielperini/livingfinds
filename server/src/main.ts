@@ -11,7 +11,7 @@
 import { join, extname } from 'jsr:@std/path@1';
 import { contentType } from 'jsr:@std/media-types@1';
 import { loadFunctions, registry } from './registry.ts';
-import { startScheduler } from './scheduler.ts';
+import { getDailyMotorRunStatus, getSchedulerHealth, startScheduler } from './scheduler.ts';
 import { healthcheck, query } from './db.ts';
 import { makeEntities } from './sdk/entities.ts';
 import { makeIntegrations } from './sdk/integrations.ts';
@@ -56,7 +56,7 @@ async function passwordHash(password: string, salt: Uint8Array): Promise<string>
     ['deriveBits'],
   );
   const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 210_000 },
+    { name: 'PBKDF2', hash: 'SHA-256', salt: new Uint8Array(salt).buffer, iterations: 210_000 },
     material,
     256,
   );
@@ -332,7 +332,10 @@ async function handler(req: Request): Promise<Response> {
     });
   }
   if (path === '/health') {
-    return json({ ok: true, service: 'livingfinds-backend', functions: registry.size, db: await healthcheck() });
+    let dailyMotor: unknown;
+    try { dailyMotor = await getDailyMotorRunStatus(); }
+    catch { dailyMotor = { status: 'ledger_unavailable', confirmed_success: false }; }
+    return json({ ok: true, service: 'livingfinds-backend', functions: registry.size, db: await healthcheck(), scheduler: getSchedulerHealth(), daily_motor: dailyMotor });
   }
   if (path === '/api/admin/environment-status') {
     const user = await authenticatedUser(req);
