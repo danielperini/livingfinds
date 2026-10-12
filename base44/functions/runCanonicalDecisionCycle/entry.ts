@@ -98,8 +98,32 @@ Deno.serve(async(request)=>{
         })
       : { ok: true, skipped: true, reason: 'no_daily_review_or_stage_failure' };
 
+    const cycleOk = economicEvidence?.ok !== false && engine?.ok !== false && reconciliation?.ok !== false && arbitration?.ok !== false;
+    const accountRows = body.amazon_account_id
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1).catch(() => [])
+      : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 1).catch(() => []);
+    const accountId = accountRows[0]?.id || body.amazon_account_id || null;
+    if (accountId) {
+      await base44.asServiceRole.entities.SyncExecutionLog.create({
+        amazon_account_id: accountId,
+        operation: 'v6sia_canonical_decision_cycle',
+        trigger_type: String(body.trigger_type || 'canonical_decision_cycle').slice(0, 100),
+        status: cycleOk && supervision?.ok !== false ? 'success' : 'warning',
+        started_at: cycleStartedAt,
+        completed_at: new Date().toISOString(),
+        duration_ms: Date.now() - new Date(cycleStartedAt).getTime(),
+        records_processed: 4,
+        error_message: !cycleOk ? JSON.stringify(failedStages).slice(0, 900) : (supervision?.ok === false ? String(supervision?.error || 'V6SIA supervisor unavailable').slice(0, 500) : null),
+        result_summary: JSON.stringify({
+          engine_version: 'V6SIA', correlation_id: correlationId,
+          stages: Object.fromEntries(Object.entries(stageResults).map(([name, result]: [string, any]) => [name, result?.ok === false ? 'failed' : result?.skipped ? 'skipped' : 'ok'])),
+          supervision_status: supervision?.status || (supervision?.skipped ? 'skipped' : supervision?.ok === false ? 'failed' : 'ok'),
+        }).slice(0, 1400),
+      }).catch(() => {});
+    }
+
     return Response.json({
-      ok:economicEvidence?.ok!==false&&engine?.ok!==false&&reconciliation?.ok!==false&&arbitration?.ok!==false,
+      ok:cycleOk,
       engine:'canonical-decision-cycle',
       engine_version:'V6SIA',
       correlation_id:correlationId,
