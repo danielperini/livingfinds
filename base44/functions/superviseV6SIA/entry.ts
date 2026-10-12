@@ -82,6 +82,22 @@ function summarizeNumeric(rows: any[], fields: string[]) {
   return output;
 }
 
+function summarizeByCurrency(rows: any[], fields: string[], fallbackCurrency: string) {
+  const groups = new Map<string, any[]>();
+  for (const row of rows) {
+    const currency = String(row.currency || row.currency_code || fallbackCurrency || 'unknown').toUpperCase();
+    groups.set(currency, [...(groups.get(currency) || []), row]);
+  }
+  return {
+    currency_scoped: true,
+    groups: Object.fromEntries([...groups.entries()].map(([currency, values]) => [currency, summarizeNumeric(values, fields)])),
+  };
+}
+
+function dedupeDailyRows(rows: any[], fields: string[]) {
+  return latestRowsByKey(rows, (row) => keyOf(row, fields), rowTime);
+}
+
 function sourceDescriptor(table: string, rows: any[] | null, dateFields: string[], errors: any[]) {
   if (rows === null) {
     return { table, read_status: 'error', record_count: null, row_ids_sample: [], error: errors.find((item) => item.table === table)?.error || 'read_failed' };
@@ -166,25 +182,29 @@ async function collectCanonicalEvidence(base44: any, account: any, correlationId
   const accountSales = salesRows.filter((row) => String(row.aggregation_level || '') === 'account_total');
   const productSalesBySource = Object.fromEntries([...new Set(productSales.map((row) => String(row.source || 'unknown')))].map((source) => [
     source,
-    summarizeNumeric(productSales.filter((row) => String(row.source || 'unknown') === source), ['units_ordered', 'orders', 'ordered_product_sales', 'gross_revenue', 'net_revenue']),
+    summarizeByCurrency(productSales.filter((row) => String(row.source || 'unknown') === source), ['units_ordered', 'orders', 'ordered_product_sales', 'gross_revenue', 'net_revenue'], String(account.currency_code || 'unknown')),
   ]));
   const accountSalesBySource = Object.fromEntries([...new Set(accountSales.map((row) => String(row.source || 'unknown')))].map((source) => [
     source,
-    summarizeNumeric(accountSales.filter((row) => String(row.source || 'unknown') === source), ['units_ordered', 'orders', 'ordered_product_sales', 'gross_revenue', 'net_revenue']),
+    summarizeByCurrency(accountSales.filter((row) => String(row.source || 'unknown') === source), ['units_ordered', 'orders', 'ordered_product_sales', 'gross_revenue', 'net_revenue'], String(account.currency_code || 'unknown')),
   ]));
   const products = latestRowsByKey(byTable.Product || [], (row) => keyOf(row, ['asin', 'sku']), rowTime);
   const assessments = latestRowsByKey(byTable.DailyProductAdsAssessment || [], (row) => keyOf(row, ['assessment_date', 'product_id', 'asin', 'sku']), rowTime);
   const inventoryKnown = products.filter((row) => num(row.fba_inventory ?? row.available_quantity ?? row.fulfillable_quantity) !== null);
   const changes = byTable.CampaignChangeHistory || [];
   const snapshots = byTable.RepricingSnapshot || [];
+  const legacyCampaignDaily = dedupeDailyRows(byTable.CampaignMetricsDaily || [], ['date', 'campaign_id']);
+  const adGroupDaily = dedupeDailyRows(byTable.AdGroupMetricsDaily || [], ['date', 'campaign_id', 'ad_group_id']);
+  const targetingDaily = dedupeDailyRows(byTable.TargetingMetricsDaily || [], ['date', 'campaign_id', 'ad_group_id', 'target_id', 'keyword_id', 'targeting']);
+  const placementDaily = dedupeDailyRows(byTable.PlacementMetricsDaily || [], ['date', 'campaign_id', 'placement']);
   const metricSummary = {
     currency: String(account.currency_code || account.currency || 'unknown'),
-    ads_daily: { grain: 'date+campaign+ad_group+advertised_product+targeting+placement', rows_after_latest_revision_dedup: dailyRows.length, metrics: summarizeNumeric(dailyRows, ['impressions', 'clicks', 'cost', 'spend', 'sales', 'purchases', 'units_sold']) },
-    ads_legacy_campaign_daily: { rows: (byTable.CampaignMetricsDaily || []).length, metrics: summarizeNumeric(byTable.CampaignMetricsDaily || [], ['impressions', 'clicks', 'spend', 'sales', 'orders']) },
-    ads_ad_group_daily: { rows: (byTable.AdGroupMetricsDaily || []).length, metrics: summarizeNumeric(byTable.AdGroupMetricsDaily || [], ['impressions', 'clicks', 'spend', 'sales', 'orders']) },
-    ads_targeting_daily: { rows: (byTable.TargetingMetricsDaily || []).length, metrics: summarizeNumeric(byTable.TargetingMetricsDaily || [], ['impressions', 'clicks', 'spend', 'sales', 'orders']) },
-    ads_placement_daily: { rows: (byTable.PlacementMetricsDaily || []).length, metrics: summarizeNumeric(byTable.PlacementMetricsDaily || [], ['impressions', 'clicks', 'spend', 'sales', 'orders']) },
-    ads_hourly: { grain: 'date+hour+campaign+ad_group+advertised_product+targeting', rows_after_latest_revision_dedup: hourlyRows.length, metrics: summarizeNumeric(hourlyRows, ['impressions', 'clicks', 'cost', 'sales', 'purchases', 'promoted_sales', 'promoted_purchases']) },
+    ads_daily: { grain: 'date+campaign+ad_group+advertised_product+targeting+placement', rows_after_latest_revision_dedup: dailyRows.length, metrics: summarizeByCurrency(dailyRows, ['impressions', 'clicks', 'cost', 'spend', 'sales', 'purchases', 'units_sold'], String(account.currency_code || 'unknown')) },
+    ads_legacy_campaign_daily: { rows_after_latest_revision_dedup: legacyCampaignDaily.length, metrics: summarizeByCurrency(legacyCampaignDaily, ['impressions', 'clicks', 'spend', 'sales', 'orders'], String(account.currency_code || 'unknown')) },
+    ads_ad_group_daily: { rows_after_latest_revision_dedup: adGroupDaily.length, metrics: summarizeByCurrency(adGroupDaily, ['impressions', 'clicks', 'spend', 'sales', 'orders'], String(account.currency_code || 'unknown')) },
+    ads_targeting_daily: { rows_after_latest_revision_dedup: targetingDaily.length, metrics: summarizeByCurrency(targetingDaily, ['impressions', 'clicks', 'spend', 'sales', 'orders'], String(account.currency_code || 'unknown')) },
+    ads_placement_daily: { rows_after_latest_revision_dedup: placementDaily.length, metrics: summarizeByCurrency(placementDaily, ['impressions', 'clicks', 'spend', 'sales', 'orders'], String(account.currency_code || 'unknown')) },
+    ads_hourly: { grain: 'date+hour+campaign+ad_group+advertised_product+targeting', rows_after_latest_revision_dedup: hourlyRows.length, metrics: summarizeByCurrency(hourlyRows, ['impressions', 'clicks', 'cost', 'sales', 'purchases', 'promoted_sales', 'promoted_purchases'], String(account.currency_code || 'unknown')) },
     dayparting_hourly: { rows: (byTable.HourlyMetric || []).length, rows_with_dates: (byTable.HourlyMetric || []).filter((row) => row.date && row.hour !== undefined).length },
     dayparting_patterns: { rows: (byTable.HourlySalesPattern || []).length, latest_at: (byTable.HourlySalesPattern || []).map(rowTime).filter(Boolean).sort().at(-1) || null },
     dayparting_decisions: { rows: (byTable.DaypartingDecision || []).length },
@@ -195,7 +215,7 @@ async function collectCanonicalEvidence(base44: any, account: any, correlationId
     },
     retail_sales: { product_level_by_source: productSalesBySource, account_total_by_source: accountSalesBySource, aggregation_levels_kept_separate: true },
     products: { product_records: products.length, records_with_known_fba_available: inventoryKnown.length, fba_available_units: inventoryKnown.length ? inventoryKnown.reduce((sum, row) => sum + Number(num(row.fba_inventory ?? row.available_quantity ?? row.fulfillable_quantity) || 0), 0) : null },
-    product_ads_assessments: { rows_after_latest_revision_dedup: assessments.length, metrics: summarizeNumeric(assessments, ['impressions', 'clicks', 'spend', 'ads_sales', 'real_sales', 'orders_ads', 'units_real']) },
+    product_ads_assessments: { rows_after_latest_revision_dedup: assessments.length, metrics: summarizeByCurrency(assessments, ['impressions', 'clicks', 'spend', 'ads_sales', 'real_sales', 'orders_ads', 'units_real'], String(account.currency_code || 'unknown')) },
     repricing_snapshots: { rows: snapshots.length, fresh: snapshots.filter((row) => row.data_fresh === true).length, loss_confirmed: snapshots.filter((row) => row.economic_state === 'LOSS_CONFIRMED').length },
     campaign_changes: { rows: changes.length, latest_at: changes.map(rowTime).filter(Boolean).sort().at(-1) || null },
   };
