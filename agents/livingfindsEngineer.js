@@ -1,5 +1,6 @@
 import { Agent, run } from '@openai/agents';
-import path from 'node:path';\nimport { pathToFileURL } from 'node:url';\nimport { inspectGithubActionsTool } from './tools/github.js';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';\nimport { inspectGithubActionsTool } from './tools/github.js';
 import { inspectRuntimeConfigurationTool, inspectVpsHealthTool } from './tools/diagnostics.js';
 import { proposePatchTool, readRepositoryFileTool } from './tools/repository.js';
 import { runAllowlistedTestsTool } from './tools/tests.js';
@@ -35,8 +36,11 @@ export async function analyzeWithLivingFindsEngineer(task) {
   if (!process.env.OPENAI_API_KEY) {
     return { status: 'not_configured', reason: 'OPENAI_API_KEY não configurada no processo; nenhuma chamada foi feita.' };
   }
+  const input = String(task || '').trim();
+  if (!input) return { status: 'invalid_input', reason: 'Informe a solicitação de análise.' };
+  if (input.length > 12000) return { status: 'input_too_large', limit_characters: 12000, mutations_performed: false };
   const agent = createLivingFindsEngineer();
-  const result = await run(agent, String(task || '').slice(0, 12000), {
+  const result = await run(agent, input, {
     maxTurns: 8,
     traceIncludeSensitiveData: false,
   });
