@@ -1,5 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { clampBidToConfiguredPolicy, loadConfiguredBidPolicy } from '../../shared/configuredBidPolicy.ts';
+import { buildKeywordBidMutation, normalizeAmazonBatchResponse } from '../../shared/amazonBidMutation.ts';
 
 function evaluationDays(action: string) {
   if (['negative_exact', 'negative_keyword', 'apply_dayparting'].includes(action)) return 14;
@@ -48,39 +49,7 @@ async function ads(base44: any, accountId: string, operation: string, method: st
   }
 }
 
-// Normaliza resposta v3 de qualquer entidade (keywords, campaigns, adGroups)
-type NormalizedResponse = {
-  ok: boolean;
-  success: any[];
-  errors: any[];
-  request_id: string | null;
-  status_code?: number | null;
-  retry_after_seconds?: number | null;
-};
-
-function normalizeV3Response(raw: any, entityKey: string): NormalizedResponse {
-  const request_id = raw?.headers?.request_id || raw?.amazon_request_id || raw?.request_id || null;
-  const status_code = Number(raw?.status || raw?.status_code || raw?.http_status || 0) || null;
-  const retryAfterRaw = raw?.headers?.['retry-after'] || raw?.headers?.retry_after || raw?.retry_after;
-  const retry_after_seconds = Number(retryAfterRaw) > 0 ? Number(retryAfterRaw) : null;
-
-  const v3block = raw?.payload?.[entityKey] || raw?.[entityKey] || null;
-  if (v3block) {
-    const success: any[] = v3block.success || [];
-    const errors: any[]  = v3block.error   || v3block.errors || [];
-    return { ok: success.length > 0 && errors.length === 0, success, errors, request_id, status_code, retry_after_seconds };
-  }
-
-  if (raw?.ok === false) return { ok: false, success: [], errors: raw?.errors || [{ message: raw?.error || 'Erro desconhecido' }], request_id, status_code, retry_after_seconds };
-  if (raw?.ok === true || raw?.status === 200) return { ok: true, success: [], errors: [], request_id, status_code, retry_after_seconds };
-
-  if (raw?.status === 207) {
-    const hasError = Array.isArray(raw?.errors) && raw.errors.length > 0;
-    return { ok: !hasError, success: [], errors: raw?.errors || [], request_id, status_code, retry_after_seconds };
-  }
-
-  return { ok: false, success: [], errors: [{ message: 'Resposta Amazon não reconhecida' }], request_id, status_code, retry_after_seconds };
-}
+type NormalizedResponse = ReturnType<typeof normalizeAmazonBatchResponse>;
 
 function extractErrorMessage(errors: any[]): string {
   if (!errors || errors.length === 0) return '';
@@ -116,7 +85,7 @@ Deno.serve(async (request) => {
 
     const results: any[] = [];
     for (const id of ids) {
-      const decisions = await base44.asServiceRole.entities.OptimizationDecision.filter({ id }, null, 1);
+      const decisions = await base44.asServiceRole.entities.OptimizationDecision.filter({ id }, undefined, 1);
       const decision = decisions[0];
       if (!decision) {
         results.push({ id, ok: false, error: 'Decisão não encontrada' });
@@ -187,17 +156,19 @@ Deno.serve(async (request) => {
           const raw = await ads(base44, decision.amazon_account_id, 'updateTargetBid', 'PUT', '/sp/targets', {
             targetingClauses: [{ targetId: String(decision.entity_id || decision.target_id), bid: Number(decision.value_after) }],
           });
-          normalized = normalizeV3Response(raw, 'targetingClauses');
+          normalized = normalizeAmazonBatchResponse(raw, 'targetingClauses');
         } else if (isAdGroup) {
           const raw = await ads(base44, decision.amazon_account_id, 'updateBid', 'PUT', '/sp/adGroups', {
             adGroups: [{ adGroupId: String(decision.entity_id), defaultBid: Number(decision.value_after) }],
           });
-          normalized = normalizeV3Response(raw, 'adGroups');
+          normalized = normalizeAmazonBatchResponse(raw, 'adGroups');
         } else {
-          const raw = await ads(base44, decision.amazon_account_id, 'updateBid', 'PUT', '/sp/keywords', {
-            keywords: [{ keywordId: String(decision.entity_id || decision.keyword_id), bid: Number(decision.value_after) }],
+          const mutation = buildKeywordBidMutation({
+            keywordId: decision.entity_id || decision.keyword_id,
+            bid: decision.value_after,
           });
-          normalized = normalizeV3Response(raw, 'keywords');
+          const raw = await ads(base44, decision.amazon_account_id, mutation.operation, mutation.method, mutation.path, mutation.payload);
+          normalized = normalizeAmazonBatchResponse(raw, mutation.entityKey);
         }
 
       } else if (['update_budget', 'reduce_budget', 'increase_budget', 'set_budget'].includes(decision.action)) {
@@ -207,7 +178,7 @@ Deno.serve(async (request) => {
             budget: { budgetType: 'DAILY', budget: Number(decision.value_after) },
           }],
         });
-        normalized = normalizeV3Response(raw, 'campaigns');
+        normalized = normalizeAmazonBatchResponse(raw, 'campaigns');
 
       } else if (['pause_campaign', 'enable_campaign'].includes(decision.action)) {
         const raw = await ads(base44, decision.amazon_account_id, decision.action, 'PUT', '/sp/campaigns', {
@@ -216,14 +187,14 @@ Deno.serve(async (request) => {
             state: decision.action === 'pause_campaign' ? 'PAUSED' : 'ENABLED',
           }],
         });
-        normalized = normalizeV3Response(raw, 'campaigns');
+        normalized = normalizeAmazonBatchResponse(raw, 'campaigns');
 
       } else if (['pause_keyword', 'enable_keyword'].includes(decision.action)) {
         const kwState = decision.action === 'pause_keyword' ? 'PAUSED' : 'ENABLED';
         const raw = await ads(base44, decision.amazon_account_id, decision.action, 'PUT', '/sp/keywords', {
           keywords: [{ keywordId: String(decision.entity_id || decision.keyword_id), state: kwState }],
         });
-        normalized = normalizeV3Response(raw, 'keywords');
+        normalized = normalizeAmazonBatchResponse(raw, 'keywords');
 
       } else if (['negative_exact', 'negative_keyword'].includes(decision.action)) {
         const raw = await ads(base44, decision.amazon_account_id, 'createNegativeKeyword', 'POST', '/sp/negativeKeywords', {
@@ -234,7 +205,7 @@ Deno.serve(async (request) => {
             state: 'ENABLED',
           }],
         });
-        normalized = normalizeV3Response(raw, 'negativeKeywords');
+        normalized = normalizeAmazonBatchResponse(raw, 'negativeKeywords');
 
       } else if (decision.action === 'apply_dayparting') {
         const delegated = await base44.asServiceRole.functions.invoke('applyDaypartingSchedule', {
@@ -296,7 +267,7 @@ Deno.serve(async (request) => {
           const rows = await base44.asServiceRole.entities.ProductTarget.filter({
             amazon_account_id: decision.amazon_account_id,
             target_id: bidEntityId,
-          }, null, 1).catch(() => []);
+          }, undefined, 1).catch(() => []);
           if (rows[0]) {
             await base44.asServiceRole.entities.ProductTarget.update(rows[0].id, {
               bid: Number(decision.value_after),
@@ -307,7 +278,7 @@ Deno.serve(async (request) => {
           const rows = await base44.asServiceRole.entities.AdGroup.filter({
             amazon_account_id: decision.amazon_account_id,
             ad_group_id: bidEntityId,
-          }, null, 1).catch(() => []);
+          }, undefined, 1).catch(() => []);
           if (rows[0]) {
             await base44.asServiceRole.entities.AdGroup.update(rows[0].id, {
               default_bid: Number(decision.value_after),
@@ -318,7 +289,7 @@ Deno.serve(async (request) => {
           const rows = await base44.asServiceRole.entities.Keyword.filter({
             amazon_account_id: decision.amazon_account_id,
             keyword_id: bidEntityId,
-          }, null, 1).catch(() => []);
+          }, undefined, 1).catch(() => []);
           if (rows[0]) {
             await base44.asServiceRole.entities.Keyword.update(rows[0].id, {
               current_bid: Number(decision.value_after),
@@ -336,7 +307,7 @@ Deno.serve(async (request) => {
           const campRows = await base44.asServiceRole.entities.Campaign.filter({
             amazon_account_id: decision.amazon_account_id,
             $or: [{ campaign_id: campId }, { amazon_campaign_id: campId }],
-          }, null, 1).catch(() => []);
+          }, undefined, 1).catch(() => []);
           if (campRows[0]) {
             const campUpdate: any = { updated_at: now };
             if (['pause_campaign', 'enable_campaign'].includes(decision.action)) {
@@ -436,7 +407,7 @@ Deno.serve(async (request) => {
         const rules = await base44.asServiceRole.entities.RuleExecution.filter({
           amazon_account_id: decision.amazon_account_id,
           idempotency_key: decision.idempotency_key,
-        }, null, 10).catch(() => []);
+        }, undefined, 10).catch(() => []);
         for (const rule of rules) {
           await base44.asServiceRole.entities.RuleExecution.update(rule.id, {
             status: success ? 'completed' : (ambiguous || retryable ? 'pending' : 'failed'),

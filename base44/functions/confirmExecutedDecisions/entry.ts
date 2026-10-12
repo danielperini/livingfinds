@@ -7,6 +7,7 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 import { verifiedNoopRetryPlan } from '../../shared/v6siaFailurePolicy.ts';
 import { v6siaDecisionOutcome, v6siaImplementationStatus } from '../../shared/v6siaReviewEvidence.ts';
+import { amazonBidMatchesExpected } from '../../shared/amazonBidMutation.ts';
 
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -234,7 +235,7 @@ Deno.serve(async (req) => {
       const amzBid = Number(amz.bid?.amount ?? amz.bid ?? 0);
       const expectedBid = Number(d.value_after || 0);
       const diff = Math.abs(amzBid - expectedBid);
-      if (diff < 0.01) {
+      if (amazonBidMatchesExpected(amzBid, expectedBid)) {
         confirmed++;
         await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
           status: 'executed', queue_status: 'completed', executed_at: d.executed_at || now,
