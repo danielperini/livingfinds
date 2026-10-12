@@ -97,7 +97,7 @@ O servidor monta funções por diretório e usa autenticação compartilhada em 
 3. Foram corrigidos os controles sem ação observável no shell: notificações foi removido, e a sidebar/drawer agora tem controles operáveis. Um inventário completo de handlers de todas as páginas continua fora do escopo visual.
 4. Workflows/schedules com nomes não materializáveis no NTFS não foram editados; o workflow CI convencional foi atualizado para executar os novos testes.
 5. A paginação das tabelas não foi modificada. Os contratos existentes seguem cobertos pelos testes de paginação já presentes.
-6. Capturas autenticadas 375px/768px/1280px ainda não foram executadas. A suíte `npm run ui:audit` exige Playwright e `PLAYWRIGHT_STORAGE_STATE`.
+6. A captura visual local foi executada com estado de sessão de auditoria e respostas simuladas para as rotas `/api/*`; ela valida o shell, não autenticação nem dados de produção.
 
 ## Implementação em `codex/ui-layout-architecture`
 
@@ -106,20 +106,22 @@ O servidor monta funções por diretório e usa autenticação compartilhada em 
 - **Cobertura de navegação:** `src/lib/navigation.js` mapeia os destinos operacionais e de configuração existentes. Aliases/redirects e callback OAuth permanecem no `App.jsx`. A tela de APIs foi adicionada em `/configuracao/apis`.
 - **Catálogo de APIs:** `server/src/environmentStatus.ts` contém allowlist explícita; `GET /api/admin/environment-status` em `server/src/main.ts` exige usuário autenticado com role `admin`, retorna apenas nomes de variáveis e booleanos de presença, e envia `Cache-Control: no-store`. A página `src/pages/ApiCatalog.jsx` informa carregamento, erro/403 e última verificação sem exibir segredos. Não houve leitura do estado do VPS neste trabalho.
 - **Validação local:** Vite build passou (aviso de bundle JS acima de 500 kB); `node --test` executou os contratos de paginação, projeção financeira, visibilidade do catálogo e navegação — 11 testes passaram. ESLint nos arquivos alterados passou. A verificação ESLint global aponta 153 erros preexistentes de imports não utilizados em outras páginas; o typecheck global reporta centenas de erros preexistentes, e a triagem das mensagens dos arquivos desta mudança corrigiu o único erro novo encontrado. A suíte Deno do status não pôde ser executada localmente porque Deno não está instalado; o CI foi atualizado para executá-la.
-- **Limites ainda pendentes:** não foi possível capturar screenshot autenticado em 375/768/1280 px nem exercitar endpoint contra processo Deno real; Playwright e Deno não estão instalados neste runtime. A suíte `ui:audit` requer Playwright e `PLAYWRIGHT_STORAGE_STATE`. A inspeção estática não substitui teste de role/HTTP em integração. Nenhuma campanha, banco de produção, deploy ou segredo foi alterado.
+- **Validação visual local:** Edge headless via Playwright instalado fora do projeto verificou 375×812, 768×1024 e 1280×900. As três telas foram abertas sem overflow horizontal nem erro JavaScript; no mobile, o drawer abre, fecha com Escape e devolve foco; no desktop, o recolhimento persiste. Capturas de auditoria foram inspecionadas visualmente. Respostas de API foram simuladas e não representam sessão ou dados de produção.
+- **Correção encontrada na auditoria:** os wrappers vazios de `ToastProvider`/`ToastViewport` agora usam `pointer-events-none`; cada toast visível continua interativo. `src/lib/toastPointerEvents.test.js` mantém esse contrato em CI.
+- **Limites:** o endpoint de ambiente foi validado por teste unitário Deno em CI, não contra a VPS nem uma sessão de administrador em produção. O restante da aplicação não recebeu auditoria de cada fluxo de escrita. Nenhuma campanha, banco de produção, deploy ou segredo foi alterado.
 
 ## Fases e evidências
 
-| Fase | Escopo | Arquivos esperados | Risco | Evidência/status |
-|---|---|---|---|---|
-| L0 | Rotas, capacidades, estilos, scripts DOM, integrações | este documento | inventário estático pode não comprovar execução remota | inventário inicial; gaps acima abertos |
-| L1 | Tokens claros e mapeamento Tailwind | `src/index.css`, `tailwind.config.js`, estilos | alto impacto visual global | não iniciada |
-| L2 | Biblioteca pequena reutilizável | `src/components/ui-kit/*` ou componentes existentes | regressão de estados/accessibility | não iniciada |
-| L3-L4 | Shell, drawer, 3 grupos, redirects | `AppLayout.jsx`, `App.jsx` | acesso/URLs | não iniciadas |
-| L5-L7 | Composição Operar/Analisar/Configurar sem trocar lógica | páginas/componentes | fluxos Amazon e configurações | não iniciadas |
-| L8 | Catálogo + estado de ambiente admin read-only | página + nova função somente leitura + testes | credenciais | não iniciada; endpoint não pode escrever |
-| L9-L11 | Migração DOM/CSS e regressão visual | entrypoints, páginas e testes | efeitos ocultos e telas não visitadas | não iniciadas |
+| Fase | Escopo | Evidência/status |
+|---|---|---|
+| L0 | Inventário de rotas, capacidades, estilos, scripts DOM e integrações | concluída como auditoria estática; limites registrados acima |
+| L1 | Tokens semânticos para o shell, sem reescrever o tema global legado | concluída em `src/styles/journey-layout.css`; migração global do tema permanece fora do escopo |
+| L2 | Componentes reutilizáveis existentes e estados de navegação | concluída no shell; nenhum novo pacote/dependência adicionado |
+| L3-L4 | Sidebar, header, drawer, três jornadas e redirects | implementados; comportamento responsivo e teclado verificados localmente |
+| L5-L7 | Rotas agrupadas em Operar/Analisar/Configurar preservando páginas e lógica | navegação implementada; chamadas e fluxos de negócio das páginas não foram reescritos |
+| L8 | Catálogo e estado de ambiente admin somente leitura | implementados; testes de redaction/autorização em CI; produção não consultada |
+| L9-L11 | Ajustes visuais e regressão | drawer/desktop/tablet/mobile verificados; sobreposição dos toasts corrigida e coberta por teste |
 
 ## Critério de conclusão
 
-A iniciativa só poderá ser declarada concluída após cada fase passar build/lint/testes, todas as rotas preservadas serem verificadas, capturas e teclado serem conferidos nos três viewports, os botões sem ação serem corrigidos ou declarados somente leitura, o catálogo reportar apenas estados reais e seguros, e o diff confirmar que nenhuma regra econômica/execução Amazon existente foi alterada. PR será aberto para revisão; não haverá merge nem deploy como parte desta iniciativa.
+A etapa de reorganização da interface está implementada e validada no PR para revisão. A validação cobre shell, navegação, catálogo read-only e contratos automatizados selecionados; não equivale a testar todas as rotas autenticadas, o estado real da VPS ou integrações produtivas. O diff não altera regras econômicas ou execução Amazon. PR aguarda revisão; não haverá merge nem deploy como parte desta iniciativa.
