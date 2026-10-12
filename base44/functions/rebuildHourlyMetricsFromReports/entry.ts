@@ -186,11 +186,12 @@ Deno.serve(async (request) => {
         const spend = r2(row.spend);
         const sales = r2(row.sales);
         const orders = n(row.orders);
+        const { source_report_ids: sourceReportIds, source_snapshot_ids: sourceSnapshotIds, ...persistedRow } = row;
         const record = {
-          ...row,
+          ...persistedRow,
           profile_id: row.profile_id || account.ads_profile_id || account.profile_id || null,
-          source_report_ids_json: JSON.stringify([...row.source_report_ids]),
-          source_snapshot_ids_json: JSON.stringify([...row.source_snapshot_ids]),
+          source_report_ids_json: JSON.stringify(Array.from(sourceReportIds || [])),
+          source_snapshot_ids_json: JSON.stringify(Array.from(sourceSnapshotIds || [])),
           source: row.source || 'unknown',
           source_window_start: row.source_window_start || row.date,
           source_window_end: row.source_window_end || row.date,
