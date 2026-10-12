@@ -1,5 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { productGate } from '../../shared/campaignDeliveryGovernor.ts';
+import { readAllEntityPages } from '../../shared/v6siaEvidencePaging.ts';
 import {
   calculateEconomicCpc,
   estimateBayesianConversion,
@@ -37,8 +38,12 @@ function decisionWindow(minutes = 15) {
   return new Date(Math.floor(Date.now() / size) * size).toISOString();
 }
 
-async function list(entity: any, filters: Record<string, unknown>, sort = '-updated_at', limit = 10000) {
-  return entity.filter(filters, sort, limit).catch(() => []);
+async function list(entity: any, filters: Record<string, unknown>, sort = '-updated_at', _legacyLimit = 10000) {
+  const result = await readAllEntityPages(entity, filters, sort, 1000);
+  if (!result.complete || !result.rows) {
+    throw new Error(`Leitura incompleta de dados canônicos: ${JSON.stringify({ sort, error: result.error, rows_read: result.rows?.length || 0 })}`);
+  }
+  return result.rows;
 }
 
 function keyOf(row: any) {
@@ -209,7 +214,7 @@ Deno.serve(async (request) => {
             retail_as_of: latestAssessment?.retail_as_of || null,
             source_refs: assessmentSourceRefs,
           },
-          Campaign: { row_ids: productCampaignRows.map((row) => String(row.id || '')).filter(Boolean).slice(0, 100) },
+          Campaign: { row_ids: productCampaignRows.map((row) => String(row.id || '')).filter(Boolean) },
           ProductAd: { row_ids: productAdRows.map((row) => String(row.id || '')).filter(Boolean).slice(0, 100) },
           ProductEconomicsHistory: { row_ids: productHistoryRows.map((row) => String(row.id || '')).filter(Boolean).slice(0, 100) },
           IntradaySpendSnapshot: { row_ids: productIntradayRows.map((row) => String(row.id || '')).filter(Boolean).slice(0, 100), as_of: productIntradayRows.map((row) => row.observed_at).filter(Boolean).sort().at(-1) || null },
@@ -273,7 +278,7 @@ Deno.serve(async (request) => {
           product_id: product.id,
           sku, asin, snapshot_key: snapshotKey, correlation_id: runId, run_id: runId,
           decision_window: window, window_start: windowStart, window_end: windowEnd, captured_at: new Date().toISOString(),
-          data_source_refs_json: JSON.stringify(sourceDataRefs).slice(0, 20000),
+          data_source_refs_json: JSON.stringify(sourceDataRefs),
           data_freshness_status: dataFresh ? 'FRESH' : 'STALE', ads_data_fresh_at: adsFreshAt,
           sp_api_data_fresh_at: spFreshAt, economics_data_fresh_at: economicsFreshAt,
           listing_status: product.listing_status || product.status, offer_status: product.offer_status || (offerActive ? 'active' : 'inactive'),
