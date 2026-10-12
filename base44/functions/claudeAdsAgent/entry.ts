@@ -394,9 +394,10 @@ async function callGPT(prompt, context = null) {
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
+    const user = await base44.auth.me();
+    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+
     const body = await req.json().catch(() => ({}));
-    const authenticated = await base44.auth.isAuthenticated().catch(() => false);
-    if (!authenticated && !body._service_role) return Response.json({ error: 'Unauthorized' }, { status: 401 });
     const { mode = 'ping', prompt, context } = body;
 
     // ── PING: teste de conectividade ──────────────────────────────────────
