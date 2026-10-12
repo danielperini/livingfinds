@@ -11,7 +11,10 @@ type EnvironmentIntegration = {
   variables: readonly EnvironmentVariable[];
 };
 
-const variable = (name: string, options: Omit<EnvironmentVariable, 'name'> = {}): EnvironmentVariable => ({ name, ...options });
+const variable = (
+  name: string,
+  options: { names?: readonly string[]; required?: boolean; defaultValue?: string } = {},
+): EnvironmentVariable => ({ name, required: true, ...options });
 
 export const environmentIntegrations: readonly EnvironmentIntegration[] = [
   {
