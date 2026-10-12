@@ -4,10 +4,10 @@ import { latestRowsByKey, v6siaDecisionOutcome, v6siaImplementationStatus } from
 
 function pickSafeFailures(value: any): any[] {
   if (!Array.isArray(value)) return [];
-  return value.slice(0, 10).map((item) => ({
-    decision_id: String(item?.id || '').slice(0, 120),
-    action: String(item?.action || '').slice(0, 80),
-    failure_class: String(item?.error_class || 'unknown').slice(0, 60),
+  return value.map((item) => ({
+    decision_id: String(item?.id || ''),
+    action: String(item?.action || ''),
+    failure_class: String(item?.error_class || 'unknown'),
     error: sanitizeV6SIAError(item?.error || item?.reason || 'Falha sem mensagem'),
   }));
 }
@@ -22,15 +22,15 @@ function safeObservations(value: any): any {
   const output: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
     if (!permitted.has(key)) continue;
-    if (typeof item === 'string') output[key] = item.slice(0, 500);
+    if (typeof item === 'string') output[key] = item;
     else if (typeof item === 'number' || typeof item === 'boolean' || item === null) output[key] = item;
-    else if (Array.isArray(item)) output[key] = item.slice(0, 10).map(x => typeof x === 'string' ? x.slice(0, 300) : x);
+    else if (Array.isArray(item)) output[key] = item;
     else if (item && typeof item === 'object') {
       const nested: Record<string, unknown> = {};
-      for (const [nestedKey, nestedValue] of Object.entries(item as Record<string, unknown>).slice(0, 20)) {
-        if (typeof nestedValue === 'string') nested[nestedKey] = nestedValue.slice(0, 300);
+      for (const [nestedKey, nestedValue] of Object.entries(item as Record<string, unknown>)) {
+        if (typeof nestedValue === 'string') nested[nestedKey] = nestedValue;
         else if (typeof nestedValue === 'number' || typeof nestedValue === 'boolean' || nestedValue === null) nested[nestedKey] = nestedValue;
-        else if (Array.isArray(nestedValue)) nested[nestedKey] = nestedValue.slice(0, 10);
+        else if (Array.isArray(nestedValue)) nested[nestedKey] = nestedValue;
       }
       output[key] = nested;
     }
@@ -56,14 +56,42 @@ function rowDate(row: any, fields: string[]): string | null {
   return null;
 }
 
-async function readCanonicalTable(base44: any, table: string, accountId: string, sort: string, limit: number) {
+async function readCanonicalTable(base44: any, table: string, accountId: string, sort: string, _legacyLimit: number) {
+  const entity = base44.asServiceRole.entities[table];
+  if (!entity?.filter) return { rows: null, error: 'Tabela ou método de leitura indisponível', complete: false };
+  const rows: any[] = [];
+  const seen = new Set<string>();
+  const query = { amazon_account_id: accountId };
+  const pageSize = 1000;
+  let cursor: string | null = null;
   try {
-    const entity = base44.asServiceRole.entities[table];
-    if (!entity?.filter) throw new Error('Tabela ou método de leitura indisponível');
-    const rows = await entity.filter({ amazon_account_id: accountId }, sort, limit);
-    return { rows: Array.isArray(rows) ? rows : [], error: null };
+    while (true) {
+      const page = cursor
+        ? await entity.filter(query, { cursor, limit: pageSize })
+        : await entity.filter(query, { sort, limit: pageSize });
+      if (Array.isArray(page)) {
+        for (const row of page) {
+          const id = String(row?.id || '');
+          if (!id || !seen.has(id)) { rows.push(row); if (id) seen.add(id); }
+        }
+        if (page.length >= pageSize) {
+          return { rows, error: 'SDK não retornou cursor após atingir o limite da página; consulta incompleta', complete: false };
+        }
+        return { rows, error: null, complete: true };
+      }
+      const items = Array.isArray(page?.items) ? page.items : null;
+      if (!items) return { rows: rows.length ? rows : null, error: 'Resposta de paginação inválida; consulta incompleta', complete: false };
+      for (const row of items) {
+        const id = String(row?.id || '');
+        if (!id || !seen.has(id)) { rows.push(row); if (id) seen.add(id); }
+      }
+      if (!page.has_more) return { rows, error: null, complete: true };
+      const next = String(page.next_cursor || '');
+      if (!next || next === cursor) return { rows, error: 'Cursor ausente ou repetido; consulta incompleta', complete: false };
+      cursor = next;
+    }
   } catch (error: any) {
-    return { rows: null, error: sanitizeV6SIAError(error) };
+    return { rows: rows.length ? rows : null, error: sanitizeV6SIAError(error), complete: false };
   }
 }
 
@@ -111,7 +139,7 @@ function sourceDescriptor(table: string, rows: any[] | null, dateFields: string[
     period_start: dates[0] || null,
     period_end: dates.at(-1) || null,
     as_of: asOf,
-    row_ids_sample: rows.slice(0, 40).map((row) => String(row.id || '')).filter(Boolean),
+    record_ids_persisted_as_evidence_links: rows.filter((row) => Boolean(row.id)).length,
   };
 }
 
@@ -232,6 +260,7 @@ async function collectCanonicalEvidence(base44: any, account: any, correlationId
   const endValues = Object.values(refs).map((item: any) => item.period_end).filter(Boolean).sort();
   return {
     refs,
+    by_table: byTable,
     decisions,
     query_errors: queryErrors,
     data_as_of: asOfValues.at(-1) || null,
@@ -322,7 +351,7 @@ Deno.serve(async (request) => {
         body: JSON.stringify({
           model: 'gpt-4o',
           temperature: 0.1,
-          max_tokens: 1200,
+          max_tokens: 4000,
           response_format: { type: 'json_object' },
           messages: [
             { role: 'system', content: 'Você é o supervisor V6SIA do Living Finds: especialista em Amazon Ads, finanças de e-commerce, análise de dados, APIs, arquitetura de software, SRE, segurança e testes. Faça apenas diagnóstico. Não execute nem aprove mutações e não invente métricas, IDs ou causas. Separe fatos, hipóteses, correção determinística, teste e risco. A validação determinística do backend prevalece.' },
@@ -332,21 +361,26 @@ Deno.serve(async (request) => {
       });
       const aiPayload = await aiResponse.json().catch(() => ({}));
       if (!aiResponse.ok) throw new Error(`OpenAI HTTP ${aiResponse.status}: ${aiPayload?.error?.message || 'falha na supervisão'}`);
+      if (aiPayload?.choices?.[0]?.finish_reason === 'length') {
+        const incomplete: any = new Error('Resposta da IA atingiu o limite de saída; análise incompleta e não será marcada como concluída');
+        incomplete.incomplete = true;
+        throw incomplete;
+      }
       const raw = String(aiPayload?.choices?.[0]?.message?.content || '{}');
       let findings: any = {};
       try { findings = JSON.parse(raw); } catch { findings = { diagnosis: raw.slice(0, 1200), parse_warning: true }; }
         analysis = { ok: true, model: 'gpt-4o', response: findings, usage: aiPayload?.usage || null };
         model = 'gpt-4o';
       } catch (error: any) {
-        analysis = { ok: false, error: sanitizeV6SIAError(error) };
-        model = 'unavailable';
+        analysis = { ok: false, incomplete: error?.incomplete === true, error: sanitizeV6SIAError(error) };
+        model = error?.incomplete === true ? 'incomplete' : 'unavailable';
       }
     }
 
     const now = new Date().toISOString();
     const success = Boolean(analysis && (analysis.ok !== false));
     const status = success ? 'success' : gate.allowed === false ? 'deferred' : 'error';
-    const aiCallStatus = model === 'gpt-4o' ? 'called' : model === 'cache' ? 'cache_reused' : gate.allowed === false ? 'budget_deferred' : 'failed';
+    const aiCallStatus = model === 'gpt-4o' ? 'called' : model === 'cache' ? 'cache_reused' : model === 'incomplete' ? 'incomplete' : gate.allowed === false ? 'budget_deferred' : 'failed';
     const report = {
       engine_version: 'V6SIA',
       supervision_type: supervisionType,
@@ -441,8 +475,8 @@ Deno.serve(async (request) => {
         decision_ids_json: JSON.stringify(evidence.decisions.map((item) => item.id).filter(Boolean)),
         decision_outcomes_json: JSON.stringify(actionOutcomes),
         implementation_status: implementationStatus,
-        ai_recommendation_status: success ? 'diagnostic_only' : 'failed',
-        findings_json: JSON.stringify(analysis).slice(0, 12000),
+        ai_recommendation_status: success ? 'diagnostic_only' : analysis?.incomplete ? 'incomplete' : 'failed',
+        findings_json: JSON.stringify(analysis),
         gate_reason: gate.reason ? sanitizeV6SIAError(gate.reason) : null,
         started_at: startedAt,
         completed_at: now,
@@ -454,7 +488,7 @@ Deno.serve(async (request) => {
     }
 
     if (reviewLog?.id) {
-      const refsJson = JSON.stringify({ review_log_id: reviewLog.id, source_refs: evidence.refs, correlation_id: correlationId }).slice(0, 12000);
+      const refsJson = JSON.stringify({ review_log_id: reviewLog.id, evidence_table: 'V6SIAEvidenceLink', correlation_id: correlationId });
       await Promise.all(evidence.decisions.map((decision) =>
         base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
           v6sia_review_log_id: reviewLog.id,
