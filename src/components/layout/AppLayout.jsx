@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { Bot, ChevronLeft, ChevronRight, Menu, ShieldCheck, X } from 'lucide-react';
+import { Bot, ChevronDown, ChevronLeft, ChevronRight, Menu, ShieldCheck, X } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
 import FloatingChat from '@/components/chat/FloatingChat';
@@ -153,25 +153,37 @@ export default function AppLayout() {
         {navigationJourneys.map((group) => (
           <section className="lf-nav-group" key={group.id} aria-label={group.label}>
             {!compact && <h2 className="lf-nav-heading">{group.label}</h2>}
-            <ul>
-              {group.items.map(({ path, icon: Icon, label, exact }) => {
-                const active = isNavigationItemActive(location.pathname, { path, exact });
-                return (
-                  <li key={path}>
-                    <Link
-                      to={path}
-                      onClick={() => mobileOpen && setMobileOpen(false)}
-                      className={navLinkClass(active)}
-                      title={compact ? label : undefined}
-                      aria-current={active ? 'page' : undefined}
-                    >
-                      <Icon size={18} strokeWidth={1.8} aria-hidden="true" />
-                      {!compact && <span>{label}</span>}
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
+            {group.sections.map((section) => {
+              const sectionActive = section.items.some(item => isNavigationItemActive(location.pathname, item));
+              const links = (
+                <ul>
+                  {section.items.map(({ path, icon: Icon, label, exact }) => {
+                    const active = isNavigationItemActive(location.pathname, { path, exact });
+                    return (
+                      <li key={path}>
+                        <Link
+                          to={path}
+                          onClick={() => mobileOpen && setMobileOpen(false)}
+                          className={navLinkClass(active)}
+                          title={compact ? label : undefined}
+                          aria-current={active ? 'page' : undefined}
+                        >
+                          <Icon size={18} strokeWidth={1.8} aria-hidden="true" />
+                          {!compact && <span>{label}</span>}
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              );
+              if (section.primary) return <div className="lf-nav-section lf-nav-section-primary" key={section.id}>{links}</div>;
+              return (
+                <details className="lf-nav-section" key={section.id} open={compact || sectionActive}>
+                  {!compact && <summary className="lf-nav-section-toggle">{section.label}<ChevronDown size={14} aria-hidden="true" /></summary>}
+                  {links}
+                </details>
+              );
+            })}
           </section>
         ))}
       </nav>

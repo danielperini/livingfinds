@@ -1,5 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { productAdsEligibility } from '../../shared/productAdsEligibility.ts';
+import { classifyV6SIAFailure, sanitizeV6SIAError } from '../../shared/v6siaFailurePolicy.ts';
 
 const RETRYABLE_ERROR = /(\b429\b|rate.?limit|throttl|timeout|timed.?out|network|temporar|\b502\b|\b503\b|\b504\b|\b524\b|connection reset|circuit.?open)/i;
 const MAX_ROWS_PER_QUEUE = 1000;
@@ -44,11 +45,11 @@ function staleQueueReason(item: any) {
 
 async function productsForAccount(base44: any, accountId: string) {
   const rows = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, '-updated_at', 1000).catch(() => []);
-  return new Map(rows.map((product: any) => [productKey(accountId, product.asin), product]));
+  return new Map<string, any>(rows.map((product: any) => [productKey(accountId, product.asin), product]));
 }
 async function campaignsForAccount(base44: any, accountId: string) {
   const rows = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, '-updated_at', 5000).catch(() => []);
-  return new Map(rows.map((campaign: any) => [campaignKey(accountId, campaign.campaign_id || campaign.amazon_campaign_id || campaign.id), campaign]));
+  return new Map<string, any>(rows.map((campaign: any) => [campaignKey(accountId, campaign.campaign_id || campaign.amazon_campaign_id || campaign.id), campaign]));
 }
 
 async function reconcileAccount(base44: any, accountId: string, dryRun: boolean) {
@@ -64,7 +65,7 @@ async function reconcileAccount(base44: any, accountId: string, dryRun: boolean)
     load('ProductKickoffQueue'), load('AutoCampaignRepairQueue'), load('KeywordRepairQueue'),
   ]);
 
-  const result = { scanned: kickoff.length + autoRepair.length + keywordRepair.length, retried: 0, waiting_stock: 0, cancelled_scope: 0, cancelled_inactive_campaign: 0, stale_recovered: 0, terminal: 0, untouched: 0, proposed: [] as any[] };
+  const result = { scanned: kickoff.length + autoRepair.length + keywordRepair.length, retried: 0, waiting_stock: 0, cancelled_scope: 0, cancelled_inactive_campaign: 0, stale_recovered: 0, terminal: 0, untouched: 0, failure_evidence: [] as any[], proposed: [] as any[] };
   const apply = async (entity: string, id: string, action: string, patch: Record<string, unknown>) => {
     result.proposed.push({ entity, id, action });
     if (!dryRun) await base44.asServiceRole.entities[entity].update(id, patch).catch(() => {});
@@ -151,7 +152,26 @@ async function reconcileAccount(base44: any, accountId: string, dryRun: boolean)
       });
       return;
     }
-    if (norm(item.status) === 'failed') result.terminal++;
+    if (norm(item.status) === 'failed') {
+      result.terminal++;
+      if (ageMs(queueTimestamp(item)) <= 24 * 60 * 60_000 && result.failure_evidence.length < 30) {
+        const error = sanitizeV6SIAError(errorText(item) || 'Falha sem mensagem registrada');
+        result.failure_evidence.push({
+          queue_id: String(item.id),
+          queue_entity: entity,
+          action: String(item.action || item.operation || entity),
+          error_class: classifyV6SIAFailure(error),
+          error,
+          error_code: String(item.error_code || '').slice(0, 120),
+          asin: String(item.asin || '').slice(0, 20),
+          sku: String(item.sku || '').slice(0, 80),
+          campaign_id: String(item.campaign_id || item.amazon_campaign_id || '').slice(0, 64),
+          attempt_count: Number(item.attempt_count || 0),
+          max_attempts: Number(item.max_attempts || 5),
+          last_attempt_at: item.updated_at || item.updated_date || item.completed_at || null,
+        });
+      }
+    }
     else result.untouched++;
   };
 
@@ -159,6 +179,40 @@ async function reconcileAccount(base44: any, accountId: string, dryRun: boolean)
   for (const item of autoRepair) await reconcile('AutoCampaignRepairQueue', item);
   for (const item of keywordRepair) await reconcile('KeywordRepairQueue', item);
   return result;
+}
+
+async function superviseRecentQueueFailures(base44: any, accountId: string, failures: any[]) {
+  if (!failures.length) return { skipped: true, reason: 'no_recent_terminal_failures' };
+  const fingerprintSource = failures
+    .map((item) => [item.queue_entity, item.queue_id, item.error_class, item.error_code, item.error, item.attempt_count, item.max_attempts].join('|'))
+    .sort()
+    .join('\n');
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(fingerprintSource));
+  const fingerprint = Array.from(new Uint8Array(digest)).slice(0, 16).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  const correlationId = `queue-failure-${fingerprint}`;
+  const existing = await base44.asServiceRole.entities.V6SIAReviewLog.filter({
+    amazon_account_id: accountId,
+    correlation_id: correlationId,
+  }, '-created_at', 1).catch(() => []);
+  if (existing.length) return { skipped: true, reason: 'failure_fingerprint_already_reviewed', report_id: existing[0].id || null };
+
+  const response = await base44.asServiceRole.functions.invoke('superviseV6SIA', {
+    amazon_account_id: accountId,
+    _service_role: true,
+    supervision_type: 'execution_failure',
+    trigger_type: 'operational_queue_terminal_failure',
+    correlation_id: correlationId,
+    failures,
+  }).catch((error: any) => ({ data: { ok: false, status: 'error', error: sanitizeV6SIAError(error) } }));
+  const data = response?.data || response || {};
+  return {
+    skipped: false,
+    status: data.status || (data.ok ? 'success' : 'error'),
+    report_id: data.report_id || null,
+    data_quality_status: data.data_quality_status || null,
+    reason: data.reason ? sanitizeV6SIAError(data.reason) : data.error ? sanitizeV6SIAError(data.error) : null,
+    action: 'diagnosis_only_no_queue_or_amazon_mutation',
+  };
 }
 
 Deno.serve(async (request) => {
@@ -173,7 +227,11 @@ Deno.serve(async (request) => {
     const byAccount: any[] = [];
     for (const account of accounts) {
       const reconciliation = await reconcileAccount(base44, account.id, dryRun);
+      const aiSupervision = dryRun
+        ? { skipped: true, reason: 'dry_run' }
+        : await superviseRecentQueueFailures(base44, account.id, reconciliation.failure_evidence);
       byAccount.push({ amazon_account_id: account.id, ...reconciliation });
+      byAccount[byAccount.length - 1].ai_supervision = aiSupervision;
       for (const key of Object.keys(totals) as (keyof typeof totals)[]) totals[key] += reconciliation[key];
       if (!dryRun) await base44.asServiceRole.entities.SyncExecutionLog.create({
         amazon_account_id: account.id, operation: 'reconcile_operational_queues', trigger_type: body.trigger_type || 'scheduler',

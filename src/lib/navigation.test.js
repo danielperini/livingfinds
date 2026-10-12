@@ -9,6 +9,16 @@ test('journeys cover the new API catalog without changing existing route names',
   assert.deepEqual(navigationJourneys.map(({ id }) => id), ['operar', 'analisar', 'configurar']);
 });
 
+test('simplified journey sections retain every unique destination', () => {
+  const allSections = navigationJourneys.flatMap(journey => journey.sections);
+  const sectionItems = allSections.flatMap(section => section.items);
+  const flatItems = navigationJourneys.flatMap(journey => journey.items);
+  assert.equal(sectionItems.length, flatItems.length);
+  assert.equal(new Set(sectionItems.map(item => item.path)).size, sectionItems.length);
+  assert.ok(navigationJourneys.every(journey => journey.sections.length > 0));
+  assert.equal(navigationJourneys.find(journey => journey.id === 'operar').sections.find(section => section.primary).items.length, 3);
+});
+
 test('active matching does not mark dashboard as active on every route', () => {
   const dashboard = navigationJourneys[0].items[0];
   assert.equal(isNavigationItemActive('/', dashboard), true);

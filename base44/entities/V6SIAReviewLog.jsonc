@@ -29,6 +29,7 @@
     "metrics_summary_json": { "type": "string" },
     "decision_ids_json": { "type": "string" },
     "decision_outcomes_json": { "type": "string" },
+    "failure_context_json": { "type": "string" },
     "implementation_status": { "type": "string", "enum": ["implemented", "partial", "not_implemented", "pending_confirmation", "not_applicable"] },
     "ai_recommendation_status": { "type": "string", "enum": ["diagnostic_only", "not_generated", "incomplete", "failed"] },
     "findings_json": { "type": "string" },
