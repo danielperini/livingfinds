@@ -29,7 +29,8 @@
  *   Alto risco (aprovação): aumento >10%, redução >25% acumulado, pausa de campanha, alteração estrutural
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
-import { isTrustedRealSales, salesScope } from '../../shared/salesDailyIntegrity.ts';
+import { isTrustedRealSales, revenueOf, salesScope } from '../../shared/salesDailyIntegrity.ts';
+import { latestRowsByKey } from '../../shared/v6siaReviewEvidence.ts';
 
 function nowIso() { return new Date().toISOString(); }
 function todayBRT() { return new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10); }
@@ -205,7 +206,7 @@ Deno.serve(async (req) => {
     const cutoff7d = daysAgo(7);
 
     const [
-      campaigns, products, productEconomics, metricsRaw, salesDailyRaw, keywordsRaw, perfSettings
+      campaigns, products, productEconomics, metricsRowsRaw, salesRowsRaw, keywordsRaw, perfSettings
     ] = await Promise.all([
       base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 300),
       base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 200),
@@ -223,6 +224,10 @@ Deno.serve(async (req) => {
         { amazon_account_id: aid }, '-updated_at', 1
       ).catch(() => []),
     ]);
+
+    const sourceTimestamp = (row: any) => row?.finance_synced_at || row?.synced_at || row?.updated_at || row?.updated_date || row?.created_at || row?.created_date || '';
+    const metricsRaw = latestRowsByKey(metricsRowsRaw || [], (row: any) => [row.date, row.campaign_id].map((value) => String(value || '')).join('|'), sourceTimestamp);
+    const salesDailyRaw = latestRowsByKey(salesRowsRaw || [], (row: any) => [row.date, salesScope(row), row.asin, row.sku, row.source].map((value) => String(value || '')).join('|'), sourceTimestamp);
 
     const ps = perfSettings[0] || null;
     const accountTargetAcos = Number(ps?.target_acos || 20);
@@ -263,14 +268,26 @@ Deno.serve(async (req) => {
       e.impressions += m.impressions || 0;
     }
 
-    // Vendas reais por ASIN no dia (SP-API → SalesDaily)
-    const realSalesByAsin = new Map<string, { revenue: number; units: number }>();
-    for (const s of salesDailyRaw) {
-      if (!isTrustedRealSales(s) || salesScope(s) !== 'product' || !s.asin || s.date !== assessmentDate) continue;
-      if (!realSalesByAsin.has(s.asin)) realSalesByAsin.set(s.asin, { revenue: 0, units: 0 });
-      const e = realSalesByAsin.get(s.asin)!;
-      e.revenue += s.ordered_product_sales || 0;
-      e.units += s.units_ordered || 0;
+    // Vendas reais por ASIN: escolhe a fonte mais confiável por SKU e data.
+    // Finance Events confirmados prevalecem sobre Orders Report; nunca somar ambas as origens.
+    const realSalesByAsin = new Map<string, { revenue: number; units: number; source_rows: any[] }>();
+    const salesByProductKey = new Map<string, any>();
+    for (const sale of salesDailyRaw) {
+      if (!isTrustedRealSales(sale) || salesScope(sale) !== 'product' || !sale.asin || sale.date !== assessmentDate) continue;
+      const productKey = [sale.asin, sale.sku || sale.asin].map((value) => String(value || '').toUpperCase()).join('|');
+      const current = salesByProductKey.get(productKey);
+      const priority = (row: any) => row.source === 'sp_api_finance_events' && row.finance_sync_status === 'synced' ? 3
+        : row.source === 'sp_api_orders_report' ? 2 : 0;
+      if (!current || priority(sale) > priority(current) || (priority(sale) === priority(current) && sourceTimestamp(sale) > sourceTimestamp(current))) {
+        salesByProductKey.set(productKey, sale);
+      }
+    }
+    for (const sale of salesByProductKey.values()) {
+      if (!realSalesByAsin.has(sale.asin)) realSalesByAsin.set(sale.asin, { revenue: 0, units: 0, source_rows: [] });
+      const total = realSalesByAsin.get(sale.asin)!;
+      total.revenue += revenueOf(sale);
+      total.units += Number(sale.units_ordered || 0);
+      total.source_rows.push(sale);
     }
 
     // ── Processar cada produto com campanha ativa ─────────────────────────
@@ -304,6 +321,33 @@ Deno.serve(async (req) => {
       const product = products.find((p: any) => p.asin === asin) || null;
       const sku = product?.sku || '';
       const econ = econByAsin.get(asin) || econBySku.get(normSku(sku)) || null;
+      const productCampaigns = campaigns.filter((campaign: any) => String(campaign.asin || '').toUpperCase() === String(asin).toUpperCase());
+      const productMetrics = metrics14d.filter((metric: any) => campaignAsinMap.get(String(metric.campaign_id || '')) === asin);
+      const productSalesRows = (realSalesByAsin.get(asin)?.source_rows || []) as any[];
+      const sourceRefs = {
+        Product: product?.id ? [product.id] : [],
+        ProductEconomics: econ?.id ? [econ.id] : [],
+        Campaign: productCampaigns.map((campaign: any) => campaign.id || campaign.campaign_id).filter(Boolean).slice(0, 100),
+        CampaignMetricsDaily: productMetrics.map((metric: any) => metric.id).filter(Boolean).slice(0, 100),
+        SalesDaily: productSalesRows.map((sale: any) => sale.id).filter(Boolean).slice(0, 100),
+        PerformanceSettings: ps?.id ? [ps.id] : [],
+      };
+      const reportIds = [...new Set(productMetrics.map((metric: any) => metric.source_report_id || metric.report_id).filter(Boolean).map(String))].slice(0, 100);
+      const metricDates = productMetrics.map((metric: any) => String(metric.date || '').slice(0, 10)).filter(Boolean).sort();
+      const metricsAsOf = productMetrics.map(sourceTimestamp).filter(Boolean).sort().at(-1) || null;
+      const salesAsOf = productSalesRows.map(sourceTimestamp).filter(Boolean).sort().at(-1) || null;
+      const dataLineage = {
+        source_refs_json: JSON.stringify(sourceRefs),
+        source_tables_json: JSON.stringify(Object.keys(sourceRefs).filter((table) => (sourceRefs as any)[table].length > 0)),
+        source_report_ids_json: JSON.stringify(reportIds),
+        metric_window_start: metricDates[0] || null,
+        metric_window_end: metricDates.at(-1) || null,
+        metrics_as_of: metricsAsOf,
+        retail_as_of: salesAsOf,
+        profile_id: account.ads_profile_id || null,
+        marketplace_id: account.marketplace_id || account.marketplace || null,
+        currency_code: account.currency_code || account.currency || null,
+      };
 
       const adsData = adsByAsin.get(asin) || { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 };
       const realData = realSalesByAsin.get(asin) || null;
@@ -340,6 +384,7 @@ Deno.serve(async (req) => {
               assessment_date: assessmentDate,
               asin,
               sku,
+              ...dataLineage,
               spend: lastValid[0].spend,
               ads_sales: lastValid[0].ads_sales,
               real_sales: lastValid[0].real_sales,
@@ -463,6 +508,7 @@ Deno.serve(async (req) => {
       const record: any = {
         amazon_account_id: aid,
         assessment_date: assessmentDate,
+        ...dataLineage,
         product_id: product?.id || '',
         asin,
         sku,

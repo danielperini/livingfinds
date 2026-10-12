@@ -230,6 +230,11 @@ Deno.serve(async (req) => {
       const key = `${metricDate}|${metricHour}|${r.campaignId}|${r.adGroupId || ''}|${advertisedAsin}`;
       const rec = {
         amazon_account_id: account.id,
+        profile_id: profileId,
+        marketplace_id: account.marketplace_id || account.marketplace || null,
+        source_report_id: String(reportId),
+        source_window_start: startDate,
+        source_window_end: endDate,
         date: metricDate,
         hour: metricHour,
         ad_product: 'SPONSORED_PRODUCTS',

@@ -5,6 +5,8 @@
  * re-lê os valores reais da Amazon e verifica se foram aplicados.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
+import { verifiedNoopRetryPlan } from '../../shared/v6siaFailurePolicy.ts';
+import { v6siaDecisionOutcome, v6siaImplementationStatus } from '../../shared/v6siaReviewEvidence.ts';
 
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -27,6 +29,31 @@ function confirmationFailureState(decision: any) {
     queue_status: 'failed',
     confirmation_attempt_count: confirmationAttempts + 1,
   };
+}
+
+async function queueRetryOnlyAfterVerifiedNoop(base44: any, decision: any, remoteValue: unknown, reason: string, now: string) {
+  const plan = verifiedNoopRetryPlan({
+    action: String(decision.action || ''),
+    remoteValue,
+    expectedBefore: decision.value_before ?? decision.current_value,
+    attemptCount: decision.attempt_count,
+    maxAttempts: decision.max_attempts,
+  });
+  if (!plan) return false;
+  await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+    status: 'waiting_retry',
+    queue_status: 'scheduled',
+    attempt_count: plan.attempt_count,
+    max_attempts: Number(decision.max_attempts || 3),
+    next_retry_at: plan.next_retry_at,
+    confirmation_status: 'verified_not_applied',
+    confirmation_error: reason,
+    error_class: 'ambiguous_remote_state',
+    error_message: `V6SIA retry agendado após probe confirmar que a Amazon ainda está no valor anterior; espera ${plan.backoff_minutes} min.`,
+    last_attempt_at: now,
+    updated_at: now,
+  }).catch(() => {});
+  return true;
 }
 
 async function getAdsToken(account: any): Promise<string> {
@@ -220,10 +247,13 @@ Deno.serve(async (req) => {
       } else {
         divergences++;
         divergenceLog.push({ type: 'bid_mismatch', keyword_id: kwId, expected: expectedBid, amazon: amzBid, diff });
-        await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+        const mismatchReason = `Bid remoto R${amzBid.toFixed(2)} diverge do esperado R${expectedBid.toFixed(2)}.`;
+        const queued = await queueRetryOnlyAfterVerifiedNoop(base44, d, amzBid, mismatchReason, now);
+        if (queued) retried++;
+        else await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
           ...confirmationFailureState(d), confirmation_status: 'divergent',
-          confirmation_error: `Bid remoto R$${amzBid.toFixed(2)} diverge do esperado R$${expectedBid.toFixed(2)}.`,
-          error_message: `Confirmação Amazon divergente: esperado R$${expectedBid.toFixed(2)}, Amazon retornou R$${amzBid.toFixed(2)}`,
+          confirmation_error: mismatchReason,
+          error_message: `Confirmação Amazon divergente: esperado R${expectedBid.toFixed(2)}, Amazon retornou R${amzBid.toFixed(2)}`,
           updated_at: now,
         }).catch(() => {});
         const kws = await base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid, keyword_id: kwId }, undefined, 1).catch(() => []);
@@ -253,9 +283,12 @@ Deno.serve(async (req) => {
       } else {
         divergences++;
         divergenceLog.push({ type: 'ad_group_bid_mismatch', ad_group_id: entityId, expected: expectedBid, amazon: amzBid, diff });
-        await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+        const mismatchReason = `Bid remoto R${amzBid.toFixed(2)} diverge do esperado R${expectedBid.toFixed(2)}.`;
+        const queued = await queueRetryOnlyAfterVerifiedNoop(base44, d, amzBid, mismatchReason, now);
+        if (queued) retried++;
+        else await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
           ...confirmationFailureState(d), confirmation_status: 'divergent',
-          confirmation_error: `Bid remoto R$${amzBid.toFixed(2)} diverge do esperado R$${expectedBid.toFixed(2)}.`,
+          confirmation_error: mismatchReason,
           error_message: 'Confirmação Amazon divergente para Ad Group.', updated_at: now,
         }).catch(() => {});
       }
@@ -287,9 +320,12 @@ Deno.serve(async (req) => {
       } else {
         divergences++;
         divergenceLog.push({ type: 'target_bid_mismatch', target_id: entityId, expected: expectedBid, amazon: amzBid, diff });
-        await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+        const mismatchReason = `Bid remoto R${amzBid.toFixed(2)} diverge do esperado R${expectedBid.toFixed(2)}.`;
+        const queued = await queueRetryOnlyAfterVerifiedNoop(base44, d, amzBid, mismatchReason, now);
+        if (queued) retried++;
+        else await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
           ...confirmationFailureState(d), confirmation_status: 'divergent',
-          confirmation_error: `Bid remoto R$${amzBid.toFixed(2)} diverge do esperado R$${expectedBid.toFixed(2)}.`,
+          confirmation_error: mismatchReason,
           error_message: 'Confirmação Amazon divergente para target.', updated_at: now,
         }).catch(() => {});
       }
@@ -352,9 +388,12 @@ Deno.serve(async (req) => {
           hasDivergence = true;
           divergences++;
           divergenceLog.push({ type: 'state_mismatch', campaign_id: campId, expected: expectedState, amazon: amzState });
-          await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+          const mismatchReason = `Estado remoto ${amzState || 'desconhecido'} diverge do esperado ${expectedState}.`;
+          const queued = await queueRetryOnlyAfterVerifiedNoop(base44, d, amzState, mismatchReason, now);
+          if (queued) retried++;
+          else await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
             ...confirmationFailureState(d), confirmation_status: 'divergent',
-            confirmation_error: `Estado remoto ${amzState || 'desconhecido'} diverge do esperado ${expectedState}.`,
+            confirmation_error: mismatchReason,
             error_message: `Estado Amazon divergente: esperado ${expectedState}, Amazon retornou ${amzState}`,
             updated_at: now,
           }).catch(() => {});
@@ -374,10 +413,13 @@ Deno.serve(async (req) => {
           hasDivergence = true;
           divergences++;
           divergenceLog.push({ type: 'budget_mismatch', campaign_id: campId, expected: expectedBudget, amazon: amzBudget });
-          await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+          const mismatchReason = `Budget remoto R${amzBudget.toFixed(2)} diverge do esperado R${expectedBudget.toFixed(2)}.`;
+          const queued = await queueRetryOnlyAfterVerifiedNoop(base44, d, amzBudget, mismatchReason, now);
+          if (queued) retried++;
+          else await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
             ...confirmationFailureState(d), confirmation_status: 'divergent',
-            confirmation_error: `Budget remoto R$${amzBudget.toFixed(2)} diverge do esperado R$${expectedBudget.toFixed(2)}.`,
-            error_message: `Budget Amazon divergente: esperado R$${expectedBudget.toFixed(2)}, Amazon retornou R$${amzBudget.toFixed(2)}`,
+            confirmation_error: mismatchReason,
+            error_message: `Budget Amazon divergente: esperado R${expectedBudget.toFixed(2)}, Amazon retornou R${amzBudget.toFixed(2)}`,
             updated_at: now,
           }).catch(() => {});
           const camps = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid, campaign_id: campId }, undefined, 1).catch(() => []);
@@ -390,6 +432,23 @@ Deno.serve(async (req) => {
           }).catch(() => {});
         }
       }
+    }
+
+    const touchedReviewIds = [...new Set(recent.map((decision: any) => String(decision.v6sia_review_log_id || '')).filter(Boolean))];
+    for (const reviewId of touchedReviewIds) {
+      const [reviewRows, reviewDecisions] = await Promise.all([
+        base44.asServiceRole.entities.V6SIAReviewLog.filter({ id: reviewId, amazon_account_id: aid }, undefined, 1).catch(() => []),
+        base44.asServiceRole.entities.OptimizationDecision.filter({ v6sia_review_log_id: reviewId, amazon_account_id: aid }, '-updated_at', 2000).catch(() => []),
+      ]);
+      const review = reviewRows[0];
+      if (!review) continue;
+      const outcomes = reviewDecisions.map(v6siaDecisionOutcome);
+      await base44.asServiceRole.entities.V6SIAReviewLog.update(reviewId, {
+        implementation_status: v6siaImplementationStatus(reviewDecisions),
+        decision_ids_json: JSON.stringify(reviewDecisions.map((decision: any) => decision.id).filter(Boolean)),
+        decision_outcomes_json: JSON.stringify(outcomes),
+        updated_at: now,
+      }).catch(() => {});
     }
 
     await base44.asServiceRole.entities.SyncExecutionLog.create({

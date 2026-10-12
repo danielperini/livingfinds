@@ -65,7 +65,11 @@ jobs:
             base44/shared/configuredBidPolicy.test.ts \
             base44/shared/searchTermHarvestPolicy.test.ts \
             base44/shared/servingCampaignGrowthPolicy.test.ts \
-            base44/shared/economicEvidencePolicy.test.ts
+            base44/shared/economicEvidencePolicy.test.ts \
+            base44/shared/v6siaFailurePolicy.test.ts \
+            base44/shared/v6siaReviewEvidence.test.ts \
+            base44/shared/v6siaEvidencePaging.test.ts \
+            base44/shared/v6siaLifecycle.e2e.test.ts
       - name: Check economic evidence policy
         run: deno check --node-modules-dir=auto base44/shared/economicEvidencePolicy.ts
       - name: Check economic evidence evaluator
@@ -76,6 +80,17 @@ jobs:
         run: deno check --node-modules-dir=auto base44/functions/arbitrateCanonicalDecisionConflicts/entry.ts
       - name: Check canonical decision cycle
         run: deno check --node-modules-dir=auto base44/functions/runCanonicalDecisionCycle/entry.ts
+      - name: Check V6SIA execution and supervision
+        run: |
+          deno check --node-modules-dir=auto \
+            base44/shared/v6siaFailurePolicy.ts \
+            base44/shared/v6siaReviewEvidence.ts \
+            base44/shared/v6siaEvidencePaging.ts \
+            base44/shared/v6siaLifecycle.ts \
+            base44/functions/superviseV6SIA/entry.ts \
+            base44/functions/executeApprovedDecisionQueue/entry.ts \
+            base44/functions/confirmExecutedDecisions/entry.ts \
+            base44/functions/reconcileAndRetryDecisions/entry.ts
       - name: Check canonical weekly review
         run: deno check --node-modules-dir=auto base44/functions/runCanonicalWeeklyDecisionReview/entry.ts
       - name: Check canonical economy-first dayparting
@@ -107,5 +122,17 @@ jobs:
             base44/functions/smartBidFromCpc/entry.ts \
             base44/functions/runSalesModeWasteRotation/entry.ts \
             base44/functions/runSalesMode/entry.ts
-      - name: Test scheduler validation
-        run: deno test --node-modules-dir=auto server/src/scheduler.test.ts
+      - name: Test scheduler and Hostinger OpenAI routing
+        run: deno test --node-modules-dir=auto server/src/scheduler.test.ts server/src/sdk/integrations.test.ts
+
+  agents-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install isolated Agents SDK dependencies
+        run: npm ci --prefix agents
+      - name: Test engineer agent safety boundaries
+        run: npm test --prefix agents

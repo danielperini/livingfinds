@@ -61,26 +61,52 @@ function finish(text: string, schema: unknown): Json {
   return { ok: true, text, data: text };
 }
 
-async function invokeOpenAI(key: string, payload: Json): Promise<Json> {
+export function resolveLLMProvider(preferred: string | undefined, openaiAvailable: boolean, anthropicAvailable: boolean) {
+  if (preferred === 'openai') return openaiAvailable ? 'openai' : 'missing_openai';
+  if (preferred === 'anthropic') return anthropicAvailable ? 'anthropic' : 'missing_anthropic';
+  if (openaiAvailable) return 'openai';
+  if (anthropicAvailable) return 'anthropic';
+  return 'none';
+}
+
+export function buildOpenAIRequest(payload: Json): Json {
   const schema = payload?.response_json_schema;
+  const model = String(payload?.model || openaiModel());
+  const isGpt6 = model.startsWith('gpt-6-');
   const body: Json = {
-    model: openaiModel(),
-    temperature: Number(payload?.temperature ?? 0.2),
-    max_tokens: Number(payload?.max_tokens ?? 4096),
+    model,
+    [isGpt6 ? 'max_completion_tokens' : 'max_tokens']: Number(payload?.max_tokens ?? 4096),
     messages: [
       { role: 'system', content: buildSystem(schema, !!payload?.add_context_from_internet) },
       { role: 'user', content: payload?.prompt ?? '' },
     ],
   };
+  if (isGpt6) body.reasoning_effort = payload?.reasoning_effort || 'low';
+  else body.temperature = Number(payload?.temperature ?? 0.2);
   if (schema) body.response_format = { type: 'json_object' }; // JSON mode
-  const res = await fetch(OPENAI_URL, {
+  return body;
+}
+
+export async function invokeOpenAI(key: string, payload: Json, fetchImpl: typeof fetch = fetch): Promise<Json> {
+  const schema = payload?.response_json_schema;
+  const body = buildOpenAIRequest(payload);
+  const res = await fetchImpl(OPENAI_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
     body: JSON.stringify(body),
   });
   const raw = await res.json().catch(() => ({}));
-  if (!res.ok) return { ok: false, error: raw?.error?.message ?? `HTTP ${res.status}`, data: null };
-  return finish((raw?.choices?.[0]?.message?.content ?? '').trim(), schema);
+  const choice = raw?.choices?.[0] ?? {};
+  const metadata = {
+    provider: 'openai',
+    model: raw?.model || String(body.model || openaiModel()),
+    request_id: raw?.id || res.headers.get('x-request-id') || null,
+    usage: raw?.usage || null,
+    finish_reason: choice?.finish_reason || null,
+  };
+  if (!res.ok) return { ok: false, ...metadata, error: raw?.error?.message ?? `HTTP ${res.status}`, data: null };
+  if (choice?.finish_reason === 'length') return { ok: false, incomplete: true, ...metadata, error: 'A resposta da OpenAI atingiu o limite de saída', data: null };
+  return { ...finish(String(choice?.message?.content ?? '').trim(), schema), ...metadata };
 }
 
 async function invokeAnthropic(key: string, payload: Json): Promise<Json> {
@@ -105,9 +131,12 @@ async function invokeAnthropic(key: string, payload: Json): Promise<Json> {
 async function invokeLLM(payload: Json): Promise<Json> {
   const openaiKey = Deno.env.get('OPENAI_API_KEY');
   const anthropicKey = Deno.env.get('ANTHROPIC_API_KEY');
-  if (openaiKey) return await invokeOpenAI(openaiKey, payload);
-  if (anthropicKey) return await invokeAnthropic(anthropicKey, payload);
-  return { ok: false, error: 'Nenhuma chave de IA configurada (OPENAI_API_KEY/ANTHROPIC_API_KEY)', data: null };
+  const provider = resolveLLMProvider(payload?.provider, Boolean(openaiKey), Boolean(anthropicKey));
+  if (provider === 'openai') return await invokeOpenAI(openaiKey!, payload);
+  if (provider === 'anthropic') return await invokeAnthropic(anthropicKey!, payload);
+  if (provider === 'missing_openai') return { ok: false, provider: 'openai', error: 'OPENAI_API_KEY não configurada no ambiente do Hostinger', data: null };
+  if (provider === 'missing_anthropic') return { ok: false, provider: 'anthropic', error: 'ANTHROPIC_API_KEY não configurada no ambiente do Hostinger', data: null };
+  return { ok: false, provider: null, error: 'Nenhuma chave de IA configurada (OPENAI_API_KEY/ANTHROPIC_API_KEY)', data: null };
 }
 
 async function sendEmail(payload: Json): Promise<Json> {

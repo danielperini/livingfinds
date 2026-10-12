@@ -5,6 +5,30 @@ const invoke = async (base44:any,name:string,payload:Record<string,unknown>) => 
   catch(error:any){ return {ok:false,error:error?.response?.data?.error||error?.message||String(error)}; }
 };
 
+function compactStage(stage: any) {
+  if (!stage || typeof stage !== 'object') return stage;
+  const keys = [
+    'ok','reviewed','campaigns_reviewed','products_reviewed','decisions_created','created',
+    'updated','blocked','warnings','errors','error','reason','skipped','proposed','executed',
+    'candidates','count','records_processed','spend','sales','acos','roas','tacos','cpc','ctr',
+    'conversion_rate','orders','clicks','impressions',
+  ];
+  const out: Record<string, unknown> = {};
+  for (const key of keys) {
+    const value = stage[key];
+    if (typeof value === 'string') out[key] = value.slice(0, 400);
+    else if (typeof value === 'number' || typeof value === 'boolean' || value === null) out[key] = value;
+    else if (Array.isArray(value)) out[key] = value.slice(0, 8).map((item: any) =>
+      typeof item === 'string' ? item.slice(0, 200) :
+      (item && typeof item === 'object' ? Object.fromEntries(
+        ['action','status','reason','error','campaign_id','asin','count','spend','sales','acos','roas','tacos']
+          .filter((name) => item[name] !== undefined)
+          .map((name) => [name, typeof item[name] === 'string' ? item[name].slice(0, 200) : item[name]])
+      ) : item));
+  }
+  return out;
+}
+
 Deno.serve(async(request)=>{
   try{
     const base44=createClientFromRequest(request);
@@ -50,19 +74,68 @@ Deno.serve(async(request)=>{
           trigger_type:'canonical_pre_execution_arbitration',
         });
 
+    const stageResults = { economic_evidence: economicEvidence, unified_engine: engine, reconciliation, arbitration };
+    const failedStages = Object.entries(stageResults)
+      .filter(([, result]: [string, any]) => result?.ok === false)
+      .map(([stage, result]: [string, any]) => ({ stage, ok: false, error: String(result?.error || result?.reason || 'stage_failed').slice(0, 400) }));
+    const shouldSupervise = body.daily_close === true || failedStages.length > 0;
+    const supervision = shouldSupervise
+      ? await invoke(base44, 'superviseV6SIA', {
+          amazon_account_id: body.amazon_account_id || null,
+          _service_role: true,
+          supervision_type: failedStages.length > 0 ? 'execution_failure' : 'daily_portfolio',
+          trigger_type: body.trigger_type || 'canonical_daily_review',
+          correlation_id: correlationId,
+          failures: failedStages,
+          observations: {
+            daily_close: body.daily_close === true,
+            trigger_type: body.trigger_type || 'canonical_decision_cycle',
+            economic_evidence: compactStage(economicEvidence),
+            unified_engine: compactStage(engine),
+            reconciliation: compactStage(reconciliation),
+            arbitration: compactStage(arbitration),
+          },
+        })
+      : { ok: true, skipped: true, reason: 'no_daily_review_or_stage_failure' };
+
+    const cycleOk = economicEvidence?.ok !== false && engine?.ok !== false && reconciliation?.ok !== false && arbitration?.ok !== false;
+    const accountRows = body.amazon_account_id
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1).catch(() => [])
+      : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 1).catch(() => []);
+    const accountId = accountRows[0]?.id || body.amazon_account_id || null;
+    if (accountId) {
+      await base44.asServiceRole.entities.SyncExecutionLog.create({
+        amazon_account_id: accountId,
+        operation: 'v6sia_canonical_decision_cycle',
+        trigger_type: String(body.trigger_type || 'canonical_decision_cycle').slice(0, 100),
+        status: cycleOk && supervision?.ok !== false ? 'success' : 'warning',
+        started_at: cycleStartedAt,
+        completed_at: new Date().toISOString(),
+        duration_ms: Date.now() - new Date(cycleStartedAt).getTime(),
+        records_processed: 4,
+        error_message: !cycleOk ? JSON.stringify(failedStages).slice(0, 900) : (supervision?.ok === false ? String(supervision?.error || 'V6SIA supervisor unavailable').slice(0, 500) : null),
+        result_summary: JSON.stringify({
+          engine_version: 'V6SIA', correlation_id: correlationId,
+          stages: Object.fromEntries(Object.entries(stageResults).map(([name, result]: [string, any]) => [name, result?.ok === false ? 'failed' : result?.skipped ? 'skipped' : 'ok'])),
+          supervision_status: supervision?.status || (supervision?.skipped ? 'skipped' : supervision?.ok === false ? 'failed' : 'ok'),
+        }).slice(0, 1400),
+      }).catch(() => {});
+    }
+
     return Response.json({
-      ok:economicEvidence?.ok!==false&&engine?.ok!==false&&reconciliation?.ok!==false&&arbitration?.ok!==false,
+      ok:cycleOk,
       engine:'canonical-decision-cycle',
-      engine_version:'canonical-v24-traffic-diagnosis',
+      engine_version:'V6SIA',
       correlation_id:correlationId,
       economic_evidence:economicEvidence,
       unified_engine:engine,
       pre_execution_reconciliation:reconciliation,
       pre_execution_arbitration:arbitration,
+      v6sia_supervision: supervision,
       execution_owner:'executeApprovedDecisionQueue',
       confirmation_owner:'confirmExecutedDecisions',
       duplicate_executor:false,
-      decision_contract:'all proposals -> economic evidence -> canonical arbiter -> one net mutation per entity -> canonical queue -> Amazon confirmation',
+      decision_contract:'V6SIA diagnosis -> validated data/economics -> canonical arbiter -> one net mutation per entity -> canonical queue -> Amazon confirmation',
     });
   }catch(error:any){return Response.json({ok:false,error:error?.message||String(error)},{status:500})}
 });
