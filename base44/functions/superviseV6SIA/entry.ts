@@ -541,7 +541,6 @@ Deno.serve(async (request) => {
       });
       if (status === 'partial') evidence.data_quality_status = 'partial';
       if (evidenceLinkErrors.length) evidence.data_query_errors_json = JSON.stringify([...evidence.query_errors, ...evidenceLinkErrors]);
-      }
       await base44.asServiceRole.entities.V6SIAReviewLog.update(reviewLog.id, {
         status,
         data_quality_status: evidence.data_quality_status,
