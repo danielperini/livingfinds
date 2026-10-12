@@ -223,7 +223,7 @@ async function collectCanonicalEvidence(base44: any, account: any, correlationId
     repricing_snapshots: { rows: snapshots.length, fresh: snapshots.filter((row) => row.data_fresh === true).length, loss_confirmed: snapshots.filter((row) => row.economic_state === 'LOSS_CONFIRMED').length },
     campaign_changes: { rows: changes.length, latest_at: changes.map(rowTime).filter(Boolean).sort().at(-1) || null },
   };
-  const refs = Object.fromEntries(specs.map(([table, , , dateFields]) => [
+  const refs: Record<string, any> = Object.fromEntries(specs.map(([table, , , dateFields]) => [
     table,
     sourceDescriptor(table, byTable[table], [...dateFields], queryErrors, reads[specs.findIndex((spec) => spec[0] === table)]?.complete === true),
   ]));
@@ -270,7 +270,7 @@ Deno.serve(async (request) => {
       return Response.json({ ok: true, skipped: true, reason: 'Nenhuma falha elegível para análise' });
     }
     const correlationId = String(body.correlation_id || '');
-    const evidence = await collectCanonicalEvidence(base44, account, correlationId, failures.map((item) => item.decision_id).filter(Boolean));
+    const evidence: any = await collectCanonicalEvidence(base44, account, correlationId, failures.map((item) => item.decision_id).filter(Boolean));
     const actionOutcomes = evidence.decisions.map(v6siaDecisionOutcome);
     const implementationStatus = v6siaImplementationStatus(evidence.decisions);
     const context = {
@@ -321,7 +321,7 @@ Deno.serve(async (request) => {
         JSON.stringify(context),
       ].join('\n\n');
       try {
-        const aiResponse = await base44.asServiceRole.integrations.Core.InvokeLLM({
+        const aiResponse: any = await (base44.asServiceRole.integrations.Core.InvokeLLM as any)({
           provider: 'openai',
           model: 'gpt-6-luna',
           reasoning_effort: 'low',
@@ -376,7 +376,7 @@ Deno.serve(async (request) => {
     const success = Boolean(analysis && (analysis.ok !== false));
     let status: 'success' | 'deferred' | 'error' | 'partial' = success ? 'success' : gate.allowed === false ? 'deferred' : 'error';
     const aiCallStatus = gate.cached === true ? 'cache_reused' : gate.allowed === false ? 'budget_deferred' : model === 'incomplete' ? 'incomplete' : analysis?.provider === 'openai' && Boolean(analysis?.request_id) ? 'called' : 'failed';
-    const report = {
+    const report: any = {
       engine_version: 'V6SIA',
       supervision_type: supervisionType,
       status,
@@ -510,7 +510,7 @@ Deno.serve(async (request) => {
         let lastError: any = null;
         for (let attempt = 0; attempt < 3 && !persisted; attempt++) {
           try {
-            await base44.asServiceRole.entities.V6SIAEvidenceLink.upsert(batch, { key: ['review_log_id', 'source_table', 'source_record_id'] });
+            const idempotentBatch = batch.map((link) => ({\n              ...link,\n              id: `v6sia:${encodeURIComponent(String(link.review_log_id))}:${encodeURIComponent(String(link.source_table))}:${encodeURIComponent(String(link.source_record_id))}`,\n            }));\n            await base44.asServiceRole.entities.V6SIAEvidenceLink.bulkCreate(idempotentBatch);
             persisted = true;
           } catch (error: any) {
             lastError = error;
