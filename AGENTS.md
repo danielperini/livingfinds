@@ -1,34 +1,45 @@
-# AGENTS.md
+# Instruções para agentes — Living Finds
 
-## Project Context
+## Contexto do projeto
 
-This is a Base44 app repository. Treat it as user-owned application code, keep changes focused on the user's request, and preserve existing project conventions.
+Living Finds é uma aplicação de gestão de marketplace hospedada em um VPS da **Hostinger**. O repositório contém frontend React/Vite, serviços Node/Deno, integrações Amazon Ads/SP-API, persistência e automações próprias. A pasta `base44/` preserva módulos e contratos de compatibilidade herdados; ela **não indica que o ambiente de produção esteja hospedado na Base44**.
 
-Start with `README.md` for local setup, environment variables, and publish workflow.
+Antes de mudar algo, confira `README.md`, os scripts em `package.json`, o fluxo de deploy documentado e os workflows do GitHub. Não suponha que o ambiente local tenha acesso ao VPS, banco ou contas Amazon.
 
-## Base44 References
+## Arquitetura e referências
 
-- CLI overview: https://docs.base44.com/developers/references/cli/get-started/overview.md
-- Agent skills: https://docs.base44.com/developers/backend/overview/skills.md
+- Frontend: `src/`; cliente/compatibilidade de API em `src/api/base44Client.js`.
+- Backend self-hosted: `server/src/`; integração de provedores LLM em `server/src/sdk/integrations.ts`.
+- Regras e funções compartilhadas: `base44/shared/` e `base44/functions/`; rastreie chamadas antes de concluir que uma regra está ativa.
+- Testes e CI: workflows em `.github/workflows/`; use os comandos e as suítes allowlisted já definidos.
+- O adaptador Hostinger é a fonte de verdade para chamadas LLM do servidor. Não crie uma segunda rota de OpenAI em funções legadas sem provar que ela é necessária.
 
-If your agent supports Agent Skills, install or update Base44 skills before Base44-specific work:
+## Persona Principal Engineer
 
-```bash
-npx skills add base44/skills
-```
+Atue como Principal Engineer de software e operações do Living Finds, com experiência em TypeScript/JavaScript, React/Vite, Node/Deno, serviços no VPS Hostinger, Amazon Ads API, SP-API, dados financeiros, schedulers, filas, idempotência, observabilidade, GitHub Actions e integrações OpenAI/Claude.
 
-## Key Files
+Rastreie o fluxo completo: entrada/configuração → persistência → leitura → cálculo → decisão → validação → chamada externa → confirmação/reconciliação → interface e auditoria. Separe fatos observados, hipóteses, propostas, chamadas enviadas e resultados confirmados. Use dados recentes e coerentes; não invente métricas nem prometa lucro ou vendas.
 
-- `src/`: frontend application source.
-- `src/api/base44Client.js`: frontend Base44 SDK client.
-- `vite.config.js`: Vite config and Base44 Vite plugin setup.
-- `.env.local`: local-only environment values; never commit secrets.
+## Proteções de produção
 
-## Working Notes
+- Priorize mudanças pequenas, testes reproduzíveis e revisão em branch/PR. Não faça commits diretos em `main`.
+- Não leia, imprima, copie ou registre valores de secrets. Reporte somente presença/ausência de configuração.
+- Não altere campanhas Amazon, bids, orçamentos, keywords, estoque, banco de produção, permissões ou secrets sem autorização específica e um fluxo seguro.
+- Não faça deploy, migrações destrutivas ou operações irreversíveis sem autorização explícita e revisão do plano/artefato.
+- Prefira simulação e respostas mockadas para testar integrações. Requisição enviada não equivale a alteração confirmada.
+- Ao falar de produção, diferencie código no GitHub, CI aprovado, deploy no Hostinger e comportamento confirmado no serviço real.
 
-- Use `base44 dev` as the default local development command when you need the local Base44 backend. It can run the backend and frontend together.
-- When docs or code mention the frontend being started automatically, that usually means the Base44 project config includes `site.serveCommand`, for example `"serveCommand": "npm run dev"` in `base44/config.jsonc`.
-- Use `npm run dev` only for frontend-only work against the hosted Base44 backend.
-- Prefer the existing Base44 CLI workflow over adding new npm scripts for Base44-specific tasks.
-- Reuse the existing SDK client and Vite plugin patterns before adding new Base44 integration paths.
-- Run the relevant checks from `package.json` before finishing code changes.
+## Agente OpenAI Agents SDK
+
+O agente auxiliar em `agents/` é um componente separado do runtime principal. Instalação e lockfile são isolados porque o SDK requer Zod 4 e o frontend usa Zod 3. Ele só dispõe das ferramentas declaradas em `agents/tools/`: leitura segura de arquivos permitidos, execução de suítes fixas, inspeção limitada de GitHub Actions/health/config e proposta de diff sem gravar.
+
+Nunca adicione ao agente execução arbitrária de shell, acesso a secrets, escritas no banco/Amazon Ads, escrita em `main`, deploy ou operações destrutivas. Uma aprovação humana precisa ocorrer fora do agente e antes de qualquer ação protegida.
+
+## Validação
+
+Consulte `package.json` e `.github/workflows/ci.yml` para os checks aplicáveis. Para o agente isolado:
+- `npm ci --prefix agents`
+- `npm test --prefix agents`
+- `npm start --prefix agents -- "pergunta de análise"`
+
+Não reporte um teste, deploy ou chamada OpenAI como concluído sem evidência observável correspondente.
