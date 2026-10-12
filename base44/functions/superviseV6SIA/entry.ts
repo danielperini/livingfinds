@@ -510,7 +510,11 @@ Deno.serve(async (request) => {
         let lastError: any = null;
         for (let attempt = 0; attempt < 3 && !persisted; attempt++) {
           try {
-            const idempotentBatch = batch.map((link) => ({\n              ...link,\n              id: `v6sia:${encodeURIComponent(String(link.review_log_id))}:${encodeURIComponent(String(link.source_table))}:${encodeURIComponent(String(link.source_record_id))}`,\n            }));\n            await base44.asServiceRole.entities.V6SIAEvidenceLink.bulkCreate(idempotentBatch);
+            const idempotentBatch = batch.map((link) => ({
+              ...link,
+              id: \`v6sia:\${encodeURIComponent(String(link.review_log_id))}:\${encodeURIComponent(String(link.source_table))}:\${encodeURIComponent(String(link.source_record_id))}\`,
+            }));
+            await base44.asServiceRole.entities.V6SIAEvidenceLink.bulkCreate(idempotentBatch);
             persisted = true;
           } catch (error: any) {
             lastError = error;
