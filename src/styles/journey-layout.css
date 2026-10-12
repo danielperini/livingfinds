@@ -54,7 +54,14 @@
 .lf-primary-nav { flex: 1 1 auto; overflow-y: auto; padding: 12px 12px 20px; scrollbar-width: thin; }
 .lf-nav-group + .lf-nav-group { margin-top: 22px; }
 .lf-nav-heading { margin: 0 10px 7px; color: var(--lf-color-text-muted); font-size: 10px; font-weight: 700; letter-spacing: 0.09em; line-height: 1.4; text-transform: uppercase; }
-.lf-nav-group ul { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.lf-nav-section { margin-top: 5px; }
+.lf-nav-section-primary { margin-top: 0; }
+.lf-nav-section ul { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.lf-nav-section-toggle { display: flex; min-height: 34px; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 10px; border-radius: 8px; color: var(--lf-color-text-muted); font-size: 11px; font-weight: 600; cursor: pointer; list-style: none; }
+.lf-nav-section-toggle::-webkit-details-marker { display: none; }
+.lf-nav-section-toggle:hover { background: var(--lf-color-surface-muted); color: var(--lf-color-text); }
+.lf-nav-section[open] > .lf-nav-section-toggle > svg { transform: rotate(180deg); }
+.lf-nav-section-toggle > svg { flex: 0 0 auto; transition: transform 120ms ease; }
 .lf-nav-link { display: flex; min-height: 40px; align-items: center; gap: 11px; padding: 8px 10px; border: 1px solid transparent; border-radius: var(--lf-radius-control); color: var(--lf-color-text-secondary); font-size: 13px; font-weight: 540; text-decoration: none; transition: background 120ms ease, color 120ms ease, border-color 120ms ease; }
 .lf-nav-link > svg { flex: 0 0 18px; color: var(--lf-color-text-muted); }
 .lf-nav-link > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -66,6 +73,8 @@
 .lf-sidebar.is-collapsed .lf-brand-link { justify-content: center; }
 .lf-sidebar.is-collapsed .lf-primary-nav { padding: 10px 8px 16px; }
 .lf-sidebar.is-collapsed .lf-nav-group + .lf-nav-group { margin-top: 16px; }
+.lf-sidebar.is-collapsed .lf-nav-section { margin-top: 5px; }
+.lf-sidebar.is-collapsed .lf-nav-section-toggle { display: none; }
 
 .lf-sidebar-footer { padding: 12px; border-top: 1px solid var(--lf-color-border); }
 .lf-account-card { padding: 11px 12px; border: 1px solid var(--lf-color-border); border-radius: var(--lf-radius-card); background: var(--lf-color-surface-muted); }

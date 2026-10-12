@@ -7,10 +7,19 @@ import { buildV6SIAEvidenceLinks, shouldForceV6SIANewAnalysis, v6siaReviewComple
 function pickSafeFailures(value: any): any[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => ({
-    decision_id: String(item?.id || ''),
+    decision_id: String(item?.decision_id || item?.id || ''),
+    queue_id: String(item?.queue_id || ''),
+    queue_entity: String(item?.queue_entity || '').slice(0, 80),
     action: String(item?.action || ''),
     failure_class: String(item?.error_class || 'unknown'),
     error: sanitizeV6SIAError(item?.error || item?.reason || 'Falha sem mensagem'),
+    error_code: String(item?.error_code || '').slice(0, 120),
+    asin: String(item?.asin || '').slice(0, 20),
+    sku: String(item?.sku || '').slice(0, 80),
+    campaign_id: String(item?.campaign_id || '').slice(0, 64),
+    attempt_count: Number.isFinite(Number(item?.attempt_count)) ? Number(item.attempt_count) : null,
+    max_attempts: Number.isFinite(Number(item?.max_attempts)) ? Number(item.max_attempts) : null,
+    last_attempt_at: String(item?.last_attempt_at || '').slice(0, 40),
   }));
 }
 
@@ -477,6 +486,7 @@ Deno.serve(async (request) => {
         metrics_summary_json: JSON.stringify(evidence.metrics),
         decision_ids_json: JSON.stringify(evidence.decisions.map((item: any) => item.id).filter(Boolean)),
         decision_outcomes_json: JSON.stringify(actionOutcomes),
+        failure_context_json: JSON.stringify(supervisionType === 'execution_failure' ? failures : []),
         implementation_status: implementationStatus,
         ai_recommendation_status: success ? 'diagnostic_only' : analysis?.incomplete ? 'incomplete' : gate.allowed === false ? 'not_generated' : 'failed',
         findings_json: JSON.stringify(analysis),

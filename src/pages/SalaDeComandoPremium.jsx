@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { base44 } from '@/api/base44Client';
 import { deduplicateOperationalAlerts, isActionableOperationalAlert } from '@/lib/operationalAlertPresentation';
+import { queueTimestamp, safeQueueError, summarizeOperationalQueue } from '@/lib/operationalQueueHealth';
 import {
   Activity, AlertTriangle, Bot, CheckCircle2,
   ExternalLink, Loader2, RefreshCw, Rocket, ServerCog, ShieldCheck,
@@ -32,32 +33,6 @@ function formatDate(value) {
   return date.toLocaleString('pt-BR', {
     day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
   });
-}
-
-function queueTimestamp(item) {
-  return item?.updated_at || item?.updated_date || item?.completed_at || item?.started_at || item?.scheduled_at || item?.created_at || item?.created_date || null;
-}
-
-function isWithinHours(value, hours) {
-  const timestamp = new Date(value || 0).getTime();
-  return Number.isFinite(timestamp) && timestamp >= Date.now() - hours * 60 * 60 * 1000;
-}
-
-const RETRYABLE_QUEUE_ERROR = /(\b429\b|rate.?limit|throttl|timeout|timed.?out|network|temporar|\b502\b|\b503\b|\b504\b|\b524\b|connection reset|circuit.?open)/i;
-
-function isRetryableQueueFailure(item) {
-  const attempts = Number(item?.attempt_count || 0);
-  const maxAttempts = Math.max(1, Number(item?.max_attempts || 5));
-  return attempts < maxAttempts && (item?.retryable === true || RETRYABLE_QUEUE_ERROR.test(String(item?.last_error || item?.error_code || '')));
-}
-
-function isSafetyBlockedQueue(item, product) {
-  if (['waiting_stock', 'cancelled'].includes(String(item?.status || '').toLowerCase())) return true;
-  const scope = String(product?.ads_scope_status || '').toLowerCase();
-  if (['not_authorized', 'manual_block', 'mapping_conflict'].includes(scope)) return true;
-  if (!product) return false;
-  const stock = Number(product.fulfillable_quantity ?? product.available_quantity ?? product.inventory_quantity ?? product.stock ?? product.fba_inventory);
-  return Number.isFinite(stock) && stock <= 0;
 }
 
 function MetricCard({ label, value, detail, tone = 'default', icon: Icon }) {
@@ -118,7 +93,7 @@ export default function SalaDeComandoPremium() {
       if (!current) return;
 
       const aid = current.id;
-      const [alerts, decisions, kickoff, repair, keyword, syncRuns, bidLogs, products] = await Promise.all([
+      const [alerts, decisions, kickoff, repair, keyword, syncRuns, bidLogs, products, kickoffFailures, repairFailures, keywordFailures] = await Promise.all([
         base44.entities.Alert.filter({ amazon_account_id: aid }, '-created_at', 100).catch(() => []),
         base44.entities.OptimizationDecision.filter({ amazon_account_id: aid }, '-created_at', 100).catch(() => []),
         base44.entities.ProductKickoffQueue.filter({ amazon_account_id: aid }, '-scheduled_at', 100).catch(() => []),
@@ -127,8 +102,18 @@ export default function SalaDeComandoPremium() {
         base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid }, '-started_at', 100).catch(() => []),
         base44.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 200).catch(() => []),
         base44.entities.Product.filter({ amazon_account_id: aid }, '-updated_at', 500).catch(() => []),
+        base44.entities.ProductKickoffQueue.filter({ amazon_account_id: aid, status: 'failed' }, '-updated_at', 100).catch(() => []),
+        base44.entities.AutoCampaignRepairQueue.filter({ amazon_account_id: aid, status: 'failed' }, '-updated_at', 100).catch(() => []),
+        base44.entities.KeywordRepairQueue.filter({ amazon_account_id: aid, status: 'failed' }, '-updated_at', 100).catch(() => []),
       ]);
-      setData({ alerts, decisions, kickoff, repair, keyword, syncRuns, bidLogs, products });
+      const mergeQueueRows = (...groups) => [...new Map(groups.flat().filter(item => item?.id).map(item => [String(item.id), item])).values()];
+      setData({
+        alerts, decisions,
+        kickoff: mergeQueueRows(kickoff, kickoffFailures),
+        repair: mergeQueueRows(repair, repairFailures),
+        keyword: mergeQueueRows(keyword, keywordFailures),
+        syncRuns, bidLogs, products,
+      });
     } finally {
       setLoading(false);
     }
@@ -137,32 +122,25 @@ export default function SalaDeComandoPremium() {
   useEffect(() => { load(); }, [load]);
 
   const summary = useMemo(() => {
-    const allQueue = [...data.kickoff, ...data.repair, ...data.keyword];
+    const allQueue = [
+      ...data.kickoff.map(item => ({ ...item, queue_type: 'Kick-off' })),
+      ...data.repair.map(item => ({ ...item, queue_type: 'Reparo de campanha automática' })),
+      ...data.keyword.map(item => ({ ...item, queue_type: 'Reparo de palavra-chave' })),
+    ];
     const productByAsin = new Map(data.products.map(product => [String(product.asin || '').toUpperCase(), product]));
     const queueProduct = (item) => productByAsin.get(String(item?.asin || '').toUpperCase());
     const allActiveAlerts = deduplicateOperationalAlerts(data.alerts.filter(item => item.status === 'active'));
     const activeAlerts = allActiveAlerts.filter(isActionableOperationalAlert);
     const urgentAlerts = activeAlerts.filter(item => ['critical', 'high'].includes(String(item.severity || '').toLowerCase()));
-    const safetyBlockedQueue = allQueue.filter(item => isSafetyBlockedQueue(item, queueProduct(item)));
-    const retryingQueue = allQueue.filter(item => item.status === 'failed' && isRetryableQueueFailure(item));
-    const failedQueue = allQueue.filter(item =>
-      item.status === 'failed' && isWithinHours(queueTimestamp(item), 24) &&
-      !isSafetyBlockedQueue(item, queueProduct(item)) && !isRetryableQueueFailure(item)
-    );
-    const pendingQueue = allQueue.filter(item =>
-      (['scheduled', 'processing'].includes(item.status) && isWithinHours(queueTimestamp(item), 2)) || retryingQueue.includes(item)
-    );
-    const historicalQueue = allQueue.filter(item =>
-      (['scheduled', 'processing'].includes(item.status) && !isWithinHours(queueTimestamp(item), 2)) ||
-      (item.status === 'failed' && !isWithinHours(queueTimestamp(item), 24) && !retryingQueue.includes(item))
-    );
+    const queueHealth = summarizeOperationalQueue(allQueue, queueProduct);
+    const { safetyBlockedQueue, retryingQueue, failedQueue, pendingQueue, historicalQueue } = queueHealth;
     const pendingDecisions = data.decisions.filter(item => item.status === 'pending' && item.requires_approval === true);
     const executedToday = data.decisions.filter(item => {
       const date = String(item.executed_at || item.updated_date || item.created_at || '').slice(0, 10);
       return item.status === 'executed' && date === new Date().toISOString().slice(0, 10);
     });
     const lastSync = [...data.syncRuns].sort((left, right) =>
-      new Date(right.completed_at || right.started_at || right.created_date || 0) - new Date(left.completed_at || left.started_at || left.created_date || 0)
+      new Date(right.completed_at || right.started_at || right.created_date || 0).getTime() - new Date(left.completed_at || left.started_at || left.created_date || 0).getTime()
     )[0] || null;
     const syncHealthy = ['success', 'completed', 'ok'].includes(String(lastSync?.status || '').toLowerCase());
     const healthReasons = [
@@ -190,6 +168,14 @@ export default function SalaDeComandoPremium() {
       tone: ['critical', 'high'].includes(String(item.severity || '').toLowerCase()) ? 'danger' : 'warning',
       meta: withProduct(item),
     }));
+    const failures = summary.failedQueue.slice(0, 10).map(item => ({
+      id: `queue-failure-${item.queue_type}-${item.id}`,
+      type: `Falha · ${item.queue_type || 'Fila operacional'}`,
+      title: `${item.asin || item.campaign_name || 'Item sem ASIN'} · tentativa encerrada`,
+      detail: `${safeQueueError(item)} · ${Number(item.attempt_count || 0)}/${Number(item.max_attempts || 5)} tentativa(s) · ${formatDate(queueTimestamp(item))}`,
+      tone: 'danger',
+      meta: withProduct(item),
+    }));
     const decisions = summary.pendingDecisions.slice(0, 30).map(item => ({
       id: `decision-${item.id}`,
       type: 'Decisão',
@@ -198,7 +184,7 @@ export default function SalaDeComandoPremium() {
       tone: 'info',
       meta: withProduct(item),
     }));
-    return [...alerts, ...decisions];
+    return [...failures, ...alerts, ...decisions];
   }, [summary, data.products]);
 
   const visiblePriorities = verTodasPrioridades ? priorityItems : priorityItems.slice(0, 5);
@@ -213,7 +199,7 @@ export default function SalaDeComandoPremium() {
                 <h2 className="text-base font-semibold text-white">Prioridades operacionais</h2>
               <p className="text-xs text-slate-500 mt-1">Falhas e bloqueios reais; ações seguras seguem execução automática com confirmação da Amazon.</p>
               </div>
-              <Link to={LEGACY_LINKS.pendentes} className="text-xs text-blue-300 hover:text-blue-200">Abrir painel completo →</Link>
+                <Link to={LEGACY_LINKS.execucao} className="text-xs text-blue-300 hover:text-blue-200">Abrir fila completa →</Link>
             </div>
             {priorityItems.length === 0 ? (
               <div className="p-10 text-center">
@@ -264,7 +250,7 @@ export default function SalaDeComandoPremium() {
               <div className="mt-3">
                 <StatusLine label="Conta Amazon" status={account?.status} detail={account?.profile_name || account?.name || 'Conta vinculada'} />
                 <StatusLine label="Última sincronização" status={summary.syncHealthy ? 'success' : summary.lastSync?.status} detail={summary.healthReasons[0] || formatDate(summary.lastSync?.started_at || summary.lastSync?.created_date)} />
-                <StatusLine label="Fila operacional" status={summary.failedQueue.length === 0 ? 'ok' : 'warning'} detail={`${summary.pendingQueue.length} em andamento/recuperação · ${summary.failedQueue.length} falhas executáveis${summary.safetyBlockedQueue.length ? ` · ${summary.safetyBlockedQueue.length} bloqueio(s) de segurança` : ''}${summary.historicalQueue.length ? ` · ${summary.historicalQueue.length} histórico(s)` : ''}`} />
+                <StatusLine label="Fila operacional" status={summary.failedQueue.length === 0 ? 'ok' : 'warning'} detail={`${summary.pendingQueue.length} em andamento/recuperação · ${summary.failedQueue.length} falha(s) sem retry ativo${summary.safetyBlockedQueue.length ? ` · ${summary.safetyBlockedQueue.length} protegidos` : ''}${summary.historicalQueue.length ? ` · ${summary.historicalQueue.length} histórico(s)` : ''}`} />
               </div>
             </div>
             <div className="rounded-2xl border border-white/[0.08] bg-gradient-to-br from-blue-500/10 to-violet-500/5 p-5">
@@ -288,7 +274,7 @@ export default function SalaDeComandoPremium() {
         description: 'Acompanhe processamento, retries, backoff e erros reais sem misturar com decisões pendentes.',
         stats: [
           ['Em andamento/recuperação', summary.pendingQueue.length],
-          ['Falhas executáveis', summary.failedQueue.length],
+          ['Falhas sem retry ativo', summary.failedQueue.length],
           ['Histórico', summary.historicalQueue.length],
           ['Concluídos', summary.allQueue.filter(item => item.status === 'completed').length],
         ],
@@ -383,7 +369,7 @@ export default function SalaDeComandoPremium() {
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <MetricCard label="Ação imediata" value={summary.urgentAlerts.length + summary.pendingDecisions.length} detail="falhas e revisões de risco" tone={summary.urgentAlerts.length > 0 ? 'danger' : 'info'} icon={AlertTriangle} />
         <MetricCard label="Executadas hoje" value={summary.executedToday.length} detail="decisões concluídas" tone="success" icon={CheckCircle2} />
-        <MetricCard label="Fila com erro" value={summary.failedQueue.length} detail={`${summary.pendingQueue.length} em processamento/recuperação${summary.safetyBlockedQueue.length ? ` · ${summary.safetyBlockedQueue.length} protegidos` : ''}${summary.historicalQueue.length ? ` · ${summary.historicalQueue.length} histórico(s)` : ''}`} tone={summary.failedQueue.length > 0 ? 'danger' : 'default'} icon={XCircle} />
+        <MetricCard label="Falhas recentes" value={summary.failedQueue.length} detail={`${summary.retryingQueue.length} com retry · ${summary.pendingQueue.length} em processamento${summary.safetyBlockedQueue.length ? ` · ${summary.safetyBlockedQueue.length} protegidos` : ''}${summary.historicalQueue.length ? ` · ${summary.historicalQueue.length} histórico(s)` : ''}`} tone={summary.failedQueue.length > 0 ? 'danger' : 'default'} icon={XCircle} />
         <MetricCard label="Autonomia segura" value="Ativa" detail="decisões elegíveis sem etapa manual" tone="success" icon={Bot} />
         <MetricCard label="Saúde do sistema" value={summary.healthOk ? 'Estável' : 'Atenção'} detail={summary.healthOk ? 'sincronização e fila operacionais' : summary.healthReasons.join(' · ')} tone={summary.healthOk ? 'success' : 'warning'} icon={Activity} />
       </div>
