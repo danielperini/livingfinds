@@ -20,6 +20,11 @@
     "asin": {
       "type": "string"
     },
+    "source_report_ids_json": { "type": "string" },
+    "source": { "type": "string" },
+    "source_window_start": { "type": "string", "format": "date" },
+    "source_window_end": { "type": "string", "format": "date" },
+    "currency_code": { "type": "string" },
     "date": {
       "type": "string",
       "format": "date"
