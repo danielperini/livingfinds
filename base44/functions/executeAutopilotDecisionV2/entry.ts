@@ -85,7 +85,7 @@ Deno.serve(async (request) => {
 
     const results: any[] = [];
     for (const id of ids) {
-      const decisions = await base44.asServiceRole.entities.OptimizationDecision.filter({ id }, null, 1);
+      const decisions = await base44.asServiceRole.entities.OptimizationDecision.filter({ id }, undefined, 1);
       const decision = decisions[0];
       if (!decision) {
         results.push({ id, ok: false, error: 'Decisão não encontrada' });
@@ -267,7 +267,7 @@ Deno.serve(async (request) => {
           const rows = await base44.asServiceRole.entities.ProductTarget.filter({
             amazon_account_id: decision.amazon_account_id,
             target_id: bidEntityId,
-          }, null, 1).catch(() => []);
+          }, undefined, 1).catch(() => []);
           if (rows[0]) {
             await base44.asServiceRole.entities.ProductTarget.update(rows[0].id, {
               bid: Number(decision.value_after),
@@ -278,7 +278,7 @@ Deno.serve(async (request) => {
           const rows = await base44.asServiceRole.entities.AdGroup.filter({
             amazon_account_id: decision.amazon_account_id,
             ad_group_id: bidEntityId,
-          }, null, 1).catch(() => []);
+          }, undefined, 1).catch(() => []);
           if (rows[0]) {
             await base44.asServiceRole.entities.AdGroup.update(rows[0].id, {
               default_bid: Number(decision.value_after),
@@ -289,7 +289,7 @@ Deno.serve(async (request) => {
           const rows = await base44.asServiceRole.entities.Keyword.filter({
             amazon_account_id: decision.amazon_account_id,
             keyword_id: bidEntityId,
-          }, null, 1).catch(() => []);
+          }, undefined, 1).catch(() => []);
           if (rows[0]) {
             await base44.asServiceRole.entities.Keyword.update(rows[0].id, {
               current_bid: Number(decision.value_after),
@@ -307,7 +307,7 @@ Deno.serve(async (request) => {
           const campRows = await base44.asServiceRole.entities.Campaign.filter({
             amazon_account_id: decision.amazon_account_id,
             $or: [{ campaign_id: campId }, { amazon_campaign_id: campId }],
-          }, null, 1).catch(() => []);
+          }, undefined, 1).catch(() => []);
           if (campRows[0]) {
             const campUpdate: any = { updated_at: now };
             if (['pause_campaign', 'enable_campaign'].includes(decision.action)) {
@@ -407,7 +407,7 @@ Deno.serve(async (request) => {
         const rules = await base44.asServiceRole.entities.RuleExecution.filter({
           amazon_account_id: decision.amazon_account_id,
           idempotency_key: decision.idempotency_key,
-        }, null, 10).catch(() => []);
+        }, undefined, 10).catch(() => []);
         for (const rule of rules) {
           await base44.asServiceRole.entities.RuleExecution.update(rule.id, {
             status: success ? 'completed' : (ambiguous || retryable ? 'pending' : 'failed'),
