@@ -180,7 +180,14 @@ async function collectCanonicalEvidence(base44: any, account: any, correlationId
   const metricSummary = {
     currency: String(account.currency_code || account.currency || 'unknown'),
     ads_daily: { grain: 'date+campaign+ad_group+advertised_product+targeting+placement', rows_after_latest_revision_dedup: dailyRows.length, metrics: summarizeNumeric(dailyRows, ['impressions', 'clicks', 'cost', 'spend', 'sales', 'purchases', 'units_sold']) },
+    ads_legacy_campaign_daily: { rows: (byTable.CampaignMetricsDaily || []).length, metrics: summarizeNumeric(byTable.CampaignMetricsDaily || [], ['impressions', 'clicks', 'spend', 'sales', 'orders']) },
+    ads_ad_group_daily: { rows: (byTable.AdGroupMetricsDaily || []).length, metrics: summarizeNumeric(byTable.AdGroupMetricsDaily || [], ['impressions', 'clicks', 'spend', 'sales', 'orders']) },
+    ads_targeting_daily: { rows: (byTable.TargetingMetricsDaily || []).length, metrics: summarizeNumeric(byTable.TargetingMetricsDaily || [], ['impressions', 'clicks', 'spend', 'sales', 'orders']) },
+    ads_placement_daily: { rows: (byTable.PlacementMetricsDaily || []).length, metrics: summarizeNumeric(byTable.PlacementMetricsDaily || [], ['impressions', 'clicks', 'spend', 'sales', 'orders']) },
     ads_hourly: { grain: 'date+hour+campaign+ad_group+advertised_product+targeting', rows_after_latest_revision_dedup: hourlyRows.length, metrics: summarizeNumeric(hourlyRows, ['impressions', 'clicks', 'cost', 'sales', 'purchases', 'promoted_sales', 'promoted_purchases']) },
+    dayparting_hourly: { rows: (byTable.HourlyMetric || []).length, rows_with_dates: (byTable.HourlyMetric || []).filter((row) => row.date && row.hour !== undefined).length },
+    dayparting_patterns: { rows: (byTable.HourlySalesPattern || []).length, latest_at: (byTable.HourlySalesPattern || []).map(rowTime).filter(Boolean).sort().at(-1) || null },
+    dayparting_decisions: { rows: (byTable.DaypartingDecision || []).length },
     search_terms: {
       rows_after_latest_revision_dedup: termRows.length,
       terms_with_verified_same_sku_orders: termRows.filter((row) => row.same_sku_attribution_verified === true && num(row.same_sku_orders) > 0).length,
