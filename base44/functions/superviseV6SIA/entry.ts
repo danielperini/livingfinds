@@ -214,8 +214,8 @@ async function collectCanonicalEvidence(base44: any, account: any, correlationId
     dayparting_decisions: { rows: (byTable.DaypartingDecision || []).length },
     search_terms: {
       rows_after_latest_revision_dedup: termRows.length,
-      terms_with_verified_same_sku_orders: termRows.filter((row) => row.same_sku_attribution_verified === true && num(row.same_sku_orders) > 0).length,
-      high_spend_zero_order_terms: termRows.filter((row) => num(row.spend) > 0 && num(row.same_sku_orders ?? row.total_orders) === 0).length,
+      terms_with_verified_same_sku_orders: termRows.filter((row) => { const orders = num(row.same_sku_orders); return row.same_sku_attribution_verified === true && orders !== null && orders > 0; }).length,
+      high_spend_zero_order_terms: termRows.filter((row) => { const spend = num(row.spend); const orders = num(row.same_sku_orders ?? row.total_orders); return spend !== null && spend > 0 && orders === 0; }).length,
     },
     retail_sales: { product_level_by_source: productSalesBySource, account_total_by_source: accountSalesBySource, aggregation_levels_kept_separate: true },
     products: { product_records: products.length, records_with_known_fba_available: inventoryKnown.length, fba_available_units: inventoryKnown.length ? inventoryKnown.reduce((sum, row) => sum + Number(num(row.fba_inventory ?? row.available_quantity ?? row.fulfillable_quantity) || 0), 0) : null },
@@ -475,7 +475,7 @@ Deno.serve(async (request) => {
         data_quality_status: evidence.data_quality_status,
         data_query_errors_json: JSON.stringify(evidence.query_errors),
         metrics_summary_json: JSON.stringify(evidence.metrics),
-        decision_ids_json: JSON.stringify(evidence.decisions.map((item) => item.id).filter(Boolean)),
+        decision_ids_json: JSON.stringify(evidence.decisions.map((item: any) => item.id).filter(Boolean)),
         decision_outcomes_json: JSON.stringify(actionOutcomes),
         implementation_status: implementationStatus,
         ai_recommendation_status: success ? 'diagnostic_only' : analysis?.incomplete ? 'incomplete' : gate.allowed === false ? 'not_generated' : 'failed',
@@ -555,7 +555,7 @@ Deno.serve(async (request) => {
       }).catch((error: any) => evidenceLinkErrors.push({ table: 'V6SIAReviewLog', error: sanitizeV6SIAError(error) }));
 
       const refsJson = JSON.stringify({ review_log_id: reviewLog.id, evidence_table: 'V6SIAEvidenceLink', correlation_id: correlationId });
-      await Promise.all(evidence.decisions.map((decision) =>
+      await Promise.all(evidence.decisions.map((decision: any) =>
         base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
           v6sia_review_log_id: reviewLog.id,
           ai_supervision_status: success ? status === 'partial' ? 'partial' : 'completed' : gate.allowed === false ? 'deferred' : 'failed',
