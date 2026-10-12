@@ -20,7 +20,7 @@ export function resolveRepositoryFile(requestedPath, root = process.env.LIVINGFI
     return { ok: false, status: 'blocked', reason: 'Caminho fora do repositório.' };
   }
   const lower = relative.toLowerCase().replaceAll('\\', '/');
-  if (/(^|\/)(\.env($|\.)|secrets?($|\/)|credentials?($|\/)|private|node_modules|\.git)(\/|$)/i.test(lower) ||
+  if (/(^|\/)(\.env($|[/.])|secrets?($|[/.])|credentials?($|[/.])|private($|[/.])|node_modules($|\/)|\.git($|\/))/i.test(lower) ||
       /\.(pem|key|p12|pfx|keystore)$/i.test(lower) ||
       /secret|credential|token/i.test(path.basename(lower))) {
     return { ok: false, status: 'blocked', reason: 'Arquivo ou diretório sensível bloqueado.' };
@@ -42,7 +42,7 @@ export async function readRepositoryFile(requestedPath, root) {
       return { ok: false, status: 'blocked', reason: 'O caminho resolvido por symlink sai do repositório.' };
     }
     const actualLower = actualRelative.toLowerCase().split(path.sep).join('/');
-    if (/(^|\/)(\.env($|\.)|secrets?($|\/)|credentials?($|\/)|private|node_modules|\.git)(\/|$)/i.test(actualLower) ||
+    if (/(^|\/)(\.env($|[/.])|secrets?($|[/.])|credentials?($|[/.])|private($|[/.])|node_modules($|\/)|\.git($|\/))/i.test(actualLower) ||
         /\.(pem|key|p12|pfx|keystore)$/i.test(actualLower) || /secret|credential|token/i.test(path.basename(actualLower)) ||
         !ALLOWED_EXTENSIONS.has(path.extname(actualLower))) {
       return { ok: false, status: 'blocked', reason: 'O destino real do arquivo é sensível ou não permitido.' };
