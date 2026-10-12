@@ -14,6 +14,7 @@ import { findPauseLockedProduct } from '../../shared/productCampaignPauseGuard.t
 import { enforceBidCeilingOnPayload } from '../../shared/amazonBidCeiling.ts';
 import { resolveWinnerKeywordCeilings } from '../../shared/winnerBidPolicy.ts';
 import { loadConfiguredBidPolicy } from '../../shared/configuredBidPolicy.ts';
+import { normalizeSpListFilters } from '../../shared/amazonSpListFilters.ts';
 
 const ALLOWED_PATHS = [
   '/sp/campaigns', '/sp/campaigns/list',
@@ -229,6 +230,7 @@ Deno.serve(async (request) => {
     let guardedPayload = enforceBidCeilingOnPayload(
       path, method, body.payload ?? null, winnerBid.ceilings, configuredBid.ceiling,
     );
+    guardedPayload = normalizeSpListFilters(path, method, guardedPayload);
     if (path === '/sp/campaigns' && ['PUT', 'POST'].includes(method) && Array.isArray(guardedPayload?.campaigns)) {
       const enabling = guardedPayload.campaigns.filter((item: any) =>
         String(item?.state || '').toUpperCase() === 'ENABLED' && item?.campaignId
