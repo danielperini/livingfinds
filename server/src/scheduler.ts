@@ -8,6 +8,7 @@
 import { join } from 'jsr:@std/path@1';
 import { makeFunctions } from './sdk/functions.ts';
 import { schedulerSql } from './db.ts';
+import { runWithLock, validateSchedule } from './schedulerPolicy.ts';
 
 // deno-lint-ignore no-explicit-any
 type Job = { name: string; function: string; cron: string; payload?: Record<string, any>; run_on_startup?: boolean };
@@ -100,21 +101,6 @@ function nowInTz(tz: string) {
   };
 }
 
-export function validateSchedule(jobs: Job[]): string[] {
-  const issues: string[] = [];
-  const seen = new Map<string, string>();
-  for (const job of jobs) {
-    const key = job.function + '|' + job.cron + '|' + JSON.stringify(job.payload ?? {});
-    const previous = seen.get(key);
-    if (previous) issues.push('duplicate:' + job.function + ':' + previous + ':' + job.name);
-    else seen.set(key, job.name);
-    if (!job.name || !job.function || !job.cron || job.cron.trim().split(/\\s+/).length !== 5) {
-      issues.push('invalid:' + (job.name || job.function || 'unnamed'));
-    }
-  }
-  return issues;
-}
-
 async function tryAcquireDistributedLock(lockKey: string): Promise<(() => Promise<void>) | null> {
   const connection = await schedulerSql.reserve();
   try {
@@ -131,12 +117,8 @@ async function tryAcquireDistributedLock(lockKey: string): Promise<(() => Promis
 }
 
 async function runWithDistributedLock<T>(lockKey: string, action: () => Promise<T>): Promise<{ acquired: false } | { acquired: true; value: T }> {
-  const release = await tryAcquireDistributedLock(lockKey);
-  if (!release) return { acquired: false };
-  try { return { acquired: true, value: await action() }; }
-  finally { await release(); }
+  return runWithLock(() => tryAcquireDistributedLock(lockKey), action);
 }
-
 export async function startScheduler(): Promise<void> {
   if ((Deno.env.get('ENABLE_SCHEDULER') ?? 'true') === 'false') {
     schedulerHealth.enabled = false;
