@@ -1,0 +1,14 @@
+{
+  "name": "livingfinds-engineer-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node livingfindsEngineer.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@openai/agents": "^0.20.0",
+    "zod": "^4.1.0"
+  }
+}
