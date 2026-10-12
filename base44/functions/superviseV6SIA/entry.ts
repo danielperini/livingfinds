@@ -512,7 +512,7 @@ Deno.serve(async (request) => {
           try {
             const idempotentBatch = batch.map((link) => ({
               ...link,
-              id: \`v6sia:\${encodeURIComponent(String(link.review_log_id))}:\${encodeURIComponent(String(link.source_table))}:\${encodeURIComponent(String(link.source_record_id))}\`,
+              id: 'v6sia:' + encodeURIComponent(String(link.review_log_id)) + ':' + encodeURIComponent(String(link.source_table)) + ':' + encodeURIComponent(String(link.source_record_id)),
             }));
             await base44.asServiceRole.entities.V6SIAEvidenceLink.bulkCreate(idempotentBatch);
             persisted = true;
