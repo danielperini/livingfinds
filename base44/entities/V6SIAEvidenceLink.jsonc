@@ -1,0 +1,22 @@
+{
+  "name": "V6SIAEvidenceLink",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": { "type": "string" },
+    "profile_id": { "type": "string" },
+    "marketplace_id": { "type": "string" },
+    "correlation_id": { "type": "string" },
+    "review_log_id": { "type": "string" },
+    "source_table": { "type": "string" },
+    "source_record_id": { "type": "string" },
+    "source_report_id": { "type": "string" },
+    "source_job_id": { "type": "string" },
+    "source_date": { "type": "string" },
+    "campaign_id": { "type": "string" },
+    "ad_group_id": { "type": "string" },
+    "asin": { "type": "string" },
+    "sku": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "required": ["amazon_account_id", "review_log_id", "source_table", "source_record_id"]
+}
