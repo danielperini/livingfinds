@@ -58,3 +58,7 @@ export function v6siaReviewCompletion(input: {
 export function v6siaReviewImplementationStatus(decisions: V6SIADecisionLike[]) {
   return v6siaImplementationStatus(decisions);
 }
+
+export function shouldForceV6SIANewAnalysis(supervisionType: string, requested: boolean): boolean {
+  return supervisionType === 'daily_portfolio' || requested === true;
+}
