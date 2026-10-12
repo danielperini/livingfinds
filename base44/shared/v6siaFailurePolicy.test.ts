@@ -31,6 +31,12 @@ Deno.test('does not retry missing values, unsupported actions or exhausted attem
   assertEquals(verifiedNoopRetryPlan({
     action: 'set_budget', expectedBefore: 10, remoteValue: 10, attemptCount: 3, maxAttempts: 3,
   }), null);
+  assertEquals(verifiedNoopRetryPlan({
+    action: 'pause_campaign', expectedBefore: 'ENABLED', remoteValue: 'enabled',
+  })?.attempt_count, 1);
+  assertEquals(verifiedNoopRetryPlan({
+    action: 'pause_campaign', expectedBefore: 'UNKNOWN', remoteValue: 'UNKNOWN',
+  }), null);
 });
 
 Deno.test('redacts credentials from failure text', () => {
