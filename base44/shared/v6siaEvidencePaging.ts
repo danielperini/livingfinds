@@ -15,7 +15,7 @@ export async function readAllEntityPages<T extends Record<string, unknown>>(
   let cursor: string | null = null;
   try {
     while (true) {
-      const page = cursor
+      const page: any = cursor
         ? await entity.filter(query, { cursor, limit: pageSize })
         : await entity.filter(query, { sort, limit: pageSize });
       if (Array.isArray(page)) {
@@ -35,7 +35,7 @@ export async function readAllEntityPages<T extends Record<string, unknown>>(
         if (!id || !seen.has(id)) { rows.push(item); if (id) seen.add(id); }
       }
       if (!page.has_more) return { rows, error: null, complete: true };
-      const next = String(page.next_cursor || '');
+      const next: string = String(page.next_cursor || '');
       if (!next || next === cursor) return { rows, error: 'Cursor ausente ou repetido; consulta incompleta', complete: false };
       cursor = next;
     }
