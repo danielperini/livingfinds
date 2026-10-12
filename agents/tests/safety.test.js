@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { guardAgentAction, isAgentActionAllowed } from '../guardrails/production.js';
 import { readRepositoryFile, resolveRepositoryFile, proposeRepositoryPatch } from '../tools/repository.js';
-import { runAllowlistedTests } from '../tools/tests.js';
+import { runAllowlistedTests, safeTestEnvironment } from '../tools/tests.js';
 import { inspectRuntimeConfiguration, inspectVpsHealth } from '../tools/diagnostics.js';
 import { createLivingFindsEngineer } from '../livingfindsEngineer.js';
 
@@ -23,11 +23,11 @@ test('repository reader rejects traversal, secrets, and partial large files', as
     await mkdir(path.join(root, 'src'));
     await writeFile(path.join(root, 'src', 'ok.ts'), 'export const ok = true;');
     await writeFile(path.join(root, '.env'), 'SECRET=do-not-read');
-    await writeFile(path.join(root, 'src', 'large.ts'), 'x'.repeat(64 * 1024 + 1));
+    await writeFile(path.join(root, 'src', 'large.ts'), 'x'.repeat(64 * 1024 + 1));\n    await writeFile(path.join(root, 'private.md'), 'internal secret');\n    await (await import('node:fs/promises')).symlink(path.join(root, 'private.md'), path.join(root, 'src', 'alias.ts'));
     assert.equal((await readRepositoryFile('src/ok.ts', root)).content, 'export const ok = true;');
     assert.equal(resolveRepositoryFile('../outside.ts', root).status, 'blocked');
     assert.equal(resolveRepositoryFile('.env', root).status, 'blocked');
-    assert.equal((await readRepositoryFile('src/large.ts', root)).status, 'not_read');
+    assert.equal((await readRepositoryFile('src/large.ts', root)).status, 'not_read');\n    assert.equal((await readRepositoryFile('src/alias.ts', root)).status, 'blocked');
     const proposal = await proposeRepositoryPatch({ path: 'src/ok.ts', rationale: 'test', diff: '--- a/src/ok.ts' });
     assert.equal(proposal.written, false);
   } finally {
@@ -35,7 +35,7 @@ test('repository reader rejects traversal, secrets, and partial large files', as
   }
 });
 
-test('test runner accepts only fixed safe suites', async () => {
+test('test runner accepts only fixed safe suites and strips unrelated process secrets', async () => {\n  const env = safeTestEnvironment({ PATH: '/bin', OPENAI_API_KEY: 'must-not-pass', DATABASE_URL: 'must-not-pass' });\n  assert.deepEqual(env, { CI: '1', PATH: '/bin' });
   assert.equal((await runAllowlistedTests('unknown')).status, 'blocked');
   assert.equal((await runAllowlistedTests('v6sia')).command.startsWith('deno test '), true);
 });
