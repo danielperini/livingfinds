@@ -126,15 +126,16 @@ function dedupeDailyRows(rows: any[], fields: string[]) {
   return latestRowsByKey(rows, (row) => keyOf(row, fields), rowTime);
 }
 
-function sourceDescriptor(table: string, rows: any[] | null, dateFields: string[], errors: any[]) {
+function sourceDescriptor(table: string, rows: any[] | null, dateFields: string[], errors: any[], complete = true) {
   if (rows === null) {
-    return { table, read_status: 'error', record_count: null, row_ids_sample: [], error: errors.find((item) => item.table === table)?.error || 'read_failed' };
+    return { table, read_status: 'error', complete: false, record_count: null, error: errors.find((item) => item.table === table)?.error || 'read_failed' };
   }
   const dates = rows.map((row) => rowDate(row, dateFields)).filter(Boolean).sort();
   const asOf = rows.map(rowTime).filter(Boolean).sort().at(-1) || null;
   return {
     table,
-    read_status: rows.length ? 'read' : 'empty',
+    read_status: complete ? rows.length ? 'read' : 'empty' : 'partial',
+    complete,
     record_count: rows.length,
     period_start: dates[0] || null,
     period_end: dates.at(-1) || null,
@@ -174,6 +175,7 @@ async function collectCanonicalEvidence(base44: any, account: any, correlationId
   specs.forEach(([table], index) => {
     byTable[table] = reads[index].rows;
     if (reads[index].error) queryErrors.push({ table, error: reads[index].error });
+    if (Array.isArray(reads[index].rows) && reads[index].rows.some((row: any) => !row?.id)) queryErrors.push({ table, error: 'Uma ou mais linhas não possuem ID persistido para criar vínculo de evidência' });
   });
 
   let decisions = (byTable.OptimizationDecision || []).filter((row) =>
@@ -181,7 +183,7 @@ async function collectCanonicalEvidence(base44: any, account: any, correlationId
     failureIds.includes(String(row.id || ''))
   );
   const foundIds = new Set(decisions.map((row) => String(row.id || '')));
-  for (const id of failureIds.filter((value) => !foundIds.has(value)).slice(0, 10)) {
+  for (const id of failureIds.filter((value) => !foundIds.has(value))) {
     try {
       const rows = await base44.asServiceRole.entities.OptimizationDecision.filter({ id, amazon_account_id: aid }, undefined, 1);
       if (Array.isArray(rows) && rows[0]) decisions.push(rows[0]);
@@ -249,10 +251,10 @@ async function collectCanonicalEvidence(base44: any, account: any, correlationId
   };
   const refs = Object.fromEntries(specs.map(([table, , , dateFields]) => [
     table,
-    sourceDescriptor(table, byTable[table], [...dateFields], queryErrors),
+    sourceDescriptor(table, byTable[table], [...dateFields], queryErrors, reads[specs.findIndex((spec) => spec[0] === table)]?.complete === true),
   ]));
   refs.OptimizationDecision = {
-    ...sourceDescriptor('OptimizationDecision', decisions, [], queryErrors),
+    ...sourceDescriptor('OptimizationDecision', decisions, [], queryErrors, reads[specs.findIndex((spec) => spec[0] === 'OptimizationDecision')]?.complete === true),
     selected_by: correlationId ? 'correlation_id' : 'failure_decision_ids',
   };
   const asOfValues = Object.values(refs).map((item: any) => item.as_of).filter(Boolean).sort();
@@ -293,7 +295,7 @@ Deno.serve(async (request) => {
     if (supervisionType === 'execution_failure' && failures.length === 0) {
       return Response.json({ ok: true, skipped: true, reason: 'Nenhuma falha elegível para análise' });
     }
-    const correlationId = String(body.correlation_id || '').slice(0, 120);
+    const correlationId = String(body.correlation_id || '');
     const evidence = await collectCanonicalEvidence(base44, account, correlationId, failures.map((item) => item.decision_id).filter(Boolean));
     const actionOutcomes = evidence.decisions.map(v6siaDecisionOutcome);
     const implementationStatus = v6siaImplementationStatus(evidence.decisions);
@@ -368,7 +370,7 @@ Deno.serve(async (request) => {
       }
       const raw = String(aiPayload?.choices?.[0]?.message?.content || '{}');
       let findings: any = {};
-      try { findings = JSON.parse(raw); } catch { findings = { diagnosis: raw.slice(0, 1200), parse_warning: true }; }
+      try { findings = JSON.parse(raw); } catch { findings = { diagnosis: raw, parse_warning: true }; }
         analysis = { ok: true, model: 'gpt-4o', response: findings, usage: aiPayload?.usage || null };
         model = 'gpt-4o';
       } catch (error: any) {
@@ -379,7 +381,7 @@ Deno.serve(async (request) => {
 
     const now = new Date().toISOString();
     const success = Boolean(analysis && (analysis.ok !== false));
-    const status = success ? 'success' : gate.allowed === false ? 'deferred' : 'error';
+    let status: 'success' | 'deferred' | 'error' | 'partial' = success ? 'success' : gate.allowed === false ? 'deferred' : 'error';
     const aiCallStatus = model === 'gpt-4o' ? 'called' : model === 'cache' ? 'cache_reused' : model === 'incomplete' ? 'incomplete' : gate.allowed === false ? 'budget_deferred' : 'failed';
     const report = {
       engine_version: 'V6SIA',
@@ -503,13 +505,13 @@ Deno.serve(async (request) => {
       amazon_account_id: account.id,
       operation: 'v6sia_ai_supervision',
       trigger_type: String(body.trigger_type || supervisionType).slice(0, 100),
-      status: status === 'success' ? 'success' : 'warning',
+      status: status === 'success' ? 'success' : status === 'error' ? 'error' : 'warning',
       started_at: startedAt,
       completed_at: now,
       duration_ms: Date.now() - new Date(startedAt).getTime(),
       records_processed: failures.length || Number(observations.reviewed || 0),
       error_message: status === 'error' ? sanitizeV6SIAError(analysis?.error || 'Análise IA falhou') : (reviewLog?.id ? null : 'Falha ao persistir trilha V6SIAReviewLog'),
-      result_summary: JSON.stringify({ ...report, review_log_id: reviewLog?.id || null }).slice(0, 1800),
+      result_summary: JSON.stringify({ ...report, review_log_id: reviewLog?.id || null }),
     }).catch(() => null);
 
     return Response.json({
