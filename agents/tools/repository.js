@@ -28,14 +28,26 @@ export function resolveRepositoryFile(requestedPath, root = process.env.LIVINGFI
   if (!ALLOWED_EXTENSIONS.has(path.extname(lower))) {
     return { ok: false, status: 'blocked', reason: 'Extensão fora da lista de leitura permitida.' };
   }
-  return { ok: true, absolute, relative };
+  return { ok: true, absolute, relative, repoRoot };
 }
 
 export async function readRepositoryFile(requestedPath, root) {
   const resolved = resolveRepositoryFile(requestedPath, root);
   if (!resolved.ok) return resolved;
   try {
-    const actualPath = await realpath(resolved.absolute);\n    const repoRoot = await realpath(process.env.LIVINGFINDS_REPO_PATH || DEFAULT_ROOT);\n    const actualRelative = path.relative(repoRoot, actualPath);\n    if (actualRelative === '..' || actualRelative.startsWith(`..${path.sep}`) || path.isAbsolute(actualRelative)) {\n      return { ok: false, status: 'blocked', reason: 'O caminho resolvido por symlink sai do repositório.' };\n    }\n    const actualLower = actualRelative.toLowerCase().replaceAll('\\\\', '/');\n    if (/(^|\\/)(\\.env($|\\.)|secrets?($|\\/)|credentials?($|\\/)|private|node_modules|\\.git)(\\/|$)/i.test(actualLower) ||\n        /\\.(pem|key|p12|pfx|keystore)$/i.test(actualLower) || /secret|credential|token/i.test(path.basename(actualLower)) ||\n        !ALLOWED_EXTENSIONS.has(path.extname(actualLower))) {\n      return { ok: false, status: 'blocked', reason: 'O destino real do arquivo é sensível ou não permitido.' };\n    }\n    const metadata = await stat(actualPath);
+    const actualPath = await realpath(resolved.absolute);
+    const repoRoot = await realpath(process.env.LIVINGFINDS_REPO_PATH || DEFAULT_ROOT);
+    const actualRelative = path.relative(realRepoRoot, actualPath);
+    if (actualRelative === '..' || actualRelative.startsWith(`..${path.sep}`) || path.isAbsolute(actualRelative)) {
+      return { ok: false, status: 'blocked', reason: 'O caminho resolvido por symlink sai do repositório.' };
+    }
+    const actualLower = actualRelative.toLowerCase().split(path.sep).join('/');
+    if (/(^|\\/)(\\.env($|\\.)|secrets?($|\\/)|credentials?($|\\/)|private|node_modules|\\.git)(\\/|$)/i.test(actualLower) ||
+        /\\.(pem|key|p12|pfx|keystore)$/i.test(actualLower) || /secret|credential|token/i.test(path.basename(actualLower)) ||
+        !ALLOWED_EXTENSIONS.has(path.extname(actualLower))) {
+      return { ok: false, status: 'blocked', reason: 'O destino real do arquivo é sensível ou não permitido.' };
+    }
+    const metadata = await stat(actualPath);
     if (!metadata.isFile()) return { ok: false, status: 'blocked', reason: 'O caminho não é um arquivo.' };
     if (metadata.size > MAX_FILE_BYTES) return { ok: false, status: 'not_read', reason: 'Arquivo excede 64 KiB; nenhum conteúdo parcial foi devolvido.', bytes: metadata.size };
     return { ok: true, status: 'read', path: resolved.relative, bytes: metadata.size, content: await readFile(actualPath, 'utf8') };
