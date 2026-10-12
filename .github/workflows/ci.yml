@@ -108,4 +108,4 @@ jobs:
             base44/functions/runSalesModeWasteRotation/entry.ts \
             base44/functions/runSalesMode/entry.ts
       - name: Test scheduler validation
-        run: deno test --node-modules-dir=auto --allow-env=DATABASE_URL,DB_POOL_MAX,SCHEDULER_DB_POOL_MAX server/src/scheduler.test.ts
+        run: deno test --node-modules-dir=auto server/src/scheduler.test.ts
