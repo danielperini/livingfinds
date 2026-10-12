@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
-import { dateKeyInSaoPaulo, filterKickoffByDate } from '@/lib/kickoffPeriod';
+import { dateKeyInSaoPaulo, filterKickoffByDateRange, loadAllKickoffQueuePages } from '@/lib/kickoffPeriod';
+import KickoffDateRangePicker from './KickoffDateRangePicker';
 import {
   Rocket, Clock, CheckCircle2, XCircle, Pause, RefreshCw,
   Loader2, AlertTriangle, ChevronDown, ChevronUp, Package, Ban, Zap
@@ -221,7 +222,8 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('all');
-  const [periodDate, setPeriodDate] = useState(() => dateKeyInSaoPaulo());
+  const [periodStart, setPeriodStart] = useState(() => dateKeyInSaoPaulo());
+  const [periodEnd, setPeriodEnd] = useState(() => dateKeyInSaoPaulo());
   const [collapsed, setCollapsed] = useState(false);
   const [stockMap, setStockMap] = useState({});
   const [cancelling, setCancelling] = useState(null);
@@ -232,10 +234,13 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
     if (!accountId) return;
     setLoading(true);
     try {
-      const records = await base44.entities.ProductKickoffQueue.filter(
-        { amazon_account_id: accountId },
-        '-created_date',
-        300
+      const records = await loadAllKickoffQueuePages((offset, pageSize) =>
+        base44.entities.ProductKickoffQueue.filter(
+          { amazon_account_id: accountId },
+          '-created_date',
+          pageSize,
+          offset
+        )
       );
       // Deduplicar por ASIN+keyword — manual_only com keyword diferente são itens distintos
       const seen = new Set();
@@ -269,7 +274,7 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
   }, [accountId]);
 
   // Jobs agendados com scheduled_at > 1h no passado
-  const periodItems = filterKickoffByDate(items, periodDate);
+  const periodItems = filterKickoffByDateRange(items, periodStart, periodEnd);
   const stuckJobs = periodItems.filter(i => {
     if (i.status !== 'scheduled') return false;
     if (!i.scheduled_at) return false;
@@ -478,21 +483,12 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
                 ) : null
               )}
             </div>
-            <label className="inline-flex items-center gap-2 text-xs text-slate-400">
-              <span>Período</span>
-              <input
-                type="date"
-                value={periodDate}
-                onChange={event => setPeriodDate(event.target.value)}
-                aria-label="Filtrar Kick-off pela data de atividade"
-                className="rounded-lg border border-surface-3 bg-surface-2 px-2 py-1.5 text-xs text-slate-200 [color-scheme:dark]"
-              />
-              {periodDate && (
-                <button type="button" onClick={() => setPeriodDate('')} className="text-violet-300 hover:text-violet-200">
-                  Todos
-                </button>
-              )}
-            </label>
+            <KickoffDateRangePicker
+              startDate={periodStart}
+              endDate={periodEnd}
+              onChange={(start, end) => { setPeriodStart(start); setPeriodEnd(end); }}
+              onClear={() => { setPeriodStart(''); setPeriodEnd(''); }}
+            />
           </div>
 
           {/* List */}
