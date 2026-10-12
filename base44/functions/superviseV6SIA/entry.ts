@@ -418,6 +418,11 @@ Deno.serve(async (request) => {
       if (cacheRows[0]) await base44.asServiceRole.entities.AIAnalysisCache.update(cacheRows[0].id, cachePayload).catch(() => {});
       else await base44.asServiceRole.entities.AIAnalysisCache.create(cachePayload).catch(() => {});
 
+    }
+
+    // Count every confirmed OpenAI request, including rejected or truncated responses.
+    // Cached results do not consume another API call and must not increment this meter.
+    if (model !== 'cache' && analysis?.provider === 'openai' && analysis?.request_id) {
       const usage = analysis?.usage || {};
       const usedTokens = Number(usage.total_tokens || (Number(usage.prompt_tokens || 0) + Number(usage.completion_tokens || 0)));
       const usageRows = await base44.asServiceRole.entities.AIUsageLog.filter({
