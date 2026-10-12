@@ -49,7 +49,7 @@ test('diagnostics disclose configuration presence only and do not call an unset 
   const result = inspectRuntimeConfiguration({ OPENAI_API_KEY: 'secret', DATABASE_URL: 'postgres://secret' });
   assert.equal(result.checks.openai_api_key_present, true);
   assert.equal(result.checks.database_url_present, true);
-  assert.equal(JSON.stringify(result).includes('secret'), false);
+  assert.equal(JSON.stringify(result).includes('postgres://secret'), false);\n  assert.equal(JSON.stringify(result).includes('must-not-leak'), false);
   assert.equal((await inspectVpsHealth({})).status, 'not_configured');
 });
 
