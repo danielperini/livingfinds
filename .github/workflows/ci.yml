@@ -65,7 +65,8 @@ jobs:
             base44/shared/configuredBidPolicy.test.ts \
             base44/shared/searchTermHarvestPolicy.test.ts \
             base44/shared/servingCampaignGrowthPolicy.test.ts \
-            base44/shared/economicEvidencePolicy.test.ts
+            base44/shared/economicEvidencePolicy.test.ts \
+            base44/shared/v6siaFailurePolicy.test.ts
       - name: Check economic evidence policy
         run: deno check --node-modules-dir=auto base44/shared/economicEvidencePolicy.ts
       - name: Check economic evidence evaluator
@@ -76,6 +77,15 @@ jobs:
         run: deno check --node-modules-dir=auto base44/functions/arbitrateCanonicalDecisionConflicts/entry.ts
       - name: Check canonical decision cycle
         run: deno check --node-modules-dir=auto base44/functions/runCanonicalDecisionCycle/entry.ts
+      - name: Check V6SIA execution and supervision
+        run: |
+          deno check --node-modules-dir=auto \
+            base44/shared/v6siaFailurePolicy.ts \
+            base44/functions/superviseV6SIA/entry.ts \
+            base44/functions/executeApprovedDecisionQueue/entry.ts \
+            base44/functions/confirmExecutedDecisions/entry.ts \
+            base44/functions/reconcileAndRetryDecisions/entry.ts \
+            base44/functions/claudeAdsAgent/entry.ts
       - name: Check canonical weekly review
         run: deno check --node-modules-dir=auto base44/functions/runCanonicalWeeklyDecisionReview/entry.ts
       - name: Check canonical economy-first dayparting
