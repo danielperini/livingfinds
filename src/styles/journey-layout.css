@@ -147,7 +147,7 @@
 .api-catalog-state, .api-catalog-error { display: flex; align-items: center; gap: 12px; margin-top: 18px; padding: 18px; border: 1px solid var(--lf-color-border); border-radius: var(--lf-radius-card); background: var(--lf-color-surface); color: var(--lf-color-text-secondary); font-size: 13px; }
 .api-catalog-error { align-items: flex-start; border-color: #fecaca; color: #991b1b; }
 .api-catalog-error > div { flex: 1; }
-.api-catalog-error strong { font-size: 13px; }
+.api-catalog-error strong { color: #7f1d1d; font-size: 13px; }
 .api-catalog-error p { margin: 4px 0 0; color: #7f1d1d; font-size: 12px; }
 .api-catalog-error button { min-height: 32px; padding: 0 9px; border: 1px solid #fecaca; border-radius: 7px; background: white; color: #991b1b; font-size: 11px; font-weight: 600; cursor: pointer; }
 .api-spin { animation: lf-api-spin 1s linear infinite; }

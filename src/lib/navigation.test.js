@@ -13,5 +13,14 @@ test('active matching does not mark dashboard as active on every route', () => {
   const dashboard = navigationJourneys[0].items[0];
   assert.equal(isNavigationItemActive('/', dashboard), true);
   assert.equal(isNavigationItemActive('/products', dashboard), false);
-  assert.equal(isNavigationItemActive('/products/listing-enhancement', navigationJourneys[0].items[1]), true);
+  assert.equal(isNavigationItemActive('/products/listing-enhancement', navigationJourneys[0].items[1]), false);
+});
+
+test('only the most-specific navigation destination is active', () => {
+  const items = navigationJourneys.flatMap(({ items: groupItems }) => groupItems);
+  for (const path of ['/products/listing-enhancement', '/settings/ads-authorization']) {
+    const active = items.filter((item) => isNavigationItemActive(path, item));
+    assert.equal(active.length, 1);
+    assert.equal(active[0].path, path);
+  }
 });

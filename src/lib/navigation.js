@@ -62,7 +62,12 @@ export const navigationJourneys = [
 ];
 
 export function isNavigationItemActive(pathname, item) {
-  return item.exact ? pathname === item.path : pathname === item.path || pathname.startsWith(`${item.path}/`);
+  const matches = navigationJourneys.flatMap(({ items }) => items)
+    .filter((candidate) => candidate.exact
+      ? pathname === candidate.path
+      : pathname === candidate.path || pathname.startsWith(`${candidate.path}/`))
+    .sort((a, b) => b.path.length - a.path.length);
+  return matches[0]?.path === item.path;
 }
 
 export function getJourneyForPath(pathname) {

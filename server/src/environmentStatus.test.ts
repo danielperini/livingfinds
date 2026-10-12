@@ -8,21 +8,37 @@ Deno.test('environment status returns allowlisted names and configured booleans 
   assert(!serialized.includes(privateValue));
   assertEquals(result.length, environmentIntegrations.length);
   assertEquals(result.find((item) => item.key === 'openai')?.variables[0], {
-    name: 'OPENAI_API_KEY', configured: true,
+    name: 'OPENAI_API_KEY', configured: true, required: true,
   });
   assertEquals(result.find((item) => item.key === 'openai')?.variables[1], {
-    name: 'OPENAI_MODEL', configured: false,
+    name: 'OPENAI_MODEL', configured: false, required: false, defaultValue: 'gpt-4o',
   });
   for (const group of result) for (const variable of group.variables) {
     assertEquals(typeof variable.configured, 'boolean');
-    assertEquals(Object.keys(variable).sort(), ['configured', 'name']);
+    assertEquals(typeof variable.required, 'boolean');
+    assert(variable.name.length > 0);
   }
 });
 
 Deno.test('environment status never reads outside the static allowlist', () => {
   const requested: string[] = [];
   getEnvironmentStatus((name) => { requested.push(name); return undefined; });
-  assertEquals([...new Set(requested)].sort(), environmentIntegrations.flatMap((group) => [...group.variables]).sort());
+  const allowed = environmentIntegrations.flatMap((group) => group.variables.flatMap((item) => [...(item.names ?? [item.name])]));
+  assertEquals([...new Set(requested)].sort(), [...new Set(allowed)].sort());
+});
+
+Deno.test('environment status resolves supported credential aliases and model defaults', () => {
+  const configured = getEnvironmentStatus((name) => name === 'SP_CLIENT_ID' || name === 'SP_CLIENT_SECRET' || name === 'SP_REFRESH_TOKEN' || name === 'OPENAI_API_KEY'
+    ? 'configured-value'
+    : undefined);
+  const spApi = configured.find((item) => item.key === 'amazon_sp_api');
+  assert(spApi?.variables.every((item) => item.configured));
+  const openai = configured.find((item) => item.key === 'openai');
+  assert(openai?.variables[0].configured);
+  assertEquals(openai?.variables[1].required, false);
+  assertEquals(openai?.variables[1].defaultValue, 'gpt-4o');
+  const anthropic = configured.find((item) => item.key === 'anthropic');
+  assertEquals(anthropic?.variables[1].defaultValue, 'claude-3-5-sonnet-20241022');
 });
 
 Deno.test('environment status rejects missing or non-admin sessions without reading environment', async () => {

@@ -112,20 +112,27 @@ export default function AppLayout() {
   const currentMeta = useMemo(() => {
     const exact = pageMeta[location.pathname];
     if (exact) return exact;
+    const navigationItem = getJourneyForPath(location.pathname)?.item;
+    if (navigationItem?.path === location.pathname) {
+      return [navigationItem.label, 'Operação e acompanhamento no Living Finds.'];
+    }
     const parent = Object.entries(pageMeta)
       .filter(([path]) => path !== '/' && location.pathname.startsWith(`${path}/`))
       .sort(([a], [b]) => b.length - a.length)[0];
-    return parent?.[1] || ['Living Finds', 'Gestão inteligente de Amazon Ads e marketplace.'];
+    return parent?.[1] || (navigationItem
+      ? [navigationItem.label, 'Operação e acompanhamento no Living Finds.']
+      : ['Living Finds', 'Gestão inteligente de Amazon Ads e marketplace.']);
   }, [location.pathname]);
   const journey = getJourneyForPath(location.pathname)?.journey;
+  const compact = collapsed && !mobileOpen;
 
-  const navLinkClass = (active) => `lf-nav-link${active ? ' is-active' : ''}${collapsed ? ' is-collapsed' : ''}`;
+  const navLinkClass = (active) => `lf-nav-link${active ? ' is-active' : ''}${compact ? ' is-collapsed' : ''}`;
   const sidebar = (
     <>
       <div className="lf-sidebar-brand">
         <Link to="/" className="lf-brand-link" aria-label="Living Finds — início">
           <BrandMark />
-          {!collapsed && <span className="lf-brand-name">livingfinds</span>}
+          {!compact && <span className="lf-brand-name">livingfinds</span>}
         </Link>
         {mobileOpen ? (
           <button type="button" className="lf-icon-button lg:hidden" onClick={() => setMobileOpen(false)} aria-label="Fechar navegação">
@@ -145,7 +152,7 @@ export default function AppLayout() {
       <nav className="lf-primary-nav" aria-label="Navegação principal">
         {navigationJourneys.map((group) => (
           <section className="lf-nav-group" key={group.id} aria-label={group.label}>
-            {!collapsed && <h2 className="lf-nav-heading">{group.label}</h2>}
+            {!compact && <h2 className="lf-nav-heading">{group.label}</h2>}
             <ul>
               {group.items.map(({ path, icon: Icon, label, exact }) => {
                 const active = isNavigationItemActive(location.pathname, { path, exact });
@@ -155,11 +162,11 @@ export default function AppLayout() {
                       to={path}
                       onClick={() => mobileOpen && setMobileOpen(false)}
                       className={navLinkClass(active)}
-                      title={collapsed ? label : undefined}
+                      title={compact ? label : undefined}
                       aria-current={active ? 'page' : undefined}
                     >
                       <Icon size={18} strokeWidth={1.8} aria-hidden="true" />
-                      {!collapsed && <span>{label}</span>}
+                      {!compact && <span>{label}</span>}
                     </Link>
                   </li>
                 );
@@ -170,7 +177,7 @@ export default function AppLayout() {
       </nav>
 
       <div className="lf-sidebar-footer">
-        {!collapsed ? (
+        {!compact ? (
           <div className="lf-account-card">
             <div className="lf-account-card-top">
               <div className="lf-account-card-copy">

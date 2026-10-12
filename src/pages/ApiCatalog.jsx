@@ -17,18 +17,20 @@ async function readEnvironmentStatus() {
 }
 
 function IntegrationCard({ integration }) {
-  const configured = integration.variables.filter((variable) => variable.configured).length;
-  const complete = configured === integration.variables.length;
+  const requiredVariables = integration.variables.filter((variable) => variable.required !== false);
+  const configuredRequired = requiredVariables.filter((variable) => variable.configured).length;
+  const complete = requiredVariables.length > 0 && configuredRequired === requiredVariables.length;
+  const partial = configuredRequired > 0 && !complete;
   return (
     <article className="api-catalog-card">
       <div className="api-catalog-card-heading">
         <div>
           <h2>{integration.label}</h2>
-          <p>{complete ? 'Configuração presente' : configured ? 'Configuração parcial' : 'Não configurada'}</p>
+          <p>{complete ? 'Credenciais obrigatórias presentes' : partial ? 'Credenciais obrigatórias parciais' : 'Configuração obrigatória ausente'}</p>
         </div>
-        <span className={`api-status-badge ${complete ? 'is-complete' : configured ? 'is-partial' : 'is-missing'}`}>
+        <span className={`api-status-badge ${complete ? 'is-complete' : partial ? 'is-partial' : 'is-missing'}`}>
           {complete ? <Check size={14} /> : <CircleHelp size={14} />}
-          {complete ? 'Configurada' : configured ? 'Parcial' : 'Ausente'}
+          {complete ? 'Configurada' : partial ? 'Parcial' : 'Ausente'}
         </span>
       </div>
       <ul className="api-variable-list">
@@ -37,7 +39,7 @@ function IntegrationCard({ integration }) {
             <code>{variable.name}</code>
             <span className={variable.configured ? 'api-variable-state is-present' : 'api-variable-state'}>
               <span className="api-variable-dot" aria-hidden="true" />
-              {variable.configured ? 'Presente' : 'Ausente'}
+              {variable.configured ? 'Presente' : variable.defaultValue ? `Padrão: ${variable.defaultValue}` : variable.required === false ? 'Opcional' : 'Ausente'}
             </span>
           </li>
         ))}

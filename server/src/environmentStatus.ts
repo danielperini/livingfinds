@@ -1,20 +1,70 @@
-export const environmentIntegrations = [
-  { key: 'amazon_ads', label: 'Amazon Ads', variables: ['ADS_CLIENT_ID', 'ADS_CLIENT_SECRET', 'ADS_REFRESH_TOKEN', 'ADS_PROFILE_ID', 'ADS_ACCOUNT_ID'] },
-  { key: 'amazon_sp_api', label: 'Amazon Selling Partner API', variables: ['AMAZON_LWA_CLIENT_ID', 'AMAZON_LWA_CLIENT_SECRET', 'AMAZON_SP_REFRESH_TOKEN', 'AMAZON_MARKETPLACE_ID', 'AMAZON_SELLER_ID'] },
-  { key: 'openai', label: 'OpenAI', variables: ['OPENAI_API_KEY', 'OPENAI_MODEL'] },
-  { key: 'anthropic', label: 'Anthropic', variables: ['ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL'] },
-  { key: 'database', label: 'Banco de dados', variables: ['DATABASE_URL'] },
-  { key: 'livingfinds_api', label: 'API do Living Finds', variables: ['API_TOKEN', 'ADMIN_PASSWORD'] },
-] as const;
+type EnvironmentVariable = {
+  name: string;
+  names?: readonly string[];
+  required: boolean;
+  defaultValue?: string;
+};
+
+type EnvironmentIntegration = {
+  key: string;
+  label: string;
+  variables: readonly EnvironmentVariable[];
+};
+
+const variable = (name: string, options: Omit<EnvironmentVariable, 'name'> = {}): EnvironmentVariable => ({ name, ...options });
+
+export const environmentIntegrations: readonly EnvironmentIntegration[] = [
+  {
+    key: 'amazon_ads', label: 'Amazon Ads', variables: [
+      variable('ADS_CLIENT_ID', { required: true }),
+      variable('ADS_CLIENT_SECRET', { required: true }),
+      variable('ADS_REFRESH_TOKEN', { required: true }),
+      variable('ADS_PROFILE_ID', { required: true }),
+      variable('ADS_ACCOUNT_ID', { required: true }),
+    ],
+  },
+  {
+    key: 'amazon_sp_api', label: 'Amazon Selling Partner API', variables: [
+      variable('AMAZON_LWA_CLIENT_ID / SP_CLIENT_ID', { names: ['AMAZON_LWA_CLIENT_ID', 'SP_CLIENT_ID'], required: true }),
+      variable('AMAZON_LWA_CLIENT_SECRET / SP_CLIENT_SECRET', { names: ['AMAZON_LWA_CLIENT_SECRET', 'SP_CLIENT_SECRET'], required: true }),
+      variable('AMAZON_SP_REFRESH_TOKEN / SP_REFRESH_TOKEN', { names: ['AMAZON_SP_REFRESH_TOKEN', 'SP_REFRESH_TOKEN'], required: true }),
+    ],
+  },
+  {
+    key: 'openai', label: 'OpenAI', variables: [
+      variable('OPENAI_API_KEY', { required: true }),
+      variable('OPENAI_MODEL', { required: false, defaultValue: 'gpt-4o' }),
+    ],
+  },
+  {
+    key: 'anthropic', label: 'Anthropic', variables: [
+      variable('ANTHROPIC_API_KEY', { required: true }),
+      variable('ANTHROPIC_MODEL_FAST / ANTHROPIC_MODEL', {
+        names: ['ANTHROPIC_MODEL_FAST', 'ANTHROPIC_MODEL'], required: false, defaultValue: 'claude-3-5-sonnet-20241022',
+      }),
+    ],
+  },
+  { key: 'database', label: 'Banco de dados', variables: [variable('DATABASE_URL', { required: true })] },
+  {
+    key: 'livingfinds_api', label: 'API do Living Finds', variables: [
+      variable('API_TOKEN / ADMIN_PASSWORD', { names: ['API_TOKEN', 'ADMIN_PASSWORD'], required: true }),
+    ],
+  },
+];
 
 export type EnvironmentStatusReader = (name: string) => string | undefined;
 
-/** Return a strict allowlist of environment names and presence flags, never values. */
+/** Resolve only allowlisted names and report presence/effective defaults, never secret values. */
 export function getEnvironmentStatus(read: EnvironmentStatusReader) {
   return environmentIntegrations.map(({ key, label, variables }) => ({
     key,
     label,
-    variables: variables.map((name) => ({ name, configured: Boolean(read(name)?.trim()) })),
+    variables: variables.map(({ name, names = [name], required, defaultValue }) => ({
+      name,
+      configured: names.some((candidate) => Boolean(read(candidate)?.trim())),
+      required,
+      ...(defaultValue ? { defaultValue } : {}),
+    })),
   }));
 }
 
@@ -36,6 +86,6 @@ export function makeEnvironmentStatusResponse(
       headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', pragma: 'no-cache' },
     });
   } catch {
-    return Response.json({ ok: false, error: 'Não foi possível consultar a configuração do servidor.' }, { status: 503 });
+    return Response.json({ ok: false, error: 'Não foi possível consultar o estado do ambiente' }, { status: 500 });
   }
 }
