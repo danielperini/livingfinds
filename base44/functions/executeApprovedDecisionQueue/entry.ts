@@ -6,6 +6,7 @@ import {
 } from '../../shared/decisionExecutionPolicy.ts';
 import { validateAmazonAction } from '../../shared/amazonActionRegistry.ts';
 import { evaluateDecisionGovernance } from '../../shared/canonicalDecisionPolicy.ts';
+import { classifyV6SIAFailure, sanitizeV6SIAError } from '../../shared/v6siaFailurePolicy.ts';
 
 const MAX_BATCH = 25;
 const API_DELAY_MS = 400;
@@ -52,6 +53,34 @@ function parseJson(value: any) {
 }
 function present(...values: any[]) {
   return values.find((value) => value !== undefined && value !== null);
+}
+
+async function persistExecutionFailure(base44: any, decision: any, error: unknown) {
+  const message = sanitizeV6SIAError(error);
+  const failureClass = classifyV6SIAFailure(error);
+  const now = new Date().toISOString();
+  const patch: Record<string, unknown> = {
+    error_class: failureClass,
+    error_message: message,
+    execution_error_at: now,
+    ai_supervision_status: 'pending',
+    updated_at: now,
+  };
+  if (failureClass === 'stale_entity') {
+    Object.assign(patch, { status: 'cancelled', queue_status: 'cancelled', confirmation_status: 'not_applicable' });
+  } else if (failureClass === 'permission' || failureClass === 'rejected_request') {
+    Object.assign(patch, { status: 'blocked', queue_status: 'failed', confirmation_status: 'not_applicable' });
+  } else {
+    // A timeout may have happened after Amazon accepted the write. Probe remote
+    // state before any retry; the confirmation worker owns that decision.
+    Object.assign(patch, {
+      status: 'confirming', queue_status: 'completed',
+      confirmation_status: 'pending_probe', confirmation_error: message,
+      last_attempt_at: now,
+    });
+  }
+  await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, patch).catch(() => {});
+  return { error_class: failureClass, error: message };
 }
 
 const RECOVERABLE_GOVERNANCE_BLOCKERS = new Set([
@@ -439,11 +468,14 @@ Deno.serve(async (request) => {
         const ok = data?.executed > 0 || data?.ok === true;
 
         if (!ok && isEntityNotFound(data)) {
-          await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-            status: 'cancelled', error_message: 'CANCELADO: entidade não encontrada na Amazon (ENTITY_NOT_FOUND) — decisão obsoleta',
-          }).catch(() => {});
-          results.push({ id: decision.id, action: decision.action, ok: false, cancelled: true });
+          const saved = await persistExecutionFailure(base44, decision, 'ENTITY_NOT_FOUND: entidade não encontrada na Amazon; decisão obsoleta.');
+          results.push({ id: decision.id, action: decision.action, ok: false, cancelled: true, ...saved });
           skipped++;
+        } else if (!ok && !data?.scheduled) {
+          const detail = data?.error || data?.message || data?.results?.find?.((item: any) => item?.ok === false)?.error || JSON.stringify(data).slice(0, 500);
+          const saved = await persistExecutionFailure(base44, decision, detail);
+          results.push({ id: decision.id, action: decision.action, ok: false, ...saved });
+          failed++;
         } else {
           if (ok && capability.definition?.confirmationRequired) {
             await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
@@ -451,11 +483,12 @@ Deno.serve(async (request) => {
               confirmation_error: null, confirmed_at: null, last_attempt_at: new Date().toISOString(),
             }).catch(() => {});
           }
-          results.push({ id: decision.id, action: decision.action, ok });
+          results.push({ id: decision.id, action: decision.action, ok, scheduled: Boolean(data?.scheduled) });
           if (ok) executed++; else if (data?.scheduled) skipped++; else failed++;
         }
       } catch (e: any) {
-        results.push({ id: decision.id, action: decision.action, ok: false, error: e.message });
+        const saved = await persistExecutionFailure(base44, decision, e);
+        results.push({ id: decision.id, action: decision.action, ok: false, ...saved });
         failed++;
       } finally {
         if (lockOwnerId && decision.lock_key) {
@@ -465,6 +498,16 @@ Deno.serve(async (request) => {
         }
       }
       if (toProcess.indexOf(decision) < toProcess.length - 1) await sleep(API_DELAY_MS);
+    }
+
+    const failureDetails = results.filter((item: any) => item.error_class).slice(0, 10);
+    let v6siaSupervision: any = null;
+    if (failureDetails.length > 0) {
+      const response = await base44.asServiceRole.functions.invoke('superviseV6SIA', {
+        amazon_account_id: aid, _service_role: true, supervision_type: 'execution_failure',
+        correlation_id: body.correlation_id || crypto.randomUUID(), failures: failureDetails,
+      }).catch((error: any) => ({ data: { ok: false, error: sanitizeV6SIAError(error) } }));
+      v6siaSupervision = response?.data || response || null;
     }
 
     await base44.asServiceRole.entities.SyncExecutionLog.create({
@@ -492,6 +535,7 @@ Deno.serve(async (request) => {
       remaining: Math.max(0, approved.length - results.length),
       duration_ms: Date.now() - t0,
       results: results.slice(0, 30),
+      v6sia_supervision: v6siaSupervision ? { ok: v6siaSupervision.ok, status: v6siaSupervision.status, report_id: v6siaSupervision.report_id, reason: v6siaSupervision.reason } : null,
     });
   } catch (error: any) {
     return Response.json({ ok: false, error: error?.message }, { status: 500 });
