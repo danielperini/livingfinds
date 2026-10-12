@@ -69,18 +69,27 @@ export function resolveLLMProvider(preferred: string | undefined, openaiAvailabl
   return 'none';
 }
 
-async function invokeOpenAI(key: string, payload: Json): Promise<Json> {
+export function buildOpenAIRequest(payload: Json): Json {
   const schema = payload?.response_json_schema;
+  const model = String(payload?.model || openaiModel());
+  const isGpt6 = model.startsWith('gpt-6-');
   const body: Json = {
-    model: openaiModel(),
-    temperature: Number(payload?.temperature ?? 0.2),
-    max_tokens: Number(payload?.max_tokens ?? 4096),
+    model,
+    [isGpt6 ? 'max_completion_tokens' : 'max_tokens']: Number(payload?.max_tokens ?? 4096),
     messages: [
       { role: 'system', content: buildSystem(schema, !!payload?.add_context_from_internet) },
       { role: 'user', content: payload?.prompt ?? '' },
     ],
   };
+  if (isGpt6) body.reasoning_effort = payload?.reasoning_effort || 'low';
+  else body.temperature = Number(payload?.temperature ?? 0.2);
   if (schema) body.response_format = { type: 'json_object' }; // JSON mode
+  return body;
+}
+
+async function invokeOpenAI(key: string, payload: Json): Promise<Json> {
+  const schema = payload?.response_json_schema;
+  const body = buildOpenAIRequest(payload);
   const res = await fetch(OPENAI_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
