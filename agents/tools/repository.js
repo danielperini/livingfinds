@@ -42,8 +42,8 @@ export async function readRepositoryFile(requestedPath, root) {
       return { ok: false, status: 'blocked', reason: 'O caminho resolvido por symlink sai do repositório.' };
     }
     const actualLower = actualRelative.toLowerCase().split(path.sep).join('/');
-    if (/(^|\\/)(\\.env($|\\.)|secrets?($|\\/)|credentials?($|\\/)|private|node_modules|\\.git)(\\/|$)/i.test(actualLower) ||
-        /\\.(pem|key|p12|pfx|keystore)$/i.test(actualLower) || /secret|credential|token/i.test(path.basename(actualLower)) ||
+    if (/(^|\/)(\.env($|\.)|secrets?($|\/)|credentials?($|\/)|private|node_modules|\.git)(\/|$)/i.test(actualLower) ||
+        /\.(pem|key|p12|pfx|keystore)$/i.test(actualLower) || /secret|credential|token/i.test(path.basename(actualLower)) ||
         !ALLOWED_EXTENSIONS.has(path.extname(actualLower))) {
       return { ok: false, status: 'blocked', reason: 'O destino real do arquivo é sensível ou não permitido.' };
     }
