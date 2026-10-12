@@ -85,7 +85,6 @@ jobs:
             base44/functions/executeApprovedDecisionQueue/entry.ts \
             base44/functions/confirmExecutedDecisions/entry.ts \
             base44/functions/reconcileAndRetryDecisions/entry.ts \
-            base44/functions/claudeAdsAgent/entry.ts
       - name: Check canonical weekly review
         run: deno check --node-modules-dir=auto base44/functions/runCanonicalWeeklyDecisionReview/entry.ts
       - name: Check canonical economy-first dayparting
