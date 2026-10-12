@@ -2,7 +2,7 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { sanitizeV6SIAError } from '../../shared/v6siaFailurePolicy.ts';
 import { latestRowsByKey, v6siaDecisionOutcome, v6siaImplementationStatus } from '../../shared/v6siaReviewEvidence.ts';
 import { readAllEntityPages } from '../../shared/v6siaEvidencePaging.ts';
-import { buildV6SIAEvidenceLinks, v6siaReviewCompletion } from '../../shared/v6siaLifecycle.ts';
+import { buildV6SIAEvidenceLinks, shouldForceV6SIANewAnalysis, v6siaReviewCompletion } from '../../shared/v6siaLifecycle.ts';
 
 function pickSafeFailures(value: any): any[] {
   if (!Array.isArray(value)) return [];
@@ -301,7 +301,7 @@ Deno.serve(async (request) => {
       entity_id: account.id,
       priority_type: supervisionType === 'execution_failure' ? 'product_loss' : 'strategy',
       // Um ciclo diário analisa os dados atuais; força análise nova, mas o gate ainda aplica orçamento.
-      force: supervisionType === 'daily_portfolio' || body.force_ai === true,
+      force: shouldForceV6SIANewAnalysis(supervisionType, body.force_ai === true),
       input_data: context,
     }).catch((error: any) => ({ data: { allowed: false, reason: sanitizeV6SIAError(error) } }));
     const gate = gateResponse?.data || gateResponse || {};
