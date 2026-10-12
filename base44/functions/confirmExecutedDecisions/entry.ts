@@ -433,6 +433,23 @@ Deno.serve(async (req) => {
       }
     }
 
+    const touchedReviewIds = [...new Set(recent.map((decision: any) => String(decision.v6sia_review_log_id || '')).filter(Boolean))];
+    for (const reviewId of touchedReviewIds) {
+      const [reviewRows, reviewDecisions] = await Promise.all([
+        base44.asServiceRole.entities.V6SIAReviewLog.filter({ id: reviewId, amazon_account_id: aid }, undefined, 1).catch(() => []),
+        base44.asServiceRole.entities.OptimizationDecision.filter({ v6sia_review_log_id: reviewId, amazon_account_id: aid }, '-updated_at', 2000).catch(() => []),
+      ]);
+      const review = reviewRows[0];
+      if (!review) continue;
+      const outcomes = reviewDecisions.map(v6siaDecisionOutcome);
+      await base44.asServiceRole.entities.V6SIAReviewLog.update(reviewId, {
+        implementation_status: v6siaImplementationStatus(reviewDecisions),
+        decision_ids_json: JSON.stringify(reviewDecisions.map((decision: any) => decision.id).filter(Boolean)),
+        decision_outcomes_json: JSON.stringify(outcomes),
+        updated_at: now,
+      }).catch(() => {});
+    }
+
     await base44.asServiceRole.entities.SyncExecutionLog.create({
       amazon_account_id: aid,
       operation: 'confirm_executed_decisions',
