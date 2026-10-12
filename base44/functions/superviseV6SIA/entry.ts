@@ -300,6 +300,8 @@ Deno.serve(async (request) => {
       entity_type: 'account',
       entity_id: account.id,
       priority_type: supervisionType === 'execution_failure' ? 'product_loss' : 'strategy',
+      // Um ciclo diário analisa os dados atuais; força análise nova, mas o gate ainda aplica orçamento.
+      force: supervisionType === 'daily_portfolio' || body.force_ai === true,
       input_data: context,
     }).catch((error: any) => ({ data: { allowed: false, reason: sanitizeV6SIAError(error) } }));
     const gate = gateResponse?.data || gateResponse || {};
@@ -319,36 +321,53 @@ Deno.serve(async (request) => {
         JSON.stringify(context),
       ].join('\n\n');
       try {
-        const apiKey = Deno.env.get('OPENAI_API_KEY') || '';
-        if (!apiKey) throw new Error('OPENAI_API_KEY ausente para supervisão V6SIA');
-        const aiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'gpt-4o',
-          temperature: 0.1,
+        const aiResponse = await base44.asServiceRole.integrations.Core.InvokeLLM({
+          provider: 'openai',
+          model: 'gpt-6-luna',
+          reasoning_effort: 'low',
+          prompt,
           max_tokens: 4000,
-          response_format: { type: 'json_object' },
-          messages: [
-            { role: 'system', content: 'Você é o supervisor V6SIA do Living Finds: especialista em Amazon Ads, finanças de e-commerce, análise de dados, APIs, arquitetura de software, SRE, segurança e testes. Faça apenas diagnóstico. Não execute nem aprove mutações e não invente métricas, IDs ou causas. Separe fatos, hipóteses, correção determinística, teste e risco. A validação determinística do backend prevalece.' },
-            { role: 'user', content: prompt },
-          ],
-        }),
-      });
-      const aiPayload = await aiResponse.json().catch(() => ({}));
-      if (!aiResponse.ok) throw new Error(`OpenAI HTTP ${aiResponse.status}: ${aiPayload?.error?.message || 'falha na supervisão'}`);
-      if (aiPayload?.choices?.[0]?.finish_reason === 'length') {
-        const incomplete: any = new Error('Resposta da IA atingiu o limite de saída; análise incompleta e não será marcada como concluída');
-        incomplete.incomplete = true;
-        throw incomplete;
-      }
-      const raw = String(aiPayload?.choices?.[0]?.message?.content || '{}');
-      let findings: any = {};
-      try { findings = JSON.parse(raw); } catch { findings = { diagnosis: raw, parse_warning: true }; }
-        analysis = { ok: true, model: 'gpt-4o', response: findings, usage: aiPayload?.usage || null };
-        model = 'gpt-4o';
+          response_json_schema: { type: 'object' },
+        });
+        if (!aiResponse?.ok) {
+          const failure: any = new Error(aiResponse?.error || 'O adaptador OpenAI do Hostinger não confirmou a chamada');
+          failure.incomplete = aiResponse?.incomplete === true;
+          failure.metadata = {
+            provider: aiResponse?.provider || 'openai',
+            model: aiResponse?.model || 'gpt-6-luna',
+            request_id: aiResponse?.request_id || null,
+            finish_reason: aiResponse?.finish_reason || null,
+            usage: aiResponse?.usage || null,
+          };
+          throw failure;
+        }
+        const findings = aiResponse.data && typeof aiResponse.data === 'object'
+          ? aiResponse.data
+          : (() => {
+            try { return JSON.parse(String(aiResponse.text || '{}')); }
+            catch { return { diagnosis: String(aiResponse.text || ''), parse_warning: true }; }
+          })();
+        analysis = {
+          ok: true,
+          provider: aiResponse.provider || 'openai',
+          model: aiResponse.model || 'gpt-6-luna',
+          request_id: aiResponse.request_id || null,
+          finish_reason: aiResponse.finish_reason || null,
+          response: findings,
+          usage: aiResponse.usage || null,
+        };
+        model = analysis.model;
       } catch (error: any) {
-        analysis = { ok: false, incomplete: error?.incomplete === true, error: sanitizeV6SIAError(error) };
+        analysis = {
+          ok: false,
+          incomplete: error?.incomplete === true,
+          provider: error?.metadata?.provider || 'openai',
+          model: error?.metadata?.model || 'gpt-6-luna',
+          request_id: error?.metadata?.request_id || null,
+          finish_reason: error?.metadata?.finish_reason || null,
+          usage: error?.metadata?.usage || null,
+          error: sanitizeV6SIAError(error),
+        };
         model = error?.incomplete === true ? 'incomplete' : 'unavailable';
       }
     }
@@ -356,7 +375,7 @@ Deno.serve(async (request) => {
     const now = new Date().toISOString();
     const success = Boolean(analysis && (analysis.ok !== false));
     let status: 'success' | 'deferred' | 'error' | 'partial' = success ? 'success' : gate.allowed === false ? 'deferred' : 'error';
-    const aiCallStatus = model === 'gpt-4o' ? 'called' : model === 'cache' ? 'cache_reused' : model === 'incomplete' ? 'incomplete' : gate.allowed === false ? 'budget_deferred' : 'failed';
+    const aiCallStatus = model === 'cache' ? 'cache_reused' : model === 'incomplete' ? 'incomplete' : analysis?.provider === 'openai' && Boolean(analysis?.request_id) ? 'called' : gate.allowed === false ? 'budget_deferred' : 'failed';
     const report = {
       engine_version: 'V6SIA',
       supervision_type: supervisionType,
@@ -434,8 +453,11 @@ Deno.serve(async (request) => {
         trigger_type: String(body.trigger_type || supervisionType).slice(0, 100),
         engine_version: 'V6SIA',
         status,
-        ai_provider: model === 'gpt-4o' ? 'openai' : null,
-        ai_model: model === 'gpt-4o' || model === 'cache' ? model === 'cache' ? String(gate.model || 'cached_model') : model : null,
+        ai_provider: analysis?.provider || null,
+        ai_model: analysis?.model || (model === 'cache' ? String(gate.model || 'cached_model') : model), 
+        ai_request_id: analysis?.request_id || null,
+        ai_finish_reason: analysis?.finish_reason || null,
+        ai_usage_json: JSON.stringify(analysis?.usage || null),
         ai_call_status: aiCallStatus,
         ai_tokens: tokenCount,
         ai_input_hash: String(gate.input_hash || ''),
