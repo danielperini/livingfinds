@@ -61,6 +61,14 @@ function finish(text: string, schema: unknown): Json {
   return { ok: true, text, data: text };
 }
 
+export function resolveLLMProvider(preferred: string | undefined, openaiAvailable: boolean, anthropicAvailable: boolean) {
+  if (preferred === 'openai') return openaiAvailable ? 'openai' : 'missing_openai';
+  if (preferred === 'anthropic') return anthropicAvailable ? 'anthropic' : 'missing_anthropic';
+  if (openaiAvailable) return 'openai';
+  if (anthropicAvailable) return 'anthropic';
+  return 'none';
+}
+
 async function invokeOpenAI(key: string, payload: Json): Promise<Json> {
   const schema = payload?.response_json_schema;
   const body: Json = {
@@ -79,8 +87,17 @@ async function invokeOpenAI(key: string, payload: Json): Promise<Json> {
     body: JSON.stringify(body),
   });
   const raw = await res.json().catch(() => ({}));
-  if (!res.ok) return { ok: false, error: raw?.error?.message ?? `HTTP ${res.status}`, data: null };
-  return finish((raw?.choices?.[0]?.message?.content ?? '').trim(), schema);
+  const choice = raw?.choices?.[0] ?? {};
+  const metadata = {
+    provider: 'openai',
+    model: raw?.model || openaiModel(),
+    request_id: raw?.id || null,
+    usage: raw?.usage || null,
+    finish_reason: choice?.finish_reason || null,
+  };
+  if (!res.ok) return { ok: false, ...metadata, error: raw?.error?.message ?? `HTTP ${res.status}`, data: null };
+  if (choice?.finish_reason === 'length') return { ok: false, incomplete: true, ...metadata, error: 'A resposta da OpenAI atingiu o limite de saída', data: null };
+  return { ...finish(String(choice?.message?.content ?? '').trim(), schema), ...metadata };
 }
 
 async function invokeAnthropic(key: string, payload: Json): Promise<Json> {
@@ -105,9 +122,12 @@ async function invokeAnthropic(key: string, payload: Json): Promise<Json> {
 async function invokeLLM(payload: Json): Promise<Json> {
   const openaiKey = Deno.env.get('OPENAI_API_KEY');
   const anthropicKey = Deno.env.get('ANTHROPIC_API_KEY');
-  if (openaiKey) return await invokeOpenAI(openaiKey, payload);
-  if (anthropicKey) return await invokeAnthropic(anthropicKey, payload);
-  return { ok: false, error: 'Nenhuma chave de IA configurada (OPENAI_API_KEY/ANTHROPIC_API_KEY)', data: null };
+  const provider = resolveLLMProvider(payload?.provider, Boolean(openaiKey), Boolean(anthropicKey));
+  if (provider === 'openai') return await invokeOpenAI(openaiKey!, payload);
+  if (provider === 'anthropic') return await invokeAnthropic(anthropicKey!, payload);
+  if (provider === 'missing_openai') return { ok: false, provider: 'openai', error: 'OPENAI_API_KEY não configurada no ambiente do Hostinger', data: null };
+  if (provider === 'missing_anthropic') return { ok: false, provider: 'anthropic', error: 'ANTHROPIC_API_KEY não configurada no ambiente do Hostinger', data: null };
+  return { ok: false, provider: null, error: 'Nenhuma chave de IA configurada (OPENAI_API_KEY/ANTHROPIC_API_KEY)', data: null };
 }
 
 async function sendEmail(payload: Json): Promise<Json> {
