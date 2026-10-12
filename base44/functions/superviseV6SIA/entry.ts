@@ -130,6 +130,53 @@ Deno.serve(async (request) => {
       failure_count: failures.length,
       findings: analysis,
     };
+    if (success && gate.allowed === true) {
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
+      const cacheRows = await base44.asServiceRole.entities.AIAnalysisCache.filter({
+        amazon_account_id: account.id,
+        analysis_type: 'v6sia_operational_supervision',
+        entity_type: 'account',
+        input_hash: gate.input_hash,
+      }, '-created_date', 1).catch(() => []);
+      const cachePayload = {
+        amazon_account_id: account.id,
+        analysis_type: 'v6sia_operational_supervision',
+        entity_type: 'account',
+        entity_id: account.id,
+        input_hash: gate.input_hash,
+        result_json: JSON.stringify(analysis),
+        decision: 'diagnose_only',
+        reason: 'V6SIA supervised daily decision cycle or execution failure',
+        status: 'valid',
+        expires_at: expiresAt,
+        created_at: now,
+        updated_at: now,
+      };
+      if (cacheRows[0]) await base44.asServiceRole.entities.AIAnalysisCache.update(cacheRows[0].id, cachePayload).catch(() => {});
+      else await base44.asServiceRole.entities.AIAnalysisCache.create(cachePayload).catch(() => {});
+
+      const usage = analysis?.usage || {};
+      const usedTokens = Number(usage.total_tokens || (Number(usage.prompt_tokens || 0) + Number(usage.completion_tokens || 0)));
+      const usageRows = await base44.asServiceRole.entities.AIUsageLog.filter({
+        amazon_account_id: account.id, log_date: now.slice(0, 10),
+      }, undefined, 1).catch(() => []);
+      if (usageRows[0]) {
+        await base44.asServiceRole.entities.AIUsageLog.update(usageRows[0].id, {
+          calls_made: Number(usageRows[0].calls_made || 0) + 1,
+          tokens_used: Number(usageRows[0].tokens_used || 0) + usedTokens,
+          updated_at: now,
+        }).catch(() => {});
+      } else {
+        await base44.asServiceRole.entities.AIUsageLog.create({
+          amazon_account_id: account.id,
+          log_date: now.slice(0, 10),
+          calls_made: 1,
+          tokens_used: usedTokens,
+          budget_resets_at: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+        }).catch(() => {});
+      }
+    }
+
     const log = await base44.asServiceRole.entities.SyncExecutionLog.create({
       amazon_account_id: account.id,
       operation: 'v6sia_ai_supervision',
