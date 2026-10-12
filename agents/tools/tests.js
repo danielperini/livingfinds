@@ -24,7 +24,15 @@ const TEST_SUITES = Object.freeze({
   },
 });
 
-export function safeTestEnvironment(env = process.env) {\n  const safe = { CI: '1' };\n  for (const name of ['PATH', 'Path', 'HOME', 'USERPROFILE', 'TMP', 'TEMP', 'SystemRoot', 'WINDIR']) {\n    if (env[name]) safe[name] = env[name];\n  }\n  return safe;\n}\n\nexport async function runAllowlistedTests(suite) {
+export function safeTestEnvironment(env = process.env) {
+  const safe = { CI: '1' };
+  for (const name of ['PATH', 'Path', 'HOME', 'USERPROFILE', 'TMP', 'TEMP', 'SystemRoot', 'WINDIR']) {
+    if (env[name]) safe[name] = env[name];
+  }
+  return safe;
+}
+
+export async function runAllowlistedTests(suite) {
   const allowed = guardAgentAction('run_allowlisted_tests');
   if (!allowed.allowed) return allowed;
   const config = TEST_SUITES[suite];
