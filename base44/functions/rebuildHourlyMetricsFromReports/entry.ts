@@ -14,6 +14,24 @@ function metricKey(row: any) {
   return `${row.date}|${row.hour}|${row.campaign_id}|${row.asin || ''}`;
 }
 
+function mergeSourceWindow(current: any, row: any) {
+  const start = String(row.source_window_start || row.date || '').slice(0, 10);
+  const end = String(row.source_window_end || row.date || '').slice(0, 10);
+  if (start && (!current.source_window_start || start < current.source_window_start)) current.source_window_start = start;
+  if (end && (!current.source_window_end || end > current.source_window_end)) current.source_window_end = end;
+  if (row.source_report_id) current.source_report_ids.add(String(row.source_report_id));
+  if (row.source_snapshot_id) current.source_snapshot_ids.add(String(row.source_snapshot_id));
+  if (row.source) {
+    if (current.source && current.source !== row.source) current.source = 'mixed';
+    else current.source = String(row.source);
+  }
+  if (row.currency || row.currency_code) {
+    const currency = String(row.currency || row.currency_code);
+    if (current.currency_code && current.currency_code !== currency) current.currency_code = 'MIXED';
+    else current.currency_code = currency;
+  }
+}
+
 Deno.serve(async (request) => {
   const startedAt = new Date().toISOString();
   try {
@@ -59,6 +77,13 @@ Deno.serve(async (request) => {
         const current = aggregated.get(key) || {
           amazon_account_id: aid,
           marketplace_id: account.marketplace_id || account.marketplace || null,
+          profile_id: account.ads_profile_id || account.profile_id || null,
+          currency_code: String(row.currency || row.currency_code || account.currency_code || account.currency || 'BRL'),
+          source_report_ids: new Set<string>(),
+          source_snapshot_ids: new Set<string>(),
+          source: null,
+          source_window_start: '',
+          source_window_end: '',
           campaign_id: String(row.campaign_id),
           asin: row.asin || asinByCampaign.get(String(row.campaign_id)) || '',
           date: String(row.date).slice(0, 10),
@@ -68,6 +93,7 @@ Deno.serve(async (request) => {
           promoted_orders: 0, promoted_sales: 0, halo_orders: 0, halo_sales: 0,
           attribution_scope: 'total_only',
         };
+        mergeSourceWindow(current, row);
         current.impressions += n(row.impressions);
         current.clicks += n(row.clicks);
         current.spend += n(row.spend);
@@ -98,6 +124,11 @@ Deno.serve(async (request) => {
           halo_orders: row.halo_purchases,
           halo_sales: row.halo_sales,
           attribution_scope: 'same_sku',
+          source_report_id: row.source_report_id,
+          source: row.source || 'amazon_ads_hourly_report',
+          source_window_start: row.source_window_start || row.date,
+          source_window_end: row.source_window_end || row.date,
+          currency: row.currency,
         });
       }
 
@@ -134,6 +165,11 @@ Deno.serve(async (request) => {
             spend: delta('spend'),
             sales: delta('sales'),
             orders: delta('orders'),
+            source_snapshot_id: current.id,
+            source: 'intraday_spend_snapshot',
+            source_window_start: current.spend_date,
+            source_window_end: current.spend_date,
+            currency: current.currency || account.currency_code || account.currency || 'BRL',
           };
           // Não duplicar quando a Amazon já forneceu HOURLY para a mesma chave.
           if (!aggregated.has(metricKey(candidate))) add(candidate);
@@ -152,6 +188,12 @@ Deno.serve(async (request) => {
         const orders = n(row.orders);
         const record = {
           ...row,
+          profile_id: row.profile_id || account.ads_profile_id || account.profile_id || null,
+          source_report_ids_json: JSON.stringify([...row.source_report_ids]),
+          source_snapshot_ids_json: JSON.stringify([...row.source_snapshot_ids]),
+          source: row.source || 'unknown',
+          source_window_start: row.source_window_start || row.date,
+          source_window_end: row.source_window_end || row.date,
           impressions,
           clicks,
           spend,
