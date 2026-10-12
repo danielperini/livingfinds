@@ -47,12 +47,23 @@ export function verifiedNoopRetryPlan(input: {
   if (input.expectedBefore === undefined || input.expectedBefore === null ||
       input.remoteValue === undefined || input.remoteValue === null) return null;
 
-  const expectedNumber = Number(input.expectedBefore);
-  const remoteNumber = Number(input.remoteValue);
-  const numeric = Number.isFinite(expectedNumber) && Number.isFinite(remoteNumber);
-  const same = numeric
-    ? Math.abs(expectedNumber - remoteNumber) <= (input.tolerance ?? 0.01)
-    : String(input.expectedBefore).trim().toLowerCase() === String(input.remoteValue).trim().toLowerCase();
+  const numericActions = new Set([
+    'set_bid', 'reduce_bid', 'increase_bid', 'update_bid',
+    'set_budget', 'update_budget', 'reduce_budget', 'increase_budget',
+  ]);
+  const expectedText = String(input.expectedBefore).trim().toLowerCase();
+  const remoteText = String(input.remoteValue).trim().toLowerCase();
+  if (!expectedText || !remoteText) return null;
+  let same = false;
+  if (numericActions.has(String(input.action))) {
+    const expectedNumber = Number(input.expectedBefore);
+    const remoteNumber = Number(input.remoteValue);
+    if (!Number.isFinite(expectedNumber) || !Number.isFinite(remoteNumber)) return null;
+    same = Math.abs(expectedNumber - remoteNumber) <= (input.tolerance ?? 0.01);
+  } else {
+    const knownStates = new Set(['enabled', 'paused', 'active', 'inactive']);
+    same = knownStates.has(expectedText) && expectedText === remoteText;
+  }
   if (!same) return null;
 
   const attempts = Math.max(0, Number(input.attemptCount || 0));
