@@ -1,65 +1,63 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import {
-  LayoutDashboard, Megaphone, Settings, Menu, ChevronLeft, ChevronRight,
-  ShoppingBag, Bot, Bell, ShieldCheck, CircleDollarSign } from
-'lucide-react';
+import { Bot, ChevronLeft, ChevronRight, Menu, ShieldCheck, X } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
 import FloatingChat from '@/components/chat/FloatingChat';
-
-const navItems = [
-{ path: '/', icon: LayoutDashboard, label: 'Dashboard' },
-{ path: '/products', icon: ShoppingBag, label: 'Produtos' },
-{ path: '/ads', icon: Megaphone, label: 'Publicidade' },
-{ path: '/sala-de-comando', icon: Bot, label: 'Motor' },
-{ path: '/analytics', icon: CircleDollarSign, label: 'Finanças' }];
-
+import { getJourneyForPath, isNavigationItemActive, navigationJourneys } from '@/lib/navigation';
 
 const pageMeta = {
-  '/': ['Dashboard', 'Saúde, rentabilidade e prioridades do negócio.'],
-  '/products': ['Produtos', 'Catálogo, estoque e jornada econômica por ASIN.'],
-  '/inventory': ['Estoque e vendas', 'Catálogo, disponibilidade, vendas e dados SP-API.'],
-  '/ads': ['Publicidade', 'Campanhas, termos e performance Amazon Ads.'],
+  '/': ['Visão geral', 'Saúde, rentabilidade e prioridades do negócio.'],
+  '/products': ['Produtos e estoque', 'Catálogo, disponibilidade e operação por produto.'],
+  '/inventory': ['Estoque e vendas', 'Disponibilidade, vendas e dados sincronizados da Amazon.'],
+  '/ads': ['Campanhas', 'Campanhas, termos e desempenho de Amazon Ads.'],
   '/search-terms': ['Termos de busca', 'Descoberta, conversão e promoção de termos reais.'],
-  '/keyword-management': ['Keywords', 'Lances, correspondência, proteção e performance.'],
-  '/analytics': ['Finanças', 'Receita, margem, ACoS, ROAS e eficiência.'],
-  '/repricing': ['Repricing', 'Preço, margem, Buy Box e regras econômicas.'],
-  '/autopilot': ['Autopilot', 'Regras, proteções e ações automatizadas.'],
-  '/sala-de-comando': ['Motor', 'Decisões determinísticas, riscos e aprovações.'],
-  '/campaign-factory': ['Kick-off e campanhas', 'Criação e manutenção idempotente de campanhas.'],
+  '/keyword-management': ['Palavras-chave', 'Lances, correspondência e desempenho.'],
+  '/analytics': ['Desempenho', 'Receita, margem, ACoS, ROAS e eficiência.'],
+  '/repricing': ['Reprecificação', 'Preço, margem, Buy Box e regras econômicas.'],
+  '/autopilot': ['Autonomia e proteção', 'Regras, proteções e ações automatizadas.'],
+  '/sala-de-comando': ['Decisões e alertas', 'Decisões, riscos e aprovações do motor.'],
+  '/campaign-factory': ['Kick-off', 'Criação e manutenção de campanhas.'],
   '/daypart-crossasin': ['Dayparting', 'Distribuição de orçamento e lances ao longo do dia.'],
-  '/saude-do-sistema': ['Sincronizações', 'Estado das integrações, reports e persistência.'],
-  '/logs': ['Logs', 'Auditoria operacional e respostas da Amazon.'],
-  '/report': ['Relatórios', 'Consolidação operacional e financeira persistida.'],
-  '/users': ['Usuários', 'Acessos e permissões do LivingFinds.'],
-  '/manual': ['Manual', 'Orientações operacionais do sistema.'],
-  '/settings': ['Configurações', 'Conta Amazon, metas e preferências do sistema.']
+  '/saude-do-sistema': ['Saúde do sistema', 'Estado das integrações, relatórios e sincronizações.'],
+  '/logs': ['Histórico e logs', 'Auditoria operacional e respostas da Amazon.'],
+  '/report': ['Relatórios', 'Consolidação operacional e financeira.'],
+  '/users': ['Usuários', 'Acessos e permissões do Living Finds.'],
+  '/manual': ['Ajuda', 'Orientações operacionais do sistema.'],
+  '/settings': ['Preferências', 'Conta Amazon, metas e preferências do sistema.'],
+  '/configuracao/apis': ['APIs e integrações', 'Catálogo de integrações e estado de configuração, sem exibir segredos.'],
+  '/configuracao-de-campanhas': ['Campanhas e limites', 'Configuração de campanhas e limites operacionais.'],
+  '/metrics': ['Métricas', 'Indicadores do negócio e da publicidade.'],
+  '/bid-logs': ['Histórico de lances', 'Alterações e confirmações de lances.'],
+  '/amazon-oauth-setup': ['Autorização Amazon Ads', 'Configuração de autorização da conta de anúncios.'],
 };
 
 function BrandMark() {
   return (
     <div
-      className="w-9 h-9 rounded-xl border border-[#E5E7EB] bg-no-repeat flex-shrink-0"
-      style={{ backgroundImage: "url('/living-finds-mark.png')", backgroundSize: '250%', backgroundPosition: '50% 50%' }}
+      className="lf-brand-mark"
+      style={{ backgroundImage: "url('/living-finds-mark.png')" }}
       role="img"
-      aria-label="Living Finds" />);
-
-
+      aria-label="Living Finds"
+    />
+  );
 }
 
 export default function AppLayout() {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem('lf_sidebar_collapsed') === 'true'; } catch { return false; }
+  });
   const [mobileOpen, setMobileOpen] = useState(false);
   const [accountMode, setAccountMode] = useState('real');
   const [account, setAccount] = useState(null);
   const location = useLocation();
+  const menuButtonRef = useRef(null);
+  const drawerRef = useRef(null);
 
   useEffect(() => {
     let mounted = true;
     document.documentElement.lang = 'pt-BR';
     document.title = 'Living Finds — Gestão Amazon';
-
     const initialize = async () => {
       try {
         const me = await base44.auth.me();
@@ -70,113 +68,166 @@ export default function AppLayout() {
         const current = accounts[0] || null;
         setAccount(current);
         setAccountMode(current?.mode || 'real');
-      } catch (e) {
-        console.error('[AppLayout init]', e?.message);
+      } catch (error) {
+        console.error('[AppLayout init]', error?.message);
       }
     };
-
     initialize();
-    return () => {mounted = false;};
+    return () => { mounted = false; };
   }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem('lf_sidebar_collapsed', String(collapsed)); } catch { /* storage can be disabled */ }
+  }, [collapsed]);
+
+  useEffect(() => {
+    if (!mobileOpen) return undefined;
+    const previousBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const focusTarget = drawerRef.current?.querySelector('a, button');
+    focusTarget?.focus();
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setMobileOpen(false);
+        menuButtonRef.current?.focus();
+      }
+      if (event.key !== 'Tab' || !drawerRef.current) return;
+      const focusable = [...drawerRef.current.querySelectorAll('a[href], button:not([disabled])')];
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousBodyOverflow;
+      menuButtonRef.current?.focus();
+    };
+  }, [mobileOpen]);
+
+  useEffect(() => { setMobileOpen(false); }, [location.pathname]);
 
   const currentMeta = useMemo(() => {
     const exact = pageMeta[location.pathname];
     if (exact) return exact;
-    const parent = Object.entries(pageMeta).
-    filter(([path]) => path !== '/' && location.pathname.startsWith(path)).
-    sort(([a], [b]) => b.length - a.length)[0];
+    const parent = Object.entries(pageMeta)
+      .filter(([path]) => path !== '/' && location.pathname.startsWith(`${path}/`))
+      .sort(([a], [b]) => b.length - a.length)[0];
     return parent?.[1] || ['Living Finds', 'Gestão inteligente de Amazon Ads e marketplace.'];
   }, [location.pathname]);
+  const journey = getJourneyForPath(location.pathname)?.journey;
 
-  const navLinkClass = (active) =>
-  `flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${
-  active ?
-  'bg-[#EFF6FF] text-[#2563EB] font-semibold' :
-  'text-[#374151] hover:bg-[#F5F6F8] hover:text-[#0D1117]'} ${
-  collapsed ? 'justify-center' : ''}`;
+  const navLinkClass = (active) => `lf-nav-link${active ? ' is-active' : ''}${collapsed ? ' is-collapsed' : ''}`;
+  const sidebar = (
+    <>
+      <div className="lf-sidebar-brand">
+        <Link to="/" className="lf-brand-link" aria-label="Living Finds — início">
+          <BrandMark />
+          {!collapsed && <span className="lf-brand-name">livingfinds</span>}
+        </Link>
+        {mobileOpen ? (
+          <button type="button" className="lf-icon-button lg:hidden" onClick={() => setMobileOpen(false)} aria-label="Fechar navegação">
+            <X size={18} />
+          </button>
+        ) : collapsed ? (
+          <button type="button" className="lf-icon-button hidden lg:inline-flex" onClick={() => setCollapsed(false)} aria-label="Expandir navegação" aria-expanded={false} title="Expandir navegação">
+            <ChevronRight size={17} />
+          </button>
+        ) : (
+          <button type="button" className="lf-icon-button hidden lg:inline-flex" onClick={() => setCollapsed(true)} aria-label="Recolher navegação" aria-expanded aria-controls="living-finds-navigation" title="Recolher navegação">
+            <ChevronLeft size={17} />
+          </button>
+        )}
+      </div>
+
+      <nav className="lf-primary-nav" aria-label="Navegação principal">
+        {navigationJourneys.map((group) => (
+          <section className="lf-nav-group" key={group.id} aria-label={group.label}>
+            {!collapsed && <h2 className="lf-nav-heading">{group.label}</h2>}
+            <ul>
+              {group.items.map(({ path, icon: Icon, label, exact }) => {
+                const active = isNavigationItemActive(location.pathname, { path, exact });
+                return (
+                  <li key={path}>
+                    <Link
+                      to={path}
+                      onClick={() => mobileOpen && setMobileOpen(false)}
+                      className={navLinkClass(active)}
+                      title={collapsed ? label : undefined}
+                      aria-current={active ? 'page' : undefined}
+                    >
+                      <Icon size={18} strokeWidth={1.8} aria-hidden="true" />
+                      {!collapsed && <span>{label}</span>}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ))}
+      </nav>
+
+      <div className="lf-sidebar-footer">
+        {!collapsed ? (
+          <div className="lf-account-card">
+            <div className="lf-account-card-top">
+              <div className="lf-account-card-copy">
+                <p>Conta Amazon</p>
+                <span>{account?.name || account?.profile_name || 'Conta conectada'}</span>
+              </div>
+              {account?.status === 'connected'
+                ? <span className="lf-connection-dot" aria-label="Conta conectada" />
+                : <ShieldCheck size={16} className="lf-icon-warning" aria-label="Estado da conexão não confirmado" />}
+            </div>
+            <ModeBadge mode={accountMode} className="mt-2" />
+          </div>
+        ) : (
+          <div className="lf-account-card-collapsed" title={account?.name || 'Conta Amazon'}>
+            <ShieldCheck size={17} />
+          </div>
+        )}
+      </div>
+    </>
+  );
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#F5F6F8] text-[#0D1117]" style={{ isolation: 'isolate' }}>
-      {mobileOpen ? <button type="button" className="fixed inset-0 bg-black/40 z-40 lg:hidden cursor-default" onClick={() => setMobileOpen(false)} aria-label="Fechar menu" /> : null}
+    <div className={`lf-app-shell${collapsed ? ' is-sidebar-collapsed' : ''}`}>
+      {mobileOpen && <button type="button" className="lf-drawer-backdrop" onClick={() => { setMobileOpen(false); menuButtonRef.current?.focus(); }} aria-label="Fechar navegação" />}
 
       <aside
-        className={`fixed lg:relative z-50 h-full flex flex-col bg-white border-r border-[#E5E7EB] transition-all duration-200 ease-out ${collapsed ? 'w-[76px]' : 'w-[238px]'} ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
-        
-        <div className={`flex items-center h-[68px] px-4 ${collapsed ? 'justify-center' : 'justify-between'}`}>
-          <Link to="/" className="flex items-center gap-3 min-w-0" aria-label="Ir para o dashboard">
-            <BrandMark />
-            {!collapsed ? <span className="font-semibold text-[#0D1117] text-[17px] tracking-[-0.03em]">livingfinds</span> : null}
-          </Link>
-          {!collapsed ?
-          <button type="button" onClick={() => setCollapsed(true)} className="hidden lg:flex items-center justify-center w-8 h-8 rounded-lg text-[#6B7280] hover:text-[#0D1117] hover:bg-[#F5F6F8]" aria-label="Recolher menu" title="Recolher menu">
-              <ChevronLeft className="w-4 h-4" />
-            </button> :
-          null}
-        </div>
-
-        <nav className="flex-1 px-2.5 pb-4 pt-2 overflow-y-auto scrollbar-thin space-y-1" aria-label="Navegação principal">
-          {navItems.map(({ path, icon: Icon, label }) => {
-            const active = location.pathname === path || path !== '/' && location.pathname.startsWith(path);
-            return (
-              <Link key={path} to={path} onClick={() => setMobileOpen(false)} className={navLinkClass(active)} title={collapsed ? label : undefined}>
-                <Icon className="w-[18px] h-[18px] flex-shrink-0" strokeWidth={1.8} />
-                {!collapsed ? <span className="text-[15px] font-medium truncate">{label}</span> : null}
-              </Link>);
-
-          })}
-        </nav>
-
-        <div className="p-3 space-y-2 border-t border-[#E5E7EB]">
-          <Link to="/settings" className={navLinkClass(location.pathname.startsWith('/settings'))} title={collapsed ? 'Configurações' : undefined}>
-            <Settings className="w-[18px] h-[18px]" strokeWidth={1.8} />
-            {!collapsed ? <span className="text-[15px] font-medium">Configurações</span> : null}
-          </Link>
-          {!collapsed ?
-          <div className="rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3">
-              <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="text-xs font-medium text-[#0D1117] truncate">Conta Amazon</p>
-                  <p className="text-[11px] text-[#6B7280] mt-0.5 truncate">{account?.name || account?.profile_name || 'Conta conectada'}</p>
-                </div>
-                {account?.status === 'connected' ?
-              <span className="relative flex w-2 h-2 flex-shrink-0" title="Conta conectada">
-                    <span className="absolute inline-flex w-full h-full rounded-full bg-emerald-400 opacity-60 animate-pulse-badge" />
-                    <span className="relative inline-flex w-2 h-2 rounded-full bg-emerald-500" />
-                  </span> :
-
-              <ShieldCheck className="w-4 h-4 text-amber-500 flex-shrink-0" />
-              }
-              </div>
-              <ModeBadge mode={accountMode} className="mt-2" />
-            </div> :
-
-          <button type="button" onClick={() => setCollapsed(false)} className="w-full flex items-center justify-center h-8 rounded-lg text-[#6B7280] hover:text-[#0D1117] hover:bg-[#F5F6F8]" aria-label="Expandir menu" title="Expandir menu">
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          }
-        </div>
+        id="living-finds-navigation"
+        ref={drawerRef}
+        className={`lf-sidebar${collapsed ? ' is-collapsed' : ''}${mobileOpen ? ' is-mobile-open' : ''}`}
+        aria-label="Navegação do Living Finds"
+        aria-modal={mobileOpen ? 'true' : undefined}
+        role={mobileOpen ? 'dialog' : 'complementary'}
+      >
+        {sidebar}
       </aside>
 
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <header className="min-h-[68px] flex items-center gap-3 px-4 md:px-6 bg-white border-b border-[#E5E7EB] flex-shrink-0">
-          <button type="button" className="lg:hidden w-10 h-10 flex items-center justify-center rounded-lg text-[#4B5563] hover:bg-[#F5F6F8]" onClick={() => setMobileOpen(true)} aria-label="Abrir menu" title="Abrir menu">
-            <Menu className="w-5 h-5" />
+      <div className="lf-main-column">
+        <header className="lf-topbar">
+          <button ref={menuButtonRef} type="button" className="lf-icon-button lf-mobile-menu-button" onClick={() => setMobileOpen(true)} aria-label="Abrir navegação" aria-expanded={mobileOpen} aria-controls="living-finds-navigation">
+            <Menu size={20} />
           </button>
-          <div className="min-w-0 flex-1">
-            <h1 className="text-lg md:text-[22px] font-semibold text-[#0D1117] tracking-[-0.025em] truncate">{currentMeta[0]}</h1>
-            <p className="hidden sm:block text-[13px] text-[#6B7280] mt-0.5 truncate">{currentMeta[1]}</p>
+          <div className="lf-page-heading">
+            <div className="lf-breadcrumbs" aria-label="Você está em">
+              <span>Living Finds</span>
+              {journey && <><span aria-hidden="true">/</span><span>{journey.label}</span></>}
+            </div>
+            <h1>{currentMeta[0]}</h1>
+            <p>{currentMeta[1]}</p>
           </div>
-          <button type="button" className="relative w-10 h-10 flex items-center justify-center rounded-lg border border-[#E5E7EB] bg-white text-[#6B7280] hover:text-[#0D1117] hover:bg-[#F5F6F8]" aria-label="Notificações" title="Notificações">
-            <Bell className="w-[18px] h-[18px]" />
-          </button>
-          <Link to="/sala-de-comando" className="flex items-center gap-2 px-3.5 h-10 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-sm font-semibold whitespace-nowrap transition-colors text-[hsl(var(--destructive-foreground))]">
-            <Bot className="w-4 h-4" />
-            <span className="hidden sm:inline">Central de Decisões</span>
+          <Link to="/sala-de-comando" className="lf-command-link" aria-label="Abrir Central de Decisões">
+            <Bot size={17} aria-hidden="true" />
+            <span>Central de Decisões</span>
           </Link>
         </header>
-        <main className="flex-1 overflow-y-auto scrollbar-thin bg-[#F5F6F8]"><Outlet /></main>
+        <main className="lf-page-content"><Outlet /></main>
       </div>
       <FloatingChat accountId={account?.id} />
-    </div>);
-
+    </div>
+  );
 }
