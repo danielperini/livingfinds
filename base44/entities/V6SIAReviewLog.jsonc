@@ -33,7 +33,8 @@
     "started_at": { "type": "string", "format": "date-time" },
     "completed_at": { "type": "string", "format": "date-time" },
     "duration_ms": { "type": "number" },
-    "created_at": { "type": "string", "format": "date-time" }
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
   },
   "required": ["amazon_account_id", "correlation_id", "review_type", "status", "ai_call_status"]
 }
