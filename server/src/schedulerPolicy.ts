@@ -13,7 +13,7 @@ export function validateSchedule(jobs: SchedulerJob[]): string[] {
     const previous = seen.get(key);
     if (previous) issues.push('duplicate:' + job.function + ':' + previous + ':' + job.name);
     else seen.set(key, job.name);
-    if (!job.name || !job.function || !job.cron || job.cron.trim().split(/\\s+/).length !== 5) {
+    if (!job.name || !job.function || !job.cron || job.cron.trim().split(/\s+/).length !== 5) {
       issues.push('invalid:' + (job.name || job.function || 'unnamed'));
     }
   }
