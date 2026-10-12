@@ -87,10 +87,10 @@ export function buildOpenAIRequest(payload: Json): Json {
   return body;
 }
 
-async function invokeOpenAI(key: string, payload: Json): Promise<Json> {
+export async function invokeOpenAI(key: string, payload: Json, fetchImpl: typeof fetch = fetch): Promise<Json> {
   const schema = payload?.response_json_schema;
   const body = buildOpenAIRequest(payload);
-  const res = await fetch(OPENAI_URL, {
+  const res = await fetchImpl(OPENAI_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
     body: JSON.stringify(body),
