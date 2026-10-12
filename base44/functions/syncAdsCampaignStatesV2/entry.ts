@@ -1,5 +1,6 @@
 // v8 — sem invoke aninhado + bulk DB ops para evitar rate limit
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { includeFilter } from '../../shared/adsApiFilters.ts';
 
 // Não importar ARCHIVED — elas não têm valor operacional e inflam o banco
 const STATES = ['ENABLED', 'PAUSED'];
@@ -83,7 +84,7 @@ async function listCampaignsForState(
 
   do {
     const bodyPayload: any = { stateFilter: { include: [state] }, maxResults: 500 };
-    if (targetingType) bodyPayload.targetingTypeFilter = [targetingType];
+    if (targetingType) bodyPayload.targetingTypeFilter = includeFilter([targetingType]);
     if (nextToken) bodyPayload.nextToken = nextToken;
 
     const res = await fetch(`${base}/sp/campaigns/list`, {

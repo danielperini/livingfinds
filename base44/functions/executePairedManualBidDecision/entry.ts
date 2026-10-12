@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
+import { includeFilter } from '../../shared/adsApiFilters.ts';
 import { clampBidToConfiguredPolicy, loadConfiguredBidPolicy } from '../../shared/configuredBidPolicy.ts';
 
 const BID_ACTIONS = new Set(['reduce_bid', 'increase_bid', 'update_bid', 'set_bid']);
@@ -128,8 +129,8 @@ async function executeOne(base44: any, decision: any) {
   if (!campaignId || !adGroupId) throw new Error('Não foi possível resolver campaign_id e ad_group_id para sincronizar os dois bids');
 
   const groupsResponse = await ads(base44, accountId, 'readAdGroupBeforePairedBid', 'POST', '/sp/adGroups/list', {
-    campaignIdFilter: [campaignId],
-    adGroupIdFilter: [adGroupId],
+    campaignIdFilter: includeFilter([campaignId]),
+    adGroupIdFilter: includeFilter([adGroupId]),
     stateFilter: { include: ['ENABLED', 'PAUSED'] },
     maxResults: 10,
   }, 'application/vnd.spAdGroup.v3+json');
@@ -139,10 +140,10 @@ async function executeOne(base44: any, decision: any) {
   let resolvedKeywordId = keywordId;
   if (!resolvedKeywordId) {
     const keywordsResponse = await ads(base44, accountId, 'readKeywordBeforePairedBid', 'POST', '/sp/keywords/list', {
-      campaignIdFilter: [campaignId],
-      adGroupIdFilter: [adGroupId],
+      campaignIdFilter: includeFilter([campaignId]),
+      adGroupIdFilter: includeFilter([adGroupId]),
       stateFilter: { include: ['ENABLED', 'PAUSED'] },
-      matchTypeFilter: ['EXACT'],
+      matchTypeFilter: includeFilter(['EXACT']),
       maxResults: 100,
     }, 'application/vnd.spKeyword.v3+json');
     const remoteKeywords = listOf(keywordsResponse, 'keywords');

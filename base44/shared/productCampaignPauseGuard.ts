@@ -60,13 +60,19 @@ export function campaignMatchesProduct(campaign: any, product: any): boolean {
   // is stale or differs in formatting. Without that linkage, a conflicting
   // SKU must still block ASIN-only matching to protect sibling SKUs.
   if (campaignIds.some(id => ids(product).has(id))) return true;
-  if (campaign.sku && product.sku) return norm(campaign.sku) === norm(product.sku);
-  const campaignAsin = norm(campaign.asin || campaign.advertised_asin);
+
+  const campaignAccountId = campaign.amazon_account_id || campaign.account_id;
+  const productAccountId = product.amazon_account_id || product.account_id;
+  if (campaignAccountId && productAccountId && String(campaignAccountId) !== String(productAccountId)) return false;
+
   const campaignSku = norm(campaign.sku);
-  return Boolean(
-    (campaignAsin && campaignAsin === norm(product.asin)) ||
-    (campaignSku && campaignSku === norm(product.sku))
-  );
+  const productSku = norm(product.sku);
+  // When either side has a SKU, ASIN alone is ambiguous: parent/child and
+  // sibling offers can share an ASIN while representing distinct sellable SKUs.
+  if (campaignSku || productSku) return Boolean(campaignSku && productSku && campaignSku === productSku);
+
+  const campaignAsin = norm(campaign.asin || campaign.advertised_asin);
+  return Boolean(campaignAsin && campaignAsin === norm(product.asin));
 }
 
 export function findPauseLockedProduct(products: any[], campaign: any): any | null {

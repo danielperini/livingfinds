@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { includeFilter } from '../../shared/adsApiFilters.ts';
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const DEFAULT_ASINS = [
@@ -123,7 +124,7 @@ Deno.serve(async (request) => {
 
     const campaignResult = await ads(base44, accountId, 'listAutoCampaignsForRepair', 'POST', '/sp/campaigns/list', {
       stateFilter: { include: ['ENABLED', 'PAUSED'] },
-      targetingTypeFilter: ['AUTO'],
+      targetingTypeFilter: includeFilter(['AUTO']),
       maxResults: 500,
     }, 'application/vnd.spCampaign.v3+json');
 
@@ -169,7 +170,7 @@ Deno.serve(async (request) => {
           }
 
           const adGroupsResult = await ads(base44, accountId, 'listAdGroupsForAutoRepair', 'POST', '/sp/adGroups/list', {
-            campaignIdFilter: [campaignId],
+            campaignIdFilter: includeFilter([campaignId]),
             stateFilter: { include: ['ENABLED', 'PAUSED'] },
             maxResults: 100,
           }, 'application/vnd.spAdGroup.v3+json');
@@ -200,8 +201,8 @@ Deno.serve(async (request) => {
 
           const adGroupId = String(adGroup.adGroupId);
           const productAdsResult = await ads(base44, accountId, 'listProductAdsForAutoRepair', 'POST', '/sp/productAds/list', {
-            campaignIdFilter: [campaignId],
-            adGroupIdFilter: [adGroupId],
+            campaignIdFilter: includeFilter([campaignId]),
+            adGroupIdFilter: includeFilter([adGroupId]),
             stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] },
             maxResults: 100,
           }, 'application/vnd.spProductAd.v3+json');

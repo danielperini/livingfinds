@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { includeFilter } from '../../shared/adsApiFilters.ts';
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -80,7 +81,7 @@ Deno.serve(async (request) => {
     // PAUSED/ARCHIVED ficam fora do ciclo e preservam apenas histórico.
     const campaignsResponse = await ads(base44, accountId, 'listManualCampaignsForBidParity', 'POST', '/sp/campaigns/list', {
       stateFilter: { include: ['ENABLED'] },
-      targetingTypeFilter: ['MANUAL'],
+      targetingTypeFilter: includeFilter(['MANUAL']),
       maxResults: 500,
     }, 'application/vnd.spCampaign.v3+json');
     if (!campaignsResponse?.ok) return Response.json({ ok: false, error: 'Falha ao listar campanhas manuais', detail: campaignsResponse });
@@ -108,7 +109,7 @@ Deno.serve(async (request) => {
       }
 
       const groupsResponse = await ads(base44, accountId, 'listAdGroupsForBidParity', 'POST', '/sp/adGroups/list', {
-        campaignIdFilter: [campaignId],
+        campaignIdFilter: includeFilter([campaignId]),
         stateFilter: { include: ['ENABLED'] },
         maxResults: 100,
       }, 'application/vnd.spAdGroup.v3+json');
@@ -122,8 +123,8 @@ Deno.serve(async (request) => {
         // na consulta e podia enxergar 1 EXACT em um grupo que, na realidade, tinha dezenas
         // de BROAD/PHRASE, alterando o defaultBid de um grupo multi-keyword antigo.
         const keywordsResponse = await ads(base44, accountId, 'listAllKeywordsForBidParity', 'POST', '/sp/keywords/list', {
-          campaignIdFilter: [campaignId],
-          adGroupIdFilter: [adGroupId],
+          campaignIdFilter: includeFilter([campaignId]),
+          adGroupIdFilter: includeFilter([adGroupId]),
           stateFilter: { include: ['ENABLED'] },
           maxResults: 100,
         }, 'application/vnd.spKeyword.v3+json');

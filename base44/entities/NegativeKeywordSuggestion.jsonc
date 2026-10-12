@@ -21,16 +21,14 @@
       "type": "string"
     },
     "clicks": {
-      "type": "number",
-      "default": 0
+      "type": "number"
     },
+    "orders": { "type": "number" },
     "spend": {
-      "type": "number",
-      "default": 0
+      "type": "number"
     },
     "sales": {
-      "type": "number",
-      "default": 0
+      "type": "number"
     },
     "acos": {
       "type": "number"
@@ -44,14 +42,22 @@
         "pending",
         "approved",
         "rejected",
-        "applied"
+        "applied",
+        "sent"
       ],
       "default": "pending"
     },
     "applied_at": {
       "type": "string",
       "format": "date-time"
-    }
+    },
+    "execution_status": {
+      "type": "string",
+      "enum": ["not_started", "sending", "sent", "confirmed", "failed"]
+    },
+    "execution_error": { "type": "string" },
+    "agent_action_id": { "type": "string" },
+    "amazon_request_id": { "type": "string" }
   },
   "required": [
     "amazon_account_id",
