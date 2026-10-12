@@ -36,7 +36,7 @@ export async function readRepositoryFile(requestedPath, root) {
   if (!resolved.ok) return resolved;
   try {
     const actualPath = await realpath(resolved.absolute);
-    const repoRoot = await realpath(process.env.LIVINGFINDS_REPO_PATH || DEFAULT_ROOT);
+    const realRepoRoot = await realpath(resolved.repoRoot);
     const actualRelative = path.relative(realRepoRoot, actualPath);
     if (actualRelative === '..' || actualRelative.startsWith(`..${path.sep}`) || path.isAbsolute(actualRelative)) {
       return { ok: false, status: 'blocked', reason: 'O caminho resolvido por symlink sai do repositório.' };
