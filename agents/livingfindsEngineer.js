@@ -1,5 +1,5 @@
 import { Agent, run } from '@openai/agents';
-import { inspectGithubActionsTool } from './tools/github.js';
+import path from 'node:path';\nimport { pathToFileURL } from 'node:url';\nimport { inspectGithubActionsTool } from './tools/github.js';
 import { inspectRuntimeConfigurationTool, inspectVpsHealthTool } from './tools/diagnostics.js';
 import { proposePatchTool, readRepositoryFileTool } from './tools/repository.js';
 import { runAllowlistedTestsTool } from './tools/tests.js';
@@ -55,7 +55,7 @@ async function readTaskFromStdin() {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const input = process.argv.slice(2).join(' ') || await readTaskFromStdin();
   try {
     const result = await analyzeWithLivingFindsEngineer(input);
