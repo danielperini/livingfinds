@@ -103,7 +103,14 @@ async function collectCanonicalEvidence(base44: any, account: any, correlationId
   const aid = String(account.id);
   const specs = [
     ['UnifiedAdsMetricsDaily', '-date', 5000, ['date']],
+    ['CampaignMetricsDaily', '-date', 5000, ['date']],
+    ['AdGroupMetricsDaily', '-date', 3000, ['date']],
+    ['TargetingMetricsDaily', '-date', 5000, ['date']],
+    ['PlacementMetricsDaily', '-date', 3000, ['date']],
     ['UnifiedAdsMetricsHourly', '-date', 5000, ['date']],
+    ['HourlyMetric', '-date', 5000, ['date']],
+    ['HourlySalesPattern', '-updated_at', 3000, []],
+    ['DaypartingDecision', '-created_at', 1000, []],
     ['SearchTerm', '-date', 5000, ['date']],
     ['SalesDaily', '-date', 5000, ['date']],
     ['DailyProductAdsAssessment', '-assessment_date', 5000, ['assessment_date']],
@@ -111,6 +118,8 @@ async function collectCanonicalEvidence(base44: any, account: any, correlationId
     ['ProductEconomics', '-updated_at', 3000, []],
     ['RepricingSnapshot', '-captured_at', 3000, []],
     ['CampaignChangeHistory', '-created_at', 1000, []],
+    ['CampaignBidHistory', '-created_at', 1000, []],
+    ['AdsBidChangeLog', '-created_at', 1000, []],
     ['OptimizationDecision', '-created_at', 2000, []],
   ] as const;
   const reads = await Promise.all(specs.map(([table, sort, limit]) =>
@@ -152,7 +161,7 @@ async function collectCanonicalEvidence(base44: any, account: any, correlationId
     String(row.unique_key || keyOf(row, ['date', 'campaign_id', 'ad_group_id', 'advertised_asin', 'advertised_sku', 'normalized_search_term', 'search_term'])),
     rowTime,
   );
-  const salesRows = byTable.SalesDaily || [];
+  const salesRows = latestRowsByKey(byTable.SalesDaily || [], (row) => keyOf(row, ['date', 'aggregation_level', 'asin', 'sku', 'source']), rowTime);
   const productSales = salesRows.filter((row) => String(row.aggregation_level || 'product') === 'product');
   const accountSales = salesRows.filter((row) => String(row.aggregation_level || '') === 'account_total');
   const productSalesBySource = Object.fromEntries([...new Set(productSales.map((row) => String(row.source || 'unknown')))].map((source) => [
@@ -163,7 +172,8 @@ async function collectCanonicalEvidence(base44: any, account: any, correlationId
     source,
     summarizeNumeric(accountSales.filter((row) => String(row.source || 'unknown') === source), ['units_ordered', 'orders', 'ordered_product_sales', 'gross_revenue', 'net_revenue']),
   ]));
-  const products = byTable.Product || [];
+  const products = latestRowsByKey(byTable.Product || [], (row) => keyOf(row, ['asin', 'sku']), rowTime);
+  const assessments = latestRowsByKey(byTable.DailyProductAdsAssessment || [], (row) => keyOf(row, ['assessment_date', 'product_id', 'asin', 'sku']), rowTime);
   const inventoryKnown = products.filter((row) => num(row.fba_inventory ?? row.available_quantity ?? row.fulfillable_quantity) !== null);
   const changes = byTable.CampaignChangeHistory || [];
   const snapshots = byTable.RepricingSnapshot || [];
@@ -178,7 +188,7 @@ async function collectCanonicalEvidence(base44: any, account: any, correlationId
     },
     retail_sales: { product_level_by_source: productSalesBySource, account_total_by_source: accountSalesBySource, aggregation_levels_kept_separate: true },
     products: { product_records: products.length, records_with_known_fba_available: inventoryKnown.length, fba_available_units: inventoryKnown.length ? inventoryKnown.reduce((sum, row) => sum + Number(num(row.fba_inventory ?? row.available_quantity ?? row.fulfillable_quantity) || 0), 0) : null },
-    product_ads_assessments: { rows: (byTable.DailyProductAdsAssessment || []).length, metrics: summarizeNumeric(byTable.DailyProductAdsAssessment || [], ['impressions', 'clicks', 'spend', 'ads_sales', 'real_sales', 'orders_ads', 'units_real']) },
+    product_ads_assessments: { rows_after_latest_revision_dedup: assessments.length, metrics: summarizeNumeric(assessments, ['impressions', 'clicks', 'spend', 'ads_sales', 'real_sales', 'orders_ads', 'units_real']) },
     repricing_snapshots: { rows: snapshots.length, fresh: snapshots.filter((row) => row.data_fresh === true).length, loss_confirmed: snapshots.filter((row) => row.economic_state === 'LOSS_CONFIRMED').length },
     campaign_changes: { rows: changes.length, latest_at: changes.map(rowTime).filter(Boolean).sort().at(-1) || null },
   };
