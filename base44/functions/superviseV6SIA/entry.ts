@@ -1,5 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { sanitizeV6SIAError } from '../../shared/v6siaFailurePolicy.ts';
+import { latestRowsByKey, v6siaDecisionOutcome, v6siaImplementationStatus } from '../../shared/v6siaReviewEvidence.ts';
 
 function pickSafeFailures(value: any): any[] {
   if (!Array.isArray(value)) return [];
@@ -37,6 +38,173 @@ function safeObservations(value: any): any {
   return output;
 }
 
+function num(value: any): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function rowTime(row: any): string | null {
+  return row?.synced_at || row?.updated_at || row?.created_at || row?.observed_at || row?.captured_at || null;
+}
+
+function rowDate(row: any, fields: string[]): string | null {
+  for (const field of fields) {
+    const value = String(row?.[field] || '').slice(0, 10);
+    if (/^\\d{4}-\\d{2}-\\d{2}$/.test(value)) return value;
+  }
+  return null;
+}
+
+async function readCanonicalTable(base44: any, table: string, accountId: string, sort: string, limit: number) {
+  try {
+    const entity = base44.asServiceRole.entities[table];
+    if (!entity?.filter) throw new Error('Tabela ou método de leitura indisponível');
+    const rows = await entity.filter({ amazon_account_id: accountId }, sort, limit);
+    return { rows: Array.isArray(rows) ? rows : [], error: null };
+  } catch (error: any) {
+    return { rows: null, error: sanitizeV6SIAError(error) };
+  }
+}
+
+function keyOf(row: any, fields: string[]) {
+  return fields.map((field) => String(row?.[field] ?? '').trim()).join('|');
+}
+
+function summarizeNumeric(rows: any[], fields: string[]) {
+  const output: Record<string, any> = {};
+  for (const field of fields) {
+    const values = rows.map((row) => num(row?.[field])).filter((value): value is number => value !== null);
+    output[field] = values.length
+      ? { total: values.reduce((sum, value) => sum + value, 0), records_with_value: values.length }
+      : { state: 'unavailable' };
+  }
+  return output;
+}
+
+function sourceDescriptor(table: string, rows: any[] | null, dateFields: string[], errors: any[]) {
+  if (rows === null) {
+    return { table, read_status: 'error', record_count: null, row_ids_sample: [], error: errors.find((item) => item.table === table)?.error || 'read_failed' };
+  }
+  const dates = rows.map((row) => rowDate(row, dateFields)).filter(Boolean).sort();
+  const asOf = rows.map(rowTime).filter(Boolean).sort().at(-1) || null;
+  return {
+    table,
+    read_status: rows.length ? 'read' : 'empty',
+    record_count: rows.length,
+    period_start: dates[0] || null,
+    period_end: dates.at(-1) || null,
+    as_of: asOf,
+    row_ids_sample: rows.slice(0, 40).map((row) => String(row.id || '')).filter(Boolean),
+  };
+}
+
+async function collectCanonicalEvidence(base44: any, account: any, correlationId: string, failureIds: string[]) {
+  const aid = String(account.id);
+  const specs = [
+    ['UnifiedAdsMetricsDaily', '-date', 5000, ['date']],
+    ['UnifiedAdsMetricsHourly', '-date', 5000, ['date']],
+    ['SearchTerm', '-date', 5000, ['date']],
+    ['SalesDaily', '-date', 5000, ['date']],
+    ['DailyProductAdsAssessment', '-assessment_date', 5000, ['assessment_date']],
+    ['Product', '-updated_at', 3000, []],
+    ['ProductEconomics', '-updated_at', 3000, []],
+    ['RepricingSnapshot', '-captured_at', 3000, []],
+    ['CampaignChangeHistory', '-created_at', 1000, []],
+    ['OptimizationDecision', '-created_at', 2000, []],
+  ] as const;
+  const reads = await Promise.all(specs.map(([table, sort, limit]) =>
+    readCanonicalTable(base44, table, aid, sort, limit)
+  ));
+  const byTable: Record<string, any[] | null> = {};
+  const queryErrors: any[] = [];
+  specs.forEach(([table], index) => {
+    byTable[table] = reads[index].rows;
+    if (reads[index].error) queryErrors.push({ table, error: reads[index].error });
+  });
+
+  let decisions = (byTable.OptimizationDecision || []).filter((row) =>
+    (correlationId && String(row.correlation_id || '') === correlationId) ||
+    failureIds.includes(String(row.id || ''))
+  );
+  const foundIds = new Set(decisions.map((row) => String(row.id || '')));
+  for (const id of failureIds.filter((value) => !foundIds.has(value)).slice(0, 10)) {
+    try {
+      const rows = await base44.asServiceRole.entities.OptimizationDecision.filter({ id, amazon_account_id: aid }, undefined, 1);
+      if (Array.isArray(rows) && rows[0]) decisions.push(rows[0]);
+    } catch (error: any) {
+      queryErrors.push({ table: 'OptimizationDecision', error: sanitizeV6SIAError(error) });
+    }
+  }
+
+  const dailyRowsRaw = byTable.UnifiedAdsMetricsDaily || [];
+  const dailyRows = latestRowsByKey(dailyRowsRaw, (row) =>
+    keyOf(row, ['date', 'campaign_id', 'ad_group_id', 'advertised_product_id', 'advertised_sku', 'targeting', 'placement']),
+    rowTime,
+  );
+  const hourlyRowsRaw = byTable.UnifiedAdsMetricsHourly || [];
+  const hourlyRows = latestRowsByKey(hourlyRowsRaw, (row) =>
+    keyOf(row, ['date', 'hour', 'campaign_id', 'ad_group_id', 'advertised_asin', 'advertised_sku', 'targeting']),
+    rowTime,
+  );
+  const termRowsRaw = byTable.SearchTerm || [];
+  const termRows = latestRowsByKey(termRowsRaw, (row) =>
+    String(row.unique_key || keyOf(row, ['date', 'campaign_id', 'ad_group_id', 'advertised_asin', 'advertised_sku', 'normalized_search_term', 'search_term'])),
+    rowTime,
+  );
+  const salesRows = byTable.SalesDaily || [];
+  const productSales = salesRows.filter((row) => String(row.aggregation_level || 'product') === 'product');
+  const accountSales = salesRows.filter((row) => String(row.aggregation_level || '') === 'account_total');
+  const productSalesBySource = Object.fromEntries([...new Set(productSales.map((row) => String(row.source || 'unknown')))].map((source) => [
+    source,
+    summarizeNumeric(productSales.filter((row) => String(row.source || 'unknown') === source), ['units_ordered', 'orders', 'ordered_product_sales', 'gross_revenue', 'net_revenue']),
+  ]));
+  const accountSalesBySource = Object.fromEntries([...new Set(accountSales.map((row) => String(row.source || 'unknown')))].map((source) => [
+    source,
+    summarizeNumeric(accountSales.filter((row) => String(row.source || 'unknown') === source), ['units_ordered', 'orders', 'ordered_product_sales', 'gross_revenue', 'net_revenue']),
+  ]));
+  const products = byTable.Product || [];
+  const inventoryKnown = products.filter((row) => num(row.fba_inventory ?? row.available_quantity ?? row.fulfillable_quantity) !== null);
+  const changes = byTable.CampaignChangeHistory || [];
+  const snapshots = byTable.RepricingSnapshot || [];
+  const metricSummary = {
+    currency: String(account.currency_code || account.currency || 'unknown'),
+    ads_daily: { grain: 'date+campaign+ad_group+advertised_product+targeting+placement', rows_after_latest_revision_dedup: dailyRows.length, metrics: summarizeNumeric(dailyRows, ['impressions', 'clicks', 'cost', 'spend', 'sales', 'purchases', 'units_sold']) },
+    ads_hourly: { grain: 'date+hour+campaign+ad_group+advertised_product+targeting', rows_after_latest_revision_dedup: hourlyRows.length, metrics: summarizeNumeric(hourlyRows, ['impressions', 'clicks', 'cost', 'sales', 'purchases', 'promoted_sales', 'promoted_purchases']) },
+    search_terms: {
+      rows_after_latest_revision_dedup: termRows.length,
+      terms_with_verified_same_sku_orders: termRows.filter((row) => row.same_sku_attribution_verified === true && num(row.same_sku_orders) > 0).length,
+      high_spend_zero_order_terms: termRows.filter((row) => num(row.spend) > 0 && num(row.same_sku_orders ?? row.total_orders) === 0).length,
+    },
+    retail_sales: { product_level_by_source: productSalesBySource, account_total_by_source: accountSalesBySource, aggregation_levels_kept_separate: true },
+    products: { product_records: products.length, records_with_known_fba_available: inventoryKnown.length, fba_available_units: inventoryKnown.length ? inventoryKnown.reduce((sum, row) => sum + Number(num(row.fba_inventory ?? row.available_quantity ?? row.fulfillable_quantity) || 0), 0) : null },
+    product_ads_assessments: { rows: (byTable.DailyProductAdsAssessment || []).length, metrics: summarizeNumeric(byTable.DailyProductAdsAssessment || [], ['impressions', 'clicks', 'spend', 'ads_sales', 'real_sales', 'orders_ads', 'units_real']) },
+    repricing_snapshots: { rows: snapshots.length, fresh: snapshots.filter((row) => row.data_fresh === true).length, loss_confirmed: snapshots.filter((row) => row.economic_state === 'LOSS_CONFIRMED').length },
+    campaign_changes: { rows: changes.length, latest_at: changes.map(rowTime).filter(Boolean).sort().at(-1) || null },
+  };
+  const refs = Object.fromEntries(specs.map(([table, , , dateFields]) => [
+    table,
+    sourceDescriptor(table, byTable[table], [...dateFields], queryErrors),
+  ]));
+  refs.OptimizationDecision = {
+    ...sourceDescriptor('OptimizationDecision', decisions, [], queryErrors),
+    selected_by: correlationId ? 'correlation_id' : 'failure_decision_ids',
+  };
+  const asOfValues = Object.values(refs).map((item: any) => item.as_of).filter(Boolean).sort();
+  const startValues = Object.values(refs).map((item: any) => item.period_start).filter(Boolean).sort();
+  const endValues = Object.values(refs).map((item: any) => item.period_end).filter(Boolean).sort();
+  return {
+    refs,
+    decisions,
+    query_errors: queryErrors,
+    data_as_of: asOfValues.at(-1) || null,
+    window_start: startValues[0] || null,
+    window_end: endValues.at(-1) || null,
+    data_quality_status: queryErrors.length ? (Object.values(byTable).some((rows) => Array.isArray(rows)) ? 'partial' : 'unavailable') : 'complete',
+    metrics: metricSummary,
+  };
+}
+
 Deno.serve(async (request) => {
   const startedAt = new Date().toISOString();
   try {
@@ -59,14 +227,30 @@ Deno.serve(async (request) => {
     if (supervisionType === 'execution_failure' && failures.length === 0) {
       return Response.json({ ok: true, skipped: true, reason: 'Nenhuma falha elegível para análise' });
     }
-
+    const correlationId = String(body.correlation_id || '').slice(0, 120);
+    const evidence = await collectCanonicalEvidence(base44, account, correlationId, failures.map((item) => item.decision_id).filter(Boolean));
+    const actionOutcomes = evidence.decisions.map(v6siaDecisionOutcome);
+    const implementationStatus = v6siaImplementationStatus(evidence.decisions);
     const context = {
       amazon_account_id: account.id,
+      profile_id: account.ads_profile_id || null,
+      marketplace_id: account.marketplace_id || account.marketplace || null,
       supervision_type: supervisionType,
       engine_version: 'V6SIA',
-      correlation_id: String(body.correlation_id || '').slice(0, 120),
+      correlation_id: correlationId,
       failures,
       observations,
+      canonical_evidence: {
+        data_quality_status: evidence.data_quality_status,
+        data_as_of: evidence.data_as_of,
+        metrics: evidence.metrics,
+        sources: Object.fromEntries(Object.entries(evidence.refs).map(([table, ref]: [string, any]) => [table, {
+          read_status: ref.read_status, record_count: ref.record_count, period_start: ref.period_start,
+          period_end: ref.period_end, as_of: ref.as_of, error: ref.error,
+        }])),
+        query_errors: evidence.query_errors,
+        decisions: actionOutcomes,
+      },
     };
     const gateResponse = await base44.asServiceRole.functions.invoke('aiGatekeeper', {
       amazon_account_id: account.id,
@@ -125,6 +309,7 @@ Deno.serve(async (request) => {
     const now = new Date().toISOString();
     const success = Boolean(analysis && (analysis.ok !== false));
     const status = success ? 'success' : gate.allowed === false ? 'deferred' : 'error';
+    const aiCallStatus = model === 'gpt-4o' ? 'called' : model === 'cache' ? 'cache_reused' : gate.allowed === false ? 'budget_deferred' : 'failed';
     const report = {
       engine_version: 'V6SIA',
       supervision_type: supervisionType,
@@ -133,6 +318,13 @@ Deno.serve(async (request) => {
       gate_reason: gate.reason || null,
       correlation_id: context.correlation_id,
       failure_count: failures.length,
+      source_tables: Object.keys(evidence.refs),
+      source_counts: Object.fromEntries(Object.entries(evidence.refs).map(([table, ref]: [string, any]) => [table, ref.record_count])),
+      data_as_of: evidence.data_as_of,
+      data_quality_status: evidence.data_quality_status,
+      implementation_status: implementationStatus,
+      ai_recommendation_status: 'diagnostic_only',
+      decision_outcomes: actionOutcomes,
       findings: analysis,
     };
     if (success && gate.allowed === true) {
@@ -182,6 +374,60 @@ Deno.serve(async (request) => {
       }
     }
 
+    let reviewLog: any = null;
+    const usageForLog = analysis?.usage || {};
+    const tokenCount = Number(usageForLog.total_tokens || (Number(usageForLog.prompt_tokens || 0) + Number(usageForLog.completion_tokens || 0))) || 0;
+    try {
+      reviewLog = await base44.asServiceRole.entities.V6SIAReviewLog.create({
+        amazon_account_id: account.id,
+        profile_id: account.ads_profile_id || null,
+        marketplace_id: account.marketplace_id || account.marketplace || null,
+        correlation_id: correlationId || crypto.randomUUID(),
+        review_type: supervisionType,
+        trigger_type: String(body.trigger_type || supervisionType).slice(0, 100),
+        engine_version: 'V6SIA',
+        status,
+        ai_provider: model === 'gpt-4o' ? 'openai' : null,
+        ai_model: model === 'gpt-4o' || model === 'cache' ? model === 'cache' ? String(gate.model || 'cached_model') : model : null,
+        ai_call_status: aiCallStatus,
+        ai_tokens: tokenCount,
+        ai_input_hash: String(gate.input_hash || ''),
+        source_tables_json: JSON.stringify(Object.keys(evidence.refs)),
+        source_refs_json: JSON.stringify(evidence.refs),
+        source_counts_json: JSON.stringify(Object.fromEntries(Object.entries(evidence.refs).map(([table, ref]: [string, any]) => [table, ref.record_count]))),
+        data_window_start: evidence.window_start,
+        data_window_end: evidence.window_end,
+        data_as_of: evidence.data_as_of,
+        data_quality_status: evidence.data_quality_status,
+        data_query_errors_json: JSON.stringify(evidence.query_errors),
+        metrics_summary_json: JSON.stringify(evidence.metrics),
+        decision_ids_json: JSON.stringify(evidence.decisions.map((item) => item.id).filter(Boolean)),
+        decision_outcomes_json: JSON.stringify(actionOutcomes),
+        implementation_status: implementationStatus,
+        ai_recommendation_status: success ? 'diagnostic_only' : 'failed',
+        findings_json: JSON.stringify(analysis).slice(0, 12000),
+        gate_reason: gate.reason ? sanitizeV6SIAError(gate.reason) : null,
+        started_at: startedAt,
+        completed_at: now,
+        duration_ms: Date.now() - new Date(startedAt).getTime(),
+        created_at: now,
+      });
+    } catch (error: any) {
+      console.error('[superviseV6SIA] V6SIAReviewLog persistence failed:', sanitizeV6SIAError(error));
+    }
+
+    if (reviewLog?.id) {
+      const refsJson = JSON.stringify({ review_log_id: reviewLog.id, source_refs: evidence.refs, correlation_id: correlationId }).slice(0, 12000);
+      await Promise.all(evidence.decisions.map((decision) =>
+        base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+          v6sia_review_log_id: reviewLog.id,
+          ai_supervision_status: success ? 'completed' : gate.allowed === false ? 'deferred' : 'failed',
+          ai_reviewed_at: now,
+          data_evidence_refs: refsJson,
+        }).catch(() => null)
+      ));
+    }
+
     const log = await base44.asServiceRole.entities.SyncExecutionLog.create({
       amazon_account_id: account.id,
       operation: 'v6sia_ai_supervision',
@@ -191,16 +437,22 @@ Deno.serve(async (request) => {
       completed_at: now,
       duration_ms: Date.now() - new Date(startedAt).getTime(),
       records_processed: failures.length || Number(observations.reviewed || 0),
-      error_message: status === 'error' ? sanitizeV6SIAError(analysis?.error || 'Análise IA falhou') : null,
-      result_summary: JSON.stringify(report).slice(0, 1800),
+      error_message: status === 'error' ? sanitizeV6SIAError(analysis?.error || 'Análise IA falhou') : (reviewLog?.id ? null : 'Falha ao persistir trilha V6SIAReviewLog'),
+      result_summary: JSON.stringify({ ...report, review_log_id: reviewLog?.id || null }).slice(0, 1800),
     }).catch(() => null);
 
     return Response.json({
-      ok: status === 'success' || status === 'deferred',
+      ok: (status === 'success' || status === 'deferred') && Boolean(reviewLog?.id),
       engine_version: 'V6SIA',
-      status,
-      reason: gate.reason || null,
-      report_id: log?.id || null,
+      status: reviewLog?.id ? status : 'error',
+      reason: gate.reason || (!reviewLog?.id ? 'Falha ao persistir trilha de auditoria' : null),
+      report_id: reviewLog?.id || log?.id || null,
+      sync_log_id: log?.id || null,
+      data_as_of: evidence.data_as_of,
+      data_quality_status: evidence.data_quality_status,
+      implementation_status: implementationStatus,
+      ai_call_status: aiCallStatus,
+      decision_outcomes: actionOutcomes,
       analysis,
     });
   } catch (error: any) {
