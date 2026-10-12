@@ -163,6 +163,7 @@ export default function Products({ externalRefreshTrigger }) {
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
+  const [recoveryProductsExpanded, setRecoveryProductsExpanded] = useState(false);
   const [sortBy, setSortBy] = useState('champions');
   const [colSort, setColSort] = useState(null); // { column, direction }
   const [page, setPage] = useState(1);
@@ -413,6 +414,7 @@ export default function Products({ externalRefreshTrigger }) {
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
   const paginated = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const displayedPaginated = paginated.filter(product => !productNeedsRecovery(product) || recoveryProductsExpanded);
 
   // ── Ações ─────────────────────────────────────────────────────────────────
   const toggleCampaign = async (product) => {
@@ -507,7 +509,7 @@ export default function Products({ externalRefreshTrigger }) {
   };
 
   const toggleSelect = (id) => setSelectedIds(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
-  const toggleSelectAll = () => selectedIds.size === paginated.length ? setSelectedIds(new Set()) : setSelectedIds(new Set(paginated.map(p => p.id)));
+  const toggleSelectAll = () => selectedIds.size === displayedPaginated.length ? setSelectedIds(new Set()) : setSelectedIds(new Set(displayedPaginated.map(p => p.id)));
   const clearSelection = () => setSelectedIds(new Set());
   const selectedProducts = paginated.filter(p => selectedIds.has(p.id));
 
@@ -696,7 +698,7 @@ export default function Products({ externalRefreshTrigger }) {
             { key: 'no_campaign', label: `Sem Campanha (${withoutCampaign})` },
             ...(restocked > 0 ? [{ key: 'restocked', label: `🔄 Reabastecidos (${restocked})` }] : []),
           ].map(item => (
-            <button type="button" key={item.key} onClick={() => { setFilter(item.key); setPage(1); }}
+            <button type="button" key={item.key} onClick={() => { setFilter(item.key); setPage(1); if (item.key === 'inactive') setRecoveryProductsExpanded(true); }}
               className={`text-sm px-3 py-1.5 rounded-full border transition-colors whitespace-nowrap ${filter === item.key ? 'bg-cyan/20 text-cyan border-cyan/30' : 'bg-surface-2 text-slate-300 border-surface-3 hover:text-slate-100'}`}>
               {item.label}
             </button>
@@ -766,8 +768,8 @@ export default function Products({ externalRefreshTrigger }) {
                 <tr className="border-b border-[#E5E7EB] bg-[#F8FAFC]">
                   <th className="px-3 py-3 w-10">
                     <button type="button" onClick={toggleSelectAll}
-                      className={`p-0.5 rounded transition-colors ${selectedIds.size === paginated.length && paginated.length > 0 ? 'text-cyan' : 'text-slate-400 hover:text-slate-200'}`}>
-                      {selectedIds.size === paginated.length && paginated.length > 0 ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                      className={`p-0.5 rounded transition-colors ${displayedPaginated.length > 0 && displayedPaginated.every(product => selectedIds.has(product.id)) ? 'text-cyan' : 'text-slate-400 hover:text-slate-200'}`}>
+                      {displayedPaginated.length > 0 && displayedPaginated.every(product => selectedIds.has(product.id)) ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
                     </button>
                   </th>
                   <th className="px-4 py-3 text-left text-[13px] font-semibold text-[#6B7280] uppercase tracking-wide whitespace-nowrap">Produto</th>
@@ -780,8 +782,33 @@ export default function Products({ externalRefreshTrigger }) {
               <tbody>
                 {paginated.map((product, index) => (
                   <Fragment key={product.id}>
-                    {(index === 0 || productNeedsRecovery(product) !== productNeedsRecovery(paginated[index - 1])) && <tr className="bg-slate-100"><th colSpan={6} className="px-4 py-3 text-left text-slate-800">{productNeedsRecovery(product) ? 'Todos os produtos inativos e a recuperar' : 'Produtos ativos com estoque FBA'}</th></tr>}
-                  <ProductRow
+                    {(index === 0 || productNeedsRecovery(product) !== productNeedsRecovery(paginated[index - 1])) && (
+                      <tr className="bg-slate-100">
+                        <th colSpan={6} className="px-4 py-2 text-left text-slate-800">
+                          {productNeedsRecovery(product) ? (
+                            <button
+                              type="button"
+                              aria-expanded={recoveryProductsExpanded}
+                              onClick={() => {
+                                if (recoveryProductsExpanded) {
+                                  const hiddenIds = new Set(filtered.filter(productNeedsRecovery).map(item => item.id));
+                                  setSelectedIds(current => new Set([...current].filter(id => !hiddenIds.has(id))));
+                                }
+                                setRecoveryProductsExpanded(value => !value);
+                              }}
+                              className="flex w-full items-center justify-between gap-3 text-left font-semibold"
+                            >
+                              <span>Todos os produtos inativos e a recuperar ({filtered.filter(productNeedsRecovery).length})</span>
+                              <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-600">
+                                {recoveryProductsExpanded ? 'Recolher' : 'Expandir'}
+                                {recoveryProductsExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                              </span>
+                            </button>
+                          ) : 'Produtos ativos com estoque FBA'}
+                        </th>
+                      </tr>
+                    )}
+                    {(!productNeedsRecovery(product) || recoveryProductsExpanded) ? <ProductRow
                     key={product.id}
                     product={product}
                     account={account}
@@ -807,7 +834,7 @@ export default function Products({ externalRefreshTrigger }) {
                         onFixed={() => setProducts(cur => cur.map(p => p.id === product.id ? { ...p, _divergent_count: 0 } : p))}
                       />
                     ) : null}
-                  />
+                  /> : null}
                   </Fragment>
                 ))}
               </tbody>

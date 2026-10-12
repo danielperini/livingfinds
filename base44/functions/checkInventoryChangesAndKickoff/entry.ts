@@ -1,5 +1,6 @@
 import { availableAdsStock, hasFreshAdsInventory } from '../../shared/stockAdsPolicy.ts';
 import { campaignCoverageEligible } from '../../shared/campaignCoverageEligibility.ts';
+import { belongsToStockCampaignAlert, planStockCampaignAlertReconciliation } from '../../shared/stockCampaignAlertPolicy.js';
 /** Synchronize sellable stock, enforce stock pauses and process due kickoff jobs immediately. */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -54,7 +55,27 @@ Deno.serve(async (req) => {
       const guard = await base44.asServiceRole.functions.invoke('autoStockCampaignGuard', {
         amazon_account_id: aid, _service_role: true,
       });
-      if (guard?.data?.ok !== true) return Response.json({ ok: false, error: 'Pausas de estoque não confirmadas; kickoff bloqueado.' }, { status: 409 });
+      const guardData = guard?.data || guard;
+      if (guardData?.ok !== true) {
+        const pauseErrors = (guardData?.accounts || []).flatMap((row: any) => row.errors || [])
+          .filter((row: any) => row.step === 'pause' && row.asin);
+        for (const failure of pauseErrors) {
+          await base44.asServiceRole.functions.invoke('upsertOperationalAlert', {
+            amazon_account_id: aid,
+            alert_type: 'campaign_active_no_stock',
+            alert_family: 'campaign',
+            severity: 'high',
+            entity_type: 'product',
+            entity_id: String(failure.asin).toUpperCase(),
+            asin: String(failure.asin).toUpperCase(),
+            title: `Pausa automática pendente: ${String(failure.asin).toUpperCase()}`,
+            message: `O estoque FBA foi confirmado como zero, mas a pausa das campanhas não foi confirmada pela Amazon. Erro: ${String(failure.error || 'falha sem detalhe').slice(0, 300)}`,
+            data_freshness: 'fresh',
+            source_function: 'checkInventoryChangesAndKickoff',
+          }).catch((error: any) => console.error('[checkInventoryChangesAndKickoff] failed to persist stock pause alert:', error?.message));
+        }
+        return Response.json({ ok: false, error: 'Pausas de estoque não confirmadas; kickoff bloqueado.', guard: guardData }, { status: 409 });
+      }
     }
 
     // ── 2. Carregar todos os produtos da conta ────────────────────────────
@@ -71,7 +92,7 @@ Deno.serve(async (req) => {
     const activeCampaignsByAsin = new Map<string, any[]>();
     const pausedCampaignsByAsin = new Map<string, any[]>();
     for (const c of campaigns) {
-      const asin = c.asin;
+      const asin = String(c.asin || '').toUpperCase();
       if (!asin) continue;
       const state = (c.state || c.status || '').toLowerCase();
       if (state === 'archived') continue;
@@ -153,21 +174,9 @@ Deno.serve(async (req) => {
 
         // autoStockCampaignGuard owns stock-only reactivation, confirmed by Amazon.
 
-        // 2c. Criar alerta de reabastecimento
-        if (!dryRun) {
-          await base44.asServiceRole.entities.Alert.create({
-            amazon_account_id: aid,
-            type: 'restock_detected',
-            severity: 'info',
-            title: `Reabastecimento detectado: ${asin}`,
-            message: `Produto ${product.product_name || asin} voltou ao estoque com ${qty} unidades. ${!hasActiveCampaign && !hasPausedCampaign ? 'Kick-off agendado.' : hasPausedCampaign ? 'Campanhas sendo reativadas.' : 'Campanhas já ativas.'}`,
-            entity_id: product.id,
-            entity_type: 'product',
-            status: 'active',
-            created_at: nowIso(),
-          }).catch(() => {});
-          stats.alerts_created++;
-        }
+        // Reabastecimento é evento histórico, não falha que exija atenção.
+        // A fila de kickoff e o guard executam a reativação; evitar abrir um
+        // alerta ativo repetido para uma ação que o próprio motor já conduz.
 
         // Atualizar previous_inventory_status para não disparar novamente amanhã
         if (!dryRun) {
@@ -216,28 +225,83 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ── 3. Verificar produtos com campanha ativa mas SEM estoque ─────────
-    // (não lança alert novo se já tem um ativo nos últimos 6h)
+    // ── 3. Conciliar pausas automáticas e alertas de estoque ─────────────
+    // O guard confirma a pausa na Amazon antes daqui. Mantemos um único alerta
+    // acionável apenas se ainda houver campanha ativa; alertas legados são
+    // resolvidos depois da pausa confirmada ou quando o estoque retorna.
     let oosCampaignsActive = 0;
+    const activeAlerts = await base44.asServiceRole.entities.Alert.filter(
+      { amazon_account_id: aid, status: 'active' }, '-created_at', 1000
+    ).catch(() => []);
+    const accountProducts = new Map<string, any>();
+    for (const product of allProducts) {
+      if (!product.asin) continue;
+      const asin = String(product.asin).toUpperCase();
+      const existing = accountProducts.get(asin);
+      const freshness = Date.parse(product.last_catalog_sync_at || product.updated_at || product.updated_date || 0) || 0;
+      const existingFreshness = Date.parse(existing?.last_catalog_sync_at || existing?.updated_at || existing?.updated_date || 0) || 0;
+      if (!existing || freshness > existingFreshness) accountProducts.set(asin, product);
+    }
     for (const [asin, camps] of activeCampaignsByAsin.entries()) {
-      const product = allProducts.find((p: any) => p.asin === asin);
+      const product = accountProducts.get(String(asin).toUpperCase());
       if (!product) continue;
       const qty = availableAdsStock(product);
       if (qty === 0 && camps.length > 0) {
         oosCampaignsActive++;
         if (!dryRun) {
-          await base44.asServiceRole.entities.Alert.create({
+          await base44.asServiceRole.functions.invoke('upsertOperationalAlert', {
             amazon_account_id: aid,
-            type: 'campaign_active_no_stock',
-            severity: 'warning',
-            title: `Campanha ativa sem estoque: ${asin}`,
-            message: `${product.product_name || asin} tem ${camps.length} campanha(s) ativa(s) mas estoque = 0. Risco de gasto sem conversão.`,
-            entity_id: product.id,
+            alert_type: 'campaign_active_no_stock',
+            alert_family: 'campaign',
+            severity: 'high',
             entity_type: 'product',
-            status: 'active',
-            created_at: nowIso(),
-          }).catch(() => {});
+            entity_id: String(asin).toUpperCase(),
+            asin: String(asin).toUpperCase(),
+            sku: product.sku,
+            title: `Pausa automática pendente: ${String(asin).toUpperCase()}`,
+            message: `${product.product_name || asin} ainda tem ${camps.length} campanha(s) ativa(s) após a verificação automática. A pausa precisa ser reconciliada com a Amazon.`,
+            details: { active_campaign_ids: camps.map((campaign: any) => campaign.amazon_campaign_id || campaign.campaign_id).filter(Boolean) },
+            data_freshness: 'fresh',
+            source_function: 'checkInventoryChangesAndKickoff',
+          }).catch((error: any) => console.error('[checkInventoryChangesAndKickoff] failed to upsert stock alert:', error?.message));
           stats.alerts_created++;
+        }
+      }
+    }
+
+    if (!dryRun) {
+      for (const product of allProducts) {
+        const asin = String(product.asin || '').toUpperCase();
+        if (!asin) continue;
+        const quantity = availableAdsStock(product);
+        if (quantity < 0) continue; // dado ausente/inválido não autoriza limpar alerta
+        const activeCount = quantity === 0 ? (activeCampaignsByAsin.get(asin) || []).length : 0;
+        const reconciliation = planStockCampaignAlertReconciliation(activeAlerts, {
+          asin,
+          productId: product.id,
+          activeCampaignCount: activeCount,
+        });
+        for (const duplicate of reconciliation.resolve) {
+          if (!duplicate.id) continue;
+          await base44.asServiceRole.entities.Alert.update(duplicate.id, {
+            status: 'resolved',
+            resolved_at: nowIso(),
+            resolution_reason: activeCount > 0 ? 'duplicate_consolidated' : quantity > 0 ? 'stock_restored' : 'campaigns_paused_by_stock_guard',
+            updated_at: nowIso(),
+          }).catch(() => {});
+        }
+        if (activeCount === 0) {
+          await base44.asServiceRole.functions.invoke('upsertOperationalAlert', {
+            amazon_account_id: aid,
+            alert_type: 'campaign_active_no_stock',
+            entity_type: 'product',
+            entity_id: asin,
+            title: '-',
+            message: '-',
+            resolved: true,
+            resolution_reason: quantity > 0 ? 'stock_restored' : 'campaigns_paused_by_stock_guard',
+            source_function: 'checkInventoryChangesAndKickoff',
+          }).catch(() => {});
         }
       }
     }

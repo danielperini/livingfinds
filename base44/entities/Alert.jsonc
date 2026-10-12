@@ -31,7 +31,8 @@
         "daily_cap_reached",
         "inventory_data_stale",
         "bid_above_limit",
-        "competitor_brand_keyword_pending"
+        "competitor_brand_keyword_pending",
+        "campaign_active_no_stock"
       ]
     },
     "alert_family": {

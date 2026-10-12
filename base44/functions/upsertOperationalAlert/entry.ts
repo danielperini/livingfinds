@@ -200,6 +200,7 @@ Deno.serve(async (req) => {
 
 function inferFamily(alert_type: string): string {
   if (['out_of_stock', 'low_stock', 'critical_stock', 'inventory_data_stale'].includes(alert_type)) return 'inventory';
+  if (['campaign_active_no_stock'].includes(alert_type)) return 'campaign';
   if (['high_acos', 'low_roas', 'no_sales', 'no_impressions'].includes(alert_type)) return 'performance';
   if (['budget_exhausted', 'spend_overpacing', 'daily_cap_reached'].includes(alert_type)) return 'budget';
   if (['token_expired'].includes(alert_type)) return 'token';

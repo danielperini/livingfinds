@@ -145,9 +145,16 @@ async function batchSetCampaignState(
         body: JSON.stringify({ campaigns: batch.map(id => ({ campaignId: id, state })) }),
       });
       if (res.ok) {
-        const data = await res.json();
-        allSuccess.push(...(data?.campaigns?.success || []).map((s: any) => s.campaignId));
-        allFailed.push(...(data?.campaigns?.error || []).map((e: any) => e.campaignId));
+        const data = await res.json().catch(() => ({}));
+        const success = (data?.campaigns?.success || []).map((s: any) => String(s.campaignId || '')).filter(Boolean);
+        const errors = (data?.campaigns?.error || []).map((e: any) => String(e.campaignId || '')).filter(Boolean);
+        const confirmed = new Set(success);
+        const failed = new Set(errors);
+        allSuccess.push(...success);
+        // Partial/empty response items are not proof of success. Keep them
+        // eligible for reconciliation instead of writing a false local pause.
+        for (const id of batch) if (!confirmed.has(String(id))) failed.add(String(id));
+        allFailed.push(...failed);
       } else {
         allFailed.push(...batch);
       }
@@ -408,20 +415,30 @@ Deno.serve(async (req) => {
       const idsToSend = campaignsToPause
         .map((c: any) => c.campaign_id || c.amazon_campaign_id)
         .filter(Boolean);
+      const confirmedPausedCampaignIds = new Set<string>();
+      const failedPauseCampaignIds = new Set<string>();
 
       if (accessToken && profileId && idsToSend.length > 0) {
         const result = await batchSetCampaignState(accessToken, profileId, idsToSend, 'PAUSED');
         report.campaigns_paused_on_amazon = result.success.length;
         report.campaigns_pause_failed = result.failed.length;
+        result.success.forEach((id: string) => confirmedPausedCampaignIds.add(String(id)));
+        result.failed.forEach((id: string) => failedPauseCampaignIds.add(String(id)));
+      } else {
+        idsToSend.forEach((id: string) => failedPauseCampaignIds.add(String(id)));
       }
 
-      // Atualizar estado local das campanhas pausadas
+      // Só refletir a pausa local depois da confirmação individual da Amazon.
       for (const c of campaignsToPause as any[]) {
+        const campaignId = String(c.campaign_id || c.amazon_campaign_id || '');
+        if (!campaignId || !confirmedPausedCampaignIds.has(campaignId)) continue;
         const pauseReason = notAuthorizedAsins.has(c.asin)
           ? 'sku_not_in_current_ads_scope'
           : 'temporary_ads_ineligibility';
         await base44.asServiceRole.entities.Campaign.update(c.id, {
           state: 'paused', status: 'paused',
+          amazon_status: 'paused', is_operational: false,
+          last_pause_reason: pauseReason,
           updated_at: now,
         }).catch(() => {});
 
@@ -496,21 +513,24 @@ Deno.serve(async (req) => {
       let alertsCreated = 0;
       const alertsToCreate = [];
 
-      // Alertas de SKU não autorizado com campanha ativa
+      // Só deixar alerta ativo quando a pausa não foi confirmada. Uma pausa
+      // confirmada é um evento histórico e não deve continuar como prioridade.
       for (const c of campaignsToPause as any[]) {
-        if (notAuthorizedAsins.has(c.asin)) {
+        const campaignId = String(c.campaign_id || c.amazon_campaign_id || '');
+        if (notAuthorizedAsins.has(c.asin) && failedPauseCampaignIds.has(campaignId)) {
           alertsToCreate.push({
             amazon_account_id,
             alert_type: 'campaign_paused',
             alert_family: 'campaign',
-            severity: 'medium',
+            severity: 'high',
             status: 'active',
             entity_type: 'campaign',
-            entity_id: c.campaign_id || c.amazon_campaign_id || c.id,
+            entity_id: campaignId || c.id,
+            campaign_id: campaignId || c.id,
             asin: c.asin,
-            title: `SKU não autorizado com campanha ativa`,
-            message: `Campanha "${c.name || c.campaign_name}" pausada: SKU fora do escopo autorizado`,
-            deduplication_key: `${amazon_account_id}|${c.asin}|unauthorized_sku_campaign_active`,
+            title: `Pausa Amazon não confirmada: ${c.asin}`,
+            message: `A campanha "${c.name || c.campaign_name}" está fora do escopo autorizado e a Amazon não confirmou a pausa. A ação será reconciliada e tentada novamente.`,
+            deduplication_key: `${amazon_account_id}|${campaignId || c.id}|unauthorized_pause_pending`,
             first_detected_at: now,
             last_detected_at: now,
             source_function: 'applyAdsScopeAuthorization',
@@ -519,20 +539,26 @@ Deno.serve(async (req) => {
         }
       }
 
-      // Alertas de autorizado sem estoque
+      // Produto sem estoque vira prioridade somente se havia campanha cuja
+      // pausa ficou sem confirmação da Amazon.
       for (const item of report.temporarily_ineligible) {
-        if (item.eligibility_status === 'out_of_stock') {
+        const failedForAsin = (campaignsToPause as any[]).filter((campaign: any) =>
+          String(campaign.asin || '').toUpperCase() === String(item.asin || '').toUpperCase()
+          && failedPauseCampaignIds.has(String(campaign.campaign_id || campaign.amazon_campaign_id || ''))
+        );
+        if (item.eligibility_status === 'out_of_stock' && failedForAsin.length > 0) {
           alertsToCreate.push({
             amazon_account_id,
-            alert_type: 'out_of_stock',
+            alert_type: 'campaign_active_no_stock',
             alert_family: 'inventory',
-            severity: 'medium',
+            severity: 'high',
             status: 'active',
             entity_type: 'product',
             asin: item.asin,
-            title: `Produto autorizado sem estoque`,
-            message: `${item.sku} (${item.asin}) está sem estoque disponível. Ads pausados.`,
-            deduplication_key: `${amazon_account_id}|${item.sku}|authorized_product_out_of_stock`,
+            entity_id: String(item.asin || '').toUpperCase(),
+            title: `Pausa de Ads pendente: ${item.asin}`,
+            message: `${item.sku} (${item.asin}) está sem unidades FBA disponíveis e ${failedForAsin.length} campanha(s) ainda aguardam confirmação de pausa da Amazon.`,
+            deduplication_key: `${amazon_account_id}|campaign_active_no_stock|${String(item.asin || '').toUpperCase()}`,
             first_detected_at: now,
             last_detected_at: now,
             source_function: 'applyAdsScopeAuthorization',

@@ -12,6 +12,7 @@ import {
   productOfferEligibility,
 } from '../../shared/productCampaignPauseGuard.ts';
 import { availableAdsStock, stockAdsDecision, hasFreshAdsInventory } from '../../shared/stockAdsPolicy.ts';
+import { deduplicateActiveAlerts, getAlertAsin, planOperationalAlertCleanup } from '../../shared/operationalAlertCleanup.js';
 
 function adsBase(region) {
   const r = String(region || 'NA').toUpperCase();
@@ -107,7 +108,7 @@ Deno.serve(async (req) => {
     for (const account of accounts) {
       const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
       const region = account.region || 'NA';
-      const accountLog = { account_id: account.id, paused: 0, paused_one_unit: 0, paused_not_buyable: 0, activated: 0, synced: 0, unlocked: 0, errors: [] };
+      const accountLog = { account_id: account.id, paused: 0, paused_one_unit: 0, paused_not_buyable: 0, activated: 0, synced: 0, unlocked: 0, alerts_resolved: 0, duplicate_alerts_resolved: 0, errors: [] };
 
       let token = null;
       try {
@@ -309,6 +310,60 @@ Deno.serve(async (req) => {
         }
       }
 
+      // Keep the active-alert list actionable. Event notices are history, not
+      // incidents; stock alerts are resolved only with fresh FBA data and a
+      // confirmed Amazon pause (or confirmed replenishment). Failed/unknown
+      // remote states remain visible for retry and diagnosis.
+      const latestProductByAsin = new Map<string, any>();
+      for (const product of products) {
+        const asin = String(product.asin || '').trim().toUpperCase();
+        if (!asin) continue;
+        const current = latestProductByAsin.get(asin);
+        const updated = Date.parse(product.last_catalog_sync_at || product.updated_at || product.updated_date || 0) || 0;
+        const currentUpdated = Date.parse(current?.last_catalog_sync_at || current?.updated_at || current?.updated_date || 0) || 0;
+        if (!current || updated > currentUpdated) latestProductByAsin.set(asin, product);
+      }
+      const activeAlerts: any[] = [];
+      for (const status of ['active', 'acknowledged']) {
+        const rows = await db.entities.Alert.filter({ amazon_account_id: account.id, status }, '-created_at', 1000).catch(() => []);
+        activeAlerts.push(...rows);
+      }
+      const canonicalAlertIds = new Set(deduplicateActiveAlerts(activeAlerts).map(alert => alert.id));
+      for (const alert of activeAlerts) {
+        if (!canonicalAlertIds.has(alert.id)) {
+          await db.entities.Alert.update(alert.id, {
+            status: 'resolved', resolved_at: new Date().toISOString(),
+            resolution_reason: 'duplicate_consolidated', updated_at: new Date().toISOString(),
+          }).catch(() => {});
+          accountLog.duplicate_alerts_resolved++;
+          continue;
+        }
+
+        const asin = getAlertAsin(alert);
+        const product = latestProductByAsin.get(asin);
+        const alertCampaignId = String(alert.campaign_id || alert.entity_id || '');
+        const isCampaignPauseNotice = String(alert.alert_type || alert.type || '').toLowerCase() === 'campaign_paused';
+        const linkedCampaigns = isCampaignPauseNotice
+          ? localCampaigns.filter(c => [c.id, c.amazon_campaign_id, c.campaign_id].some(id => String(id || '') === alertCampaignId))
+          : product ? localCampaigns.filter(c => campaignMatchesProduct(c, product)) : [];
+        const linkedCampaignStates = linkedCampaigns.map(c => {
+          const id = c.amazon_campaign_id || c.campaign_id;
+          return id ? amazonStates.get(String(id)) : undefined;
+        });
+        const freshInventory = !!product && hasFreshAdsInventory(product);
+        const cleanup = planOperationalAlertCleanup(alert, {
+          product,
+          availableFbaQuantity: freshInventory ? availableAdsStock(product) : undefined,
+          linkedCampaignStates,
+        });
+        if (!cleanup.resolve) continue;
+        const now = new Date().toISOString();
+        await db.entities.Alert.update(alert.id, {
+          status: 'resolved', resolved_at: now, resolution_reason: cleanup.reason, updated_at: now,
+        }).catch(() => {});
+        accountLog.alerts_resolved++;
+      }
+
       results.push(accountLog);
     }
 
@@ -318,7 +373,9 @@ Deno.serve(async (req) => {
       activated: acc.activated + r.activated,
       synced: acc.synced + r.synced,
       unlocked: acc.unlocked + r.unlocked,
-    }), { paused: 0, paused_one_unit: 0, activated: 0, synced: 0, unlocked: 0 });
+      alerts_resolved: acc.alerts_resolved + r.alerts_resolved,
+      duplicate_alerts_resolved: acc.duplicate_alerts_resolved + r.duplicate_alerts_resolved,
+    }), { paused: 0, paused_one_unit: 0, activated: 0, synced: 0, unlocked: 0, alerts_resolved: 0, duplicate_alerts_resolved: 0 });
 
     return Response.json({ ok: results.every(r => r.errors.length === 0), ...totals, accounts: results });
   } catch (error) {

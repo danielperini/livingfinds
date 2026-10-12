@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { base44 } from '@/api/base44Client';
+import { deduplicateOperationalAlerts, isActionableOperationalAlert } from '@/lib/operationalAlertPresentation';
 import {
-  Activity, AlertTriangle, Bot, CheckCircle2, Clock3,
+  Activity, AlertTriangle, Bot, CheckCircle2,
   ExternalLink, Loader2, RefreshCw, Rocket, ServerCog, ShieldCheck,
   Sparkles, Wrench, XCircle,
 } from 'lucide-react';
@@ -139,7 +140,8 @@ export default function SalaDeComandoPremium() {
     const allQueue = [...data.kickoff, ...data.repair, ...data.keyword];
     const productByAsin = new Map(data.products.map(product => [String(product.asin || '').toUpperCase(), product]));
     const queueProduct = (item) => productByAsin.get(String(item?.asin || '').toUpperCase());
-    const activeAlerts = data.alerts.filter(item => item.status === 'active');
+    const allActiveAlerts = deduplicateOperationalAlerts(data.alerts.filter(item => item.status === 'active'));
+    const activeAlerts = allActiveAlerts.filter(isActionableOperationalAlert);
     const urgentAlerts = activeAlerts.filter(item => ['critical', 'high'].includes(String(item.severity || '').toLowerCase()));
     const safetyBlockedQueue = allQueue.filter(item => isSafetyBlockedQueue(item, queueProduct(item)));
     const retryingQueue = allQueue.filter(item => item.status === 'failed' && isRetryableQueueFailure(item));
@@ -154,7 +156,7 @@ export default function SalaDeComandoPremium() {
       (['scheduled', 'processing'].includes(item.status) && !isWithinHours(queueTimestamp(item), 2)) ||
       (item.status === 'failed' && !isWithinHours(queueTimestamp(item), 24) && !retryingQueue.includes(item))
     );
-    const pendingDecisions = data.decisions.filter(item => item.status === 'pending');
+    const pendingDecisions = data.decisions.filter(item => item.status === 'pending' && item.requires_approval === true);
     const executedToday = data.decisions.filter(item => {
       const date = String(item.executed_at || item.updated_date || item.created_at || '').slice(0, 10);
       return item.status === 'executed' && date === new Date().toISOString().slice(0, 10);
@@ -169,7 +171,7 @@ export default function SalaDeComandoPremium() {
       urgentAlerts.length ? `${urgentAlerts.length} alerta(s) crítico(s)` : null,
     ].filter(Boolean);
     const healthOk = healthReasons.length === 0;
-    return { allQueue, activeAlerts, urgentAlerts, failedQueue, pendingQueue, retryingQueue, safetyBlockedQueue, historicalQueue, pendingDecisions, executedToday, lastSync, healthOk, healthReasons, syncHealthy };
+    return { allQueue, allActiveAlerts, activeAlerts, urgentAlerts, failedQueue, pendingQueue, retryingQueue, safetyBlockedQueue, historicalQueue, pendingDecisions, executedToday, lastSync, healthOk, healthReasons, syncHealthy };
   }, [data]);
 
   const priorityItems = useMemo(() => {
@@ -209,7 +211,7 @@ export default function SalaDeComandoPremium() {
             <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between gap-3">
               <div>
                 <h2 className="text-base font-semibold text-white">Prioridades operacionais</h2>
-                <p className="text-xs text-slate-500 mt-1">Itens reais que exigem análise, aprovação ou correção.</p>
+              <p className="text-xs text-slate-500 mt-1">Falhas e bloqueios reais; ações seguras seguem execução automática com confirmação da Amazon.</p>
               </div>
               <Link to={LEGACY_LINKS.pendentes} className="text-xs text-blue-300 hover:text-blue-200">Abrir painel completo →</Link>
             </div>
@@ -379,10 +381,10 @@ export default function SalaDeComandoPremium() {
       </section>
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <MetricCard label="Ação imediata" value={summary.urgentAlerts.length + summary.pendingDecisions.length} detail="prioridades e aprovações" tone={summary.urgentAlerts.length > 0 ? 'danger' : 'info'} icon={AlertTriangle} />
+        <MetricCard label="Ação imediata" value={summary.urgentAlerts.length + summary.pendingDecisions.length} detail="falhas e revisões de risco" tone={summary.urgentAlerts.length > 0 ? 'danger' : 'info'} icon={AlertTriangle} />
         <MetricCard label="Executadas hoje" value={summary.executedToday.length} detail="decisões concluídas" tone="success" icon={CheckCircle2} />
         <MetricCard label="Fila com erro" value={summary.failedQueue.length} detail={`${summary.pendingQueue.length} em processamento/recuperação${summary.safetyBlockedQueue.length ? ` · ${summary.safetyBlockedQueue.length} protegidos` : ''}${summary.historicalQueue.length ? ` · ${summary.historicalQueue.length} histórico(s)` : ''}`} tone={summary.failedQueue.length > 0 ? 'danger' : 'default'} icon={XCircle} />
-        <MetricCard label="Aprovação humana" value={summary.pendingDecisions.length} detail="aguardando decisão" tone={summary.pendingDecisions.length > 0 ? 'warning' : 'default'} icon={Clock3} />
+        <MetricCard label="Autonomia segura" value="Ativa" detail="decisões elegíveis sem etapa manual" tone="success" icon={Bot} />
         <MetricCard label="Saúde do sistema" value={summary.healthOk ? 'Estável' : 'Atenção'} detail={summary.healthOk ? 'sincronização e fila operacionais' : summary.healthReasons.join(' · ')} tone={summary.healthOk ? 'success' : 'warning'} icon={Activity} />
       </div>
 
