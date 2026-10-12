@@ -66,7 +66,7 @@ jobs:
             base44/shared/searchTermHarvestPolicy.test.ts \
             base44/shared/servingCampaignGrowthPolicy.test.ts \
             base44/shared/economicEvidencePolicy.test.ts \
-            base44/shared/v6siaFailurePolicy.test.ts \ \
+            base44/shared/v6siaFailurePolicy.test.ts \
             base44/shared/v6siaReviewEvidence.test.ts
       - name: Check economic evidence policy
         run: deno check --node-modules-dir=auto base44/shared/economicEvidencePolicy.ts
