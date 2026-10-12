@@ -15,6 +15,7 @@ import { startScheduler } from './scheduler.ts';
 import { healthcheck, query } from './db.ts';
 import { makeEntities } from './sdk/entities.ts';
 import { makeIntegrations } from './sdk/integrations.ts';
+import { makeEnvironmentStatusResponse } from './environmentStatus.ts';
 
 const PORT = Number(Deno.env.get('PORT') ?? 8000);
 const API_TOKEN = Deno.env.get('API_TOKEN') ?? '';
@@ -332,6 +333,10 @@ async function handler(req: Request): Promise<Response> {
   }
   if (path === '/health') {
     return json({ ok: true, service: 'livingfinds-backend', functions: registry.size, db: await healthcheck() });
+  }
+  if (path === '/api/admin/environment-status') {
+    const user = await authenticatedUser(req);
+    return makeEnvironmentStatusResponse(req.method, user, (name) => Deno.env.get(name));
   }
   if (path === '/functions' && req.method === 'GET') {
     return json({ functions: [...registry.keys()].sort() });

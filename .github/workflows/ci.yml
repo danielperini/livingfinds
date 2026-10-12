@@ -30,6 +30,8 @@ jobs:
         run: node --test src/lib/performanceSettingsNormalization.test.js
       - name: Test Amazon confirmation labels
         run: node --test src/lib/motorLabels.test.js
+      - name: Test interface navigation and overlay contracts
+        run: node --test src/lib/navigation.test.js src/lib/pagination.test.js src/lib/toastPointerEvents.test.js
       - name: Typecheck
         run: npm run typecheck
         continue-on-error: true
@@ -124,6 +126,8 @@ jobs:
             base44/functions/runSalesMode/entry.ts
       - name: Test scheduler and Hostinger OpenAI routing
         run: deno test --node-modules-dir=auto server/src/scheduler.test.ts server/src/sdk/integrations.test.ts
+      - name: Test environment status secret redaction
+        run: deno test server/src/environmentStatus.test.ts
 
   agents-sdk:
     runs-on: ubuntu-latest

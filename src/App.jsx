@@ -55,6 +55,7 @@ import SalaDeComandoPremium from '@/pages/SalaDeComandoPremium';
 import SalaDeComandoLegacy from '@/pages/SalaDeComando';
 import KickoffQueueMonitor from '@/pages/KickoffQueueMonitor';
 import TermIntelligence from '@/pages/TermIntelligence';
+import ApiCatalog from '@/pages/ApiCatalog';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError } = useAuth();
@@ -135,6 +136,7 @@ const AuthenticatedApp = () => {
             <Route path="/report" element={<Report />} />
             <Route path="/logs" element={<Logs />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/configuracao/apis" element={<ApiCatalog />} />
             <Route path="/users" element={<Users />} />
             <Route path="/sp-api-setup" element={<SpApiSetup />} />
             <Route path="/sp-api-self-auth" element={<SpApiSelfAuth />} />
