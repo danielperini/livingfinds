@@ -51,7 +51,7 @@ function rowTime(row: any): string | null {
 function rowDate(row: any, fields: string[]): string | null {
   for (const field of fields) {
     const value = String(row?.[field] || '').slice(0, 10);
-    if (/^\\d{4}-\\d{2}-\\d{2}$/.test(value)) return value;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
   }
   return null;
 }
