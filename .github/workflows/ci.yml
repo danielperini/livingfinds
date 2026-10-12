@@ -130,6 +130,8 @@ jobs:
             base44/functions/runSalesMode/entry.ts
       - name: Test scheduler and Hostinger OpenAI routing
         run: deno test --node-modules-dir=auto server/src/scheduler.test.ts server/src/sdk/integrations.test.ts
+      - name: Type-check Hostinger scheduler and health route
+        run: deno check --node-modules-dir=auto server/src/scheduler.ts server/src/main.ts
       - name: Test environment status secret redaction
         run: deno test server/src/environmentStatus.test.ts
 
