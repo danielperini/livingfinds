@@ -1,7 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
-import { realpath } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { tool } from '@openai/agents';
 import { z } from 'zod';
@@ -25,7 +24,7 @@ const TEST_SUITES = Object.freeze({
   },
 });
 
-function safeTestEnvironment(env = process.env) {\n  const safe = { CI: '1' };\n  for (const name of ['PATH', 'Path', 'HOME', 'USERPROFILE', 'TMP', 'TEMP', 'SystemRoot', 'WINDIR']) {\n    if (env[name]) safe[name] = env[name];\n  }\n  return safe;\n}\n\nexport async function runAllowlistedTests(suite) {
+export function safeTestEnvironment(env = process.env) {\n  const safe = { CI: '1' };\n  for (const name of ['PATH', 'Path', 'HOME', 'USERPROFILE', 'TMP', 'TEMP', 'SystemRoot', 'WINDIR']) {\n    if (env[name]) safe[name] = env[name];\n  }\n  return safe;\n}\n\nexport async function runAllowlistedTests(suite) {
   const allowed = guardAgentAction('run_allowlisted_tests');
   if (!allowed.allowed) return allowed;
   const config = TEST_SUITES[suite];
