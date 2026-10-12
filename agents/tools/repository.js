@@ -1,4 +1,4 @@
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tool } from '@openai/agents';
@@ -35,10 +35,10 @@ export async function readRepositoryFile(requestedPath, root) {
   const resolved = resolveRepositoryFile(requestedPath, root);
   if (!resolved.ok) return resolved;
   try {
-    const metadata = await stat(resolved.absolute);
+    const actualPath = await realpath(resolved.absolute);\n    const repoRoot = await realpath(process.env.LIVINGFINDS_REPO_PATH || DEFAULT_ROOT);\n    const actualRelative = path.relative(repoRoot, actualPath);\n    if (actualRelative === '..' || actualRelative.startsWith(`..${path.sep}`) || path.isAbsolute(actualRelative)) {\n      return { ok: false, status: 'blocked', reason: 'O caminho resolvido por symlink sai do repositório.' };\n    }\n    const metadata = await stat(actualPath);
     if (!metadata.isFile()) return { ok: false, status: 'blocked', reason: 'O caminho não é um arquivo.' };
     if (metadata.size > MAX_FILE_BYTES) return { ok: false, status: 'not_read', reason: 'Arquivo excede 64 KiB; nenhum conteúdo parcial foi devolvido.', bytes: metadata.size };
-    return { ok: true, status: 'read', path: resolved.relative, bytes: metadata.size, content: await readFile(resolved.absolute, 'utf8') };
+    return { ok: true, status: 'read', path: resolved.relative, bytes: metadata.size, content: await readFile(actualPath, 'utf8') };
   } catch (error) {
     return { ok: false, status: 'error', path: resolved.relative, error: String(error?.message || error) };
   }
