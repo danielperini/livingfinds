@@ -2,12 +2,13 @@
  * Scheduler self-hosted do LivingFinds.
  *
  * Lê base44/schedules/amazon-automation-schedule.json e executa crons no timezone
- * configurado. Cada função/conta possui lock em memória para impedir sobreposição
- * quando uma execução ultrapassa o próximo disparo.
+ * configurado. Locks PostgreSQL de sessão impedem concorrência entre réplicas e
+ * acionadores locais; a conexão é liberada antes da chamada da função.
  */
 import { join } from 'jsr:@std/path@1';
 import { makeFunctions } from './sdk/functions.ts';
 import { schedulerSql } from './db.ts';
+import { runWithLock, validateSchedule } from './schedulerPolicy.ts';
 
 // deno-lint-ignore no-explicit-any
 type Job = { name: string; function: string; cron: string; payload?: Record<string, any>; run_on_startup?: boolean };
@@ -100,6 +101,24 @@ function nowInTz(tz: string) {
   };
 }
 
+async function tryAcquireDistributedLock(lockKey: string): Promise<(() => Promise<void>) | null> {
+  const connection = await schedulerSql.reserve();
+  try {
+    const rows = await connection.unsafe('select pg_try_advisory_lock(hashtextextended($1, 0)) as acquired', [lockKey]);
+    if (!rows[0]?.acquired) { await connection.release(); return null; }
+    let released = false;
+    return async () => {
+      if (released) return;
+      released = true;
+      try { await connection.unsafe('select pg_advisory_unlock(hashtextextended($1, 0))', [lockKey]); }
+      finally { await connection.release(); }
+    };
+  } catch (error) { await connection.release(); throw error; }
+}
+
+async function runWithDistributedLock<T>(lockKey: string, action: () => Promise<T>): Promise<{ acquired: false } | { acquired: true; value: T }> {
+  return runWithLock(() => tryAcquireDistributedLock(lockKey), action);
+}
 export async function startScheduler(): Promise<void> {
   if ((Deno.env.get('ENABLE_SCHEDULER') ?? 'true') === 'false') {
     schedulerHealth.enabled = false;
@@ -119,6 +138,7 @@ export async function startScheduler(): Promise<void> {
 
   const timezone = config.timezone ?? 'America/Sao_Paulo';
   const jobs = config.jobs ?? [];
+  for (const issue of validateSchedule(jobs)) console.error('[scheduler] configuração inválida: ' + issue);
   const service = makeFunctions(true);
   const runningJobs = new Map<string, { startedAt: number; functionName: string }>();
   schedulerHealth.started = true;
@@ -153,24 +173,22 @@ export async function startScheduler(): Promise<void> {
       console.log(`[scheduler] disparando '${job.name}' -> ${job.function}`);
       (async () => {
         try {
-          await schedulerSql.begin(async (tx: any) => {
-            const [lock] = await tx`
-              select pg_try_advisory_xact_lock(hashtextextended(${jobKey}, 0)) as acquired
-            `;
-            if (!lock?.acquired) {
-              console.warn(`[scheduler] skipped_concurrent_execution '${job.name}'/${accountScope}`);
-              return;
-            }
+          const result = await runWithDistributedLock('livingfinds:scheduler:' + jobKey, async () => {
             const response = await service.invoke(job.function, job.payload ?? {});
             if (response.ok && response.data?.ok !== false) {
               schedulerHealth.last_success_at = new Date().toISOString();
               schedulerHealth.last_error = null;
             } else {
               schedulerHealth.last_error_at = new Date().toISOString();
-              schedulerHealth.last_error = `${job.function} status=${response.status}`;
+              schedulerHealth.last_error = job.function + ' status=' + response.status;
             }
-            console.log(`[scheduler] '${job.function}' ok=${response.ok} status=${response.status}`);
+            console.log('[scheduler] ' + job.function + ' ok=' + response.ok + ' status=' + response.status);
+            return response;
           });
+          if (!result.acquired) {
+            console.warn('[scheduler] skipped_concurrent_execution ' + job.name + '/' + accountScope);
+            return;
+          }
         } catch (error) {
           schedulerHealth.last_error_at = new Date().toISOString();
           schedulerHealth.last_error = (error as Error)?.message || String(error);
@@ -198,8 +216,14 @@ export async function startScheduler(): Promise<void> {
     schedulerHealth.running_jobs = runningJobs.size;
     schedulerHealth.last_dispatch_at = new Date().toISOString();
     console.log(`[scheduler] startup '${job.name}' -> ${job.function} (tentativa ${attempt})`);
-    service.invoke(job.function, { ...(job.payload ?? {}), _startup_execution: true })
-      .then((response) => {
+    runWithDistributedLock('livingfinds:scheduler:' + jobKey, () =>
+      service.invoke(job.function, { ...(job.payload ?? {}), _startup_execution: true }))
+      .then((result) => {
+        if (!result.acquired) {
+          if (attempt < 10) setTimeout(() => runStartupJob(job, attempt + 1), 30_000);
+          return;
+        }
+        const response = result.value;
         const locked = response?.data?.results?.some?.((item: any) => item?.locked === true) === true;
         if (response.ok && response.data?.ok !== false) {
           schedulerHealth.last_success_at = new Date().toISOString();

@@ -107,3 +107,5 @@ jobs:
             base44/functions/smartBidFromCpc/entry.ts \
             base44/functions/runSalesModeWasteRotation/entry.ts \
             base44/functions/runSalesMode/entry.ts
+      - name: Test scheduler validation
+        run: deno test --node-modules-dir=auto server/src/scheduler.test.ts
