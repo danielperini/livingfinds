@@ -1,4 +1,4 @@
-import { buildV6SIAEvidenceLinks, v6siaReviewCompletion, v6siaReviewImplementationStatus } from './v6siaLifecycle.ts';
+import { buildV6SIAEvidenceLinks, shouldForceV6SIANewAnalysis, v6siaReviewCompletion, v6siaReviewImplementationStatus } from './v6siaLifecycle.ts';
 
 Deno.test('E2E V6SIA complete path links all source rows and keeps sent actions pending confirmation', async () => {
   const { links, errors } = buildV6SIAEvidenceLinks({
@@ -34,4 +34,10 @@ Deno.test('E2E V6SIA reports mixed confirmed and failed Amazon actions individua
   ]);
   if (implementation !== 'partial') throw new Error('one failed action must remain visible as partial');
   if (v6siaReviewCompletion({ readsComplete: true, aiStatus: 'deferred', expectedEvidenceLinks: 0, persistedEvidenceLinks: 0 }) !== 'deferred') throw new Error('AI budget deferral must be explicit');
+});
+
+Deno.test('E2E V6SIA daily review bypasses result cache but execution failure only forces on explicit request', () => {
+  if (!shouldForceV6SIANewAnalysis('daily_portfolio', false)) throw new Error('daily review must request a fresh OpenAI analysis');
+  if (shouldForceV6SIANewAnalysis('execution_failure', false)) throw new Error('execution failure must respect cache/budget policy unless forced');
+  if (!shouldForceV6SIANewAnalysis('execution_failure', true)) throw new Error('explicit force must request fresh analysis');
 });
