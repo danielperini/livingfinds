@@ -4,15 +4,15 @@ Este pacote adiciona um agente auxiliar com OpenAI Agents SDK. O sistema existen
 
 ## Requisitos e execução
 
-Node.js 22 ou superior e uma chave OpenAI configurada no ambiente do processo:
+Node.js 22 ou superior e uma chave OpenAI configurada com segurança no ambiente do serviço Hostinger ou do processo local:
 
 ```sh
 npm ci --prefix agents
 npm test --prefix agents
-OPENAI_API_KEY=... npm start --prefix agents -- "Analise o fluxo V6SIA e indique lacunas"
+npm start --prefix agents -- "Analise o fluxo V6SIA e indique lacunas"
 ```
 
-No PowerShell, configure a variável apenas na sessão/processo conforme a política local; nunca a inclua em argumentos, arquivos versionados ou logs. Também é possível enviar a tarefa por stdin. O modelo padrão é `gpt-6-luna`; `LIVINGFINDS_ENGINEER_MODEL` permite selecionar outro modelo disponível à conta.
+Configure a chave no gerenciador de variáveis do serviço Hostinger ou em um mecanismo seguro local; nunca a inclua em argumentos, arquivos versionados ou logs. Também é possível enviar a tarefa por stdin. O modelo padrão é `gpt-6-luna`; `LIVINGFINDS_ENGINEER_MODEL` permite selecionar outro modelo disponível à conta.
 
 O agente devolve análise/proposta. O retorno `analysis_only` não prova que uma alteração foi aplicada em GitHub ou no VPS. Tracing não deve incluir dados sensíveis.
 
