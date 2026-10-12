@@ -1,6 +1,7 @@
 import { Agent, run } from '@openai/agents';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';\nimport { inspectGithubActionsTool } from './tools/github.js';
+import { pathToFileURL } from 'node:url';
+import { inspectGithubActionsTool } from './tools/github.js';
 import { inspectRuntimeConfigurationTool, inspectVpsHealthTool } from './tools/diagnostics.js';
 import { proposePatchTool, readRepositoryFileTool } from './tools/repository.js';
 import { runAllowlistedTestsTool } from './tools/tests.js';
