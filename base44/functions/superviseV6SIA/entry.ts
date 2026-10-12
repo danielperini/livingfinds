@@ -1,6 +1,8 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { sanitizeV6SIAError } from '../../shared/v6siaFailurePolicy.ts';
 import { latestRowsByKey, v6siaDecisionOutcome, v6siaImplementationStatus } from '../../shared/v6siaReviewEvidence.ts';
+import { readAllEntityPages } from '../../shared/v6siaEvidencePaging.ts';
+import { buildV6SIAEvidenceLinks, v6siaReviewCompletion } from '../../shared/v6siaLifecycle.ts';
 
 function pickSafeFailures(value: any): any[] {
   if (!Array.isArray(value)) return [];
@@ -59,40 +61,12 @@ function rowDate(row: any, fields: string[]): string | null {
 async function readCanonicalTable(base44: any, table: string, accountId: string, sort: string, _legacyLimit: number) {
   const entity = base44.asServiceRole.entities[table];
   if (!entity?.filter) return { rows: null, error: 'Tabela ou método de leitura indisponível', complete: false };
-  const rows: any[] = [];
-  const seen = new Set<string>();
-  const query = { amazon_account_id: accountId };
-  const pageSize = 1000;
-  let cursor: string | null = null;
-  try {
-    while (true) {
-      const page = cursor
-        ? await entity.filter(query, { cursor, limit: pageSize })
-        : await entity.filter(query, { sort, limit: pageSize });
-      if (Array.isArray(page)) {
-        for (const row of page) {
-          const id = String(row?.id || '');
-          if (!id || !seen.has(id)) { rows.push(row); if (id) seen.add(id); }
-        }
-        if (page.length >= pageSize) {
-          return { rows, error: 'SDK não retornou cursor após atingir o limite da página; consulta incompleta', complete: false };
-        }
-        return { rows, error: null, complete: true };
-      }
-      const items = Array.isArray(page?.items) ? page.items : null;
-      if (!items) return { rows: rows.length ? rows : null, error: 'Resposta de paginação inválida; consulta incompleta', complete: false };
-      for (const row of items) {
-        const id = String(row?.id || '');
-        if (!id || !seen.has(id)) { rows.push(row); if (id) seen.add(id); }
-      }
-      if (!page.has_more) return { rows, error: null, complete: true };
-      const next = String(page.next_cursor || '');
-      if (!next || next === cursor) return { rows, error: 'Cursor ausente ou repetido; consulta incompleta', complete: false };
-      cursor = next;
-    }
-  } catch (error: any) {
-    return { rows: rows.length ? rows : null, error: sanitizeV6SIAError(error), complete: false };
-  }
+  const result = await readAllEntityPages(entity, { amazon_account_id: accountId }, sort, 1000);
+  return {
+    rows: result.rows,
+    error: result.error ? sanitizeV6SIAError(result.error) : null,
+    complete: result.complete,
+  };
 }
 
 function keyOf(row: any, fields: string[]) {
@@ -493,39 +467,23 @@ Deno.serve(async (request) => {
     let evidenceLinksCreated = 0;
     const evidenceLinksByTable: Record<string, number> = {};
     if (reviewLog?.id) {
-      const links: any[] = [];
-      for (const [table, rows] of Object.entries(evidence.by_table as Record<string, any[] | null>)) {
-        for (const row of rows || []) {
-          if (!row?.id) {
-            evidenceLinkErrors.push({ table, error: 'source_record_id ausente' });
-            continue;
-          }
-          links.push({
-            amazon_account_id: account.id,
-            profile_id: account.ads_profile_id || account.profile_id || null,
-            marketplace_id: account.marketplace_id || account.marketplace || null,
-            correlation_id: correlationId || String(reviewLog.id),
-            review_log_id: reviewLog.id,
-            source_table: table,
-            source_record_id: String(row.id),
-            source_report_id: row.source_report_id || row.report_id || null,
-            source_job_id: row.report_job_id || row.job_id || null,
-            source_date: row.date || row.assessment_date || row.spend_date || row.created_at || null,
-            campaign_id: row.campaign_id || row.amazon_campaign_id || null,
-            ad_group_id: row.ad_group_id || null,
-            asin: row.asin || row.advertised_asin || row.advertised_product_id || null,
-            sku: row.sku || row.advertised_sku || null,
-            created_at: now,
-          });
-        }
-      }
+      const builtLinks = buildV6SIAEvidenceLinks(evidence.by_table as Record<string, Array<Record<string, any>> | null>, {
+        amazon_account_id: String(account.id),
+        profile_id: account.ads_profile_id || account.profile_id || null,
+        marketplace_id: account.marketplace_id || account.marketplace || null,
+        correlation_id: correlationId || String(reviewLog.id),
+        review_log_id: String(reviewLog.id),
+        created_at: now,
+      });
+      const links = builtLinks.links;
+      evidenceLinkErrors.push(...builtLinks.errors);
       for (let offset = 0; offset < links.length; offset += 250) {
         const batch = links.slice(offset, offset + 250);
         let persisted = false;
         let lastError: any = null;
         for (let attempt = 0; attempt < 3 && !persisted; attempt++) {
           try {
-            await base44.asServiceRole.entities.V6SIAEvidenceLink.bulkCreate(batch);
+            await base44.asServiceRole.entities.V6SIAEvidenceLink.upsert(batch, { key: ['review_log_id', 'source_table', 'source_record_id'] });
             persisted = true;
           } catch (error: any) {
             lastError = error;
@@ -546,7 +504,16 @@ Deno.serve(async (request) => {
       }
       if (evidence.query_errors.length || evidenceLinkErrors.length) {
         evidence.data_quality_status = 'partial';
-        status = 'partial';
+      }
+      status = v6siaReviewCompletion({
+        readsComplete: evidence.data_quality_status === 'complete',
+        aiStatus: success ? 'complete' : gate.allowed === false ? 'deferred' : analysis?.incomplete ? 'incomplete' : 'failed',
+        expectedEvidenceLinks: links.length,
+        persistedEvidenceLinks: evidenceLinksCreated,
+        evidenceLinkErrors: evidenceLinkErrors.length,
+      });
+      if (status === 'partial') evidence.data_quality_status = 'partial';
+      if (evidenceLinkErrors.length) evidence.data_query_errors_json = JSON.stringify([...evidence.query_errors, ...evidenceLinkErrors]);
       }
       await base44.asServiceRole.entities.V6SIAReviewLog.update(reviewLog.id, {
         status,
@@ -566,6 +533,16 @@ Deno.serve(async (request) => {
           data_evidence_refs: refsJson,
         }).catch((error: any) => evidenceLinkErrors.push({ table: 'OptimizationDecision', id: decision.id, error: sanitizeV6SIAError(error) }))
       ));
+      if (evidenceLinkErrors.length) {
+        status = 'partial';
+        evidence.data_quality_status = 'partial';
+        await base44.asServiceRole.entities.V6SIAReviewLog.update(reviewLog.id, {
+          status,
+          data_quality_status: 'partial',
+          data_query_errors_json: JSON.stringify([...evidence.query_errors, ...evidenceLinkErrors]),
+          updated_at: new Date().toISOString(),
+        }).catch(() => {});
+      }
     }
     report.status = status;
     report.data_quality_status = evidence.data_quality_status;
