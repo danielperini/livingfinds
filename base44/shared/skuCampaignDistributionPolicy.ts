@@ -5,6 +5,7 @@
 export const SKU_CAMPAIGN_DISTRIBUTION = Object.freeze({
   automaticCampaignsPerEligibleSku: 1,
   maxManualExactCampaignsPerSku: 5,
+  minAvailableFbaForManualExpansion: 5,
   maxNewManualExactPerSkuPerCycle: 1,
   maxNewManualExactPerAccountPerCycle: 10,
   minVerifiedSameSkuOrders: 2,
@@ -41,7 +42,7 @@ export function evaluateManualExactExpansion(input: {
   createdThisCycle: unknown;
   alreadyExact: boolean;
 }): { eligible: boolean; reason: string } {
-  if (finite(input.availableFbaUnits, -1) <= 0) return { eligible: false, reason: 'no_available_fba_stock' };
+  if (finite(input.availableFbaUnits, -1) < SKU_CAMPAIGN_DISTRIBUTION.minAvailableFbaForManualExpansion) return { eligible: false, reason: 'insufficient_available_fba_for_manual_expansion' };
   if (input.sameSkuAttributionVerified !== true) return { eligible: false, reason: 'same_sku_attribution_unverified' };
   if (finite(input.sameSkuOrders) < SKU_CAMPAIGN_DISTRIBUTION.minVerifiedSameSkuOrders) {
     return { eligible: false, reason: 'requires_two_verified_same_sku_orders' };
