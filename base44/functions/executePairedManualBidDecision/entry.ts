@@ -128,23 +128,26 @@ async function executeOne(base44: any, decision: any) {
   if (!campaignId || !adGroupId) throw new Error('Não foi possível resolver campaign_id e ad_group_id para sincronizar os dois bids');
 
   const groupsResponse = await ads(base44, accountId, 'readAdGroupBeforePairedBid', 'POST', '/sp/adGroups/list', {
-    campaignIdFilter: [campaignId],
-    adGroupIdFilter: [adGroupId],
+    campaignIdFilter: { include: [campaignId] },
+    adGroupIdFilter: { include: [adGroupId] },
     stateFilter: { include: ['ENABLED', 'PAUSED'] },
     maxResults: 10,
   }, 'application/vnd.spAdGroup.v3+json');
+  if (!groupsResponse?.ok) throw new Error(`Falha ao confirmar o grupo antes do bid: ${message(groupsResponse)}`);
   const remoteGroup = listOf(groupsResponse, 'adGroups')[0];
+  if (!remoteGroup) throw new Error('Grupo de anúncios não encontrado na Amazon para confirmar o bid atual');
   const previousGroupBid = Number(remoteGroup?.defaultBid || 0);
 
   let resolvedKeywordId = keywordId;
   if (!resolvedKeywordId) {
     const keywordsResponse = await ads(base44, accountId, 'readKeywordBeforePairedBid', 'POST', '/sp/keywords/list', {
-      campaignIdFilter: [campaignId],
-      adGroupIdFilter: [adGroupId],
+      campaignIdFilter: { include: [campaignId] },
+      adGroupIdFilter: { include: [adGroupId] },
       stateFilter: { include: ['ENABLED', 'PAUSED'] },
       matchTypeFilter: ['EXACT'],
       maxResults: 100,
     }, 'application/vnd.spKeyword.v3+json');
+    if (!keywordsResponse?.ok) throw new Error(`Falha ao localizar keyword na Amazon: ${message(keywordsResponse)}`);
     const remoteKeywords = listOf(keywordsResponse, 'keywords');
     const match = remoteKeywords.find((item: any) => !decision.keyword_text || String(item.keywordText || '').toLowerCase() === String(decision.keyword_text).toLowerCase()) || remoteKeywords[0];
     resolvedKeywordId = String(match?.keywordId || '');
