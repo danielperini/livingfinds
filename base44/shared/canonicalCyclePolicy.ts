@@ -21,9 +21,9 @@ export function describeUnconfirmedCycleStage(name: string, result: unknown) {
   const details = nested.slice(0, 8).map((item: any) => ({
     stage: String(item?.stage || item?.name || 'unknown_stage').slice(0, 100),
     error: String(item?.error || item?.reason || 'stage_returned_ok_false')
-      .replace(/Bearer\\s+[A-Za-z0-9._~+\\/-]+=*/gi, 'Bearer [REDACTED]')
-      .replace(/(refresh_token|client_secret|access_token)[=:]\\s*[^\\s,}]+/gi, '$1=[REDACTED]')
-      .replace(/[\\r\\n\\t]+/g, ' ')
+      .replace(/Bearer\s+[A-Za-z0-9._~+\/-]+=*/gi, 'Bearer [REDACTED]')
+      .replace(/(refresh_token|client_secret|access_token)[=:]\s*[^\s,}]+/gi, '$1=[REDACTED]')
+      .replace(/[\r\n\t]+/g, ' ')
       .slice(0, 300),
   }));
   const fallbackError = value.error || value.reason ||
