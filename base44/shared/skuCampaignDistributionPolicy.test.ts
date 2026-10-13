@@ -27,7 +27,8 @@ Deno.test('manual exact promotion requires fresh available stock and two verifie
   assertEquals(evaluateManualExactExpansion(base).eligible, true);
   assertEquals(evaluateManualExactExpansion({ ...base, sameSkuOrders: 1 }).reason, 'requires_two_verified_same_sku_orders');
   assertEquals(evaluateManualExactExpansion({ ...base, sameSkuAttributionVerified: false }).reason, 'same_sku_attribution_unverified');
-  assertEquals(evaluateManualExactExpansion({ ...base, availableFbaUnits: 0 }).reason, 'no_available_fba_stock');
+  assertEquals(evaluateManualExactExpansion({ ...base, availableFbaUnits: 2 }).reason, 'insufficient_available_fba_for_manual_expansion');
+  assertEquals(evaluateManualExactExpansion({ ...base, availableFbaUnits: 4 }).reason, 'insufficient_available_fba_for_manual_expansion');
 });
 
 Deno.test('campaign count is not treated as a target and over-concentrated SKUs stop expanding', () => {
