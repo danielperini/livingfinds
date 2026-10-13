@@ -2,9 +2,9 @@ import { assertEquals, assertThrows } from 'jsr:@std/assert';
 import { autoCampaignRepairCancellationPatch, autoCampaignRepairPreflight } from './autoCampaignRepairPolicy.ts';
 
 Deno.test('repair requires account, campaign and product identity before any Amazon call', () => {
-  assertEquals(autoCampaignRepairPreflight({ asin: 'B000000001', campaign_id: '  ' }).code, 'MISSING_ACCOUNT_ID');
-  assertEquals(autoCampaignRepairPreflight({ amazon_account_id: 'acct', asin: 'B000000001', campaign_id: '' }).code, 'MISSING_CAMPAIGN_ID');
-  assertEquals(autoCampaignRepairPreflight({ amazon_account_id: 'acct', campaign_id: '123' }).code, 'MISSING_PRODUCT_ID');
+  assertEquals(autoCampaignRepairPreflight({ asin: 'B000000001', campaign_id: '  ' }), { ok: false, code: 'MISSING_ACCOUNT_ID', reason: 'Conta Amazon ausente; reparo não pode ser executado.' });
+  assertEquals(autoCampaignRepairPreflight({ amazon_account_id: 'acct', asin: 'B000000001', campaign_id: '' }), { ok: false, code: 'MISSING_CAMPAIGN_ID', reason: 'ID de campanha ausente; criação deve ocorrer no fluxo de cobertura/Kick-off.' });
+  assertEquals(autoCampaignRepairPreflight({ amazon_account_id: 'acct', campaign_id: '123' }), { ok: false, code: 'MISSING_PRODUCT_ID', reason: 'ASIN e SKU ausentes; reparo não pode ser vinculado a um produto.' });
   assertEquals(autoCampaignRepairPreflight({ amazon_account_id: 'acct', asin: 'B000000001', campaign_id: ' 123 ' }), { ok: true, campaignId: '123' });
   assertEquals(autoCampaignRepairPreflight({ amazon_account_id: 'acct', sku: 'SKU-1', amazon_campaign_id: '456' }), { ok: true, campaignId: '456' });
 });
