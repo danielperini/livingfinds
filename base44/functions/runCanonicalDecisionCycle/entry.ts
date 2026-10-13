@@ -103,7 +103,8 @@ Deno.serve(async(request)=>{
         })
       : { ok: true, skipped: true, reason: 'no_daily_review_or_stage_failure' };
 
-    const cycleOk = failedStageNames.length === 0;
+    const cycleOutcome = resolveCanonicalCycleOutcome(failedStageNames, shouldSupervise, supervision);
+    const cycleOk = cycleOutcome.ok;
     const accountRows = body.amazon_account_id
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1).catch(() => [])
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 1).catch(() => []);
@@ -113,23 +114,28 @@ Deno.serve(async(request)=>{
         amazon_account_id: accountId,
         operation: 'v6sia_canonical_decision_cycle',
         trigger_type: String(body.trigger_type || 'canonical_decision_cycle').slice(0, 100),
-      status: cycleOk && (!shouldSupervise || supervision?.ok === true) ? 'success' : 'warning',
+      status: cycleOutcome.core_ok ? 'success' : 'warning',
         started_at: cycleStartedAt,
         completed_at: new Date().toISOString(),
         duration_ms: Date.now() - new Date(cycleStartedAt).getTime(),
         records_processed: 4,
-      error_message: !cycleOk ? JSON.stringify(failedStages).slice(0, 900) : (shouldSupervise && supervision?.ok !== true ? String(supervision?.error || 'V6SIA supervisor was not confirmed').slice(0, 500) : null),
+      error_message: !cycleOutcome.core_ok ? JSON.stringify(failedStages).slice(0, 900) : null,
         result_summary: JSON.stringify({
           engine_version: 'V6SIA', correlation_id: correlationId,
           stages: Object.fromEntries(Object.entries(stageResults).map(([name, result]: [string, any]) => [name, result?.ok === false ? 'failed' : result?.skipped ? 'skipped' : 'ok'])),
           stage_failures: failedStages,
           supervision_status: supervision?.status || (supervision?.skipped ? 'skipped' : supervision?.ok === false ? 'failed' : 'ok'),
+          supervision_ok: cycleOutcome.supervision_ok,
+          cycle_partial: cycleOutcome.partial,
         }).slice(0, 1400),
       }).catch(() => {});
     }
 
     return Response.json({
-      ok:cycleOk && (!shouldSupervise || supervision?.ok === true),
+      ok: cycleOutcome.ok,
+      core_stages_ok: cycleOutcome.core_ok,
+      supervision_ok: cycleOutcome.supervision_ok,
+      partial: cycleOutcome.partial,
       engine:'canonical-decision-cycle',
       engine_version:'V6SIA',
       correlation_id:correlationId,
