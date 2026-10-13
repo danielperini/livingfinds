@@ -47,7 +47,7 @@ Deno.serve(async (req) => {
     const accountId   = body.amazon_account_id as string | undefined;
     const limits = resolveManualExpansionLimits(body.max_per_run ?? DEFAULT_MAX_PER_RUN, body.max_per_asin ?? DEFAULT_MAX_PER_ASIN);
     const maxPerRun = limits.perRun;
-    const maxPerAsin = Math.min(DEFAULT_MAX_PER_ASIN, limits.perSku);
+    const maxPerAsin = DEFAULT_MAX_PER_ASIN;
     const dryRun      = body.dry_run === true;
     const forceAsin   = body.asin_filter as string | undefined;
 
