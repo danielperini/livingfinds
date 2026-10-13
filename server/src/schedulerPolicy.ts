@@ -15,7 +15,20 @@ export type SchedulerRun = {
   attempt_count?: number;
   next_attempt_at?: string | null;
   started_at?: string | null;
+  finished_at?: string | null;
+  recovery_count?: number;
 };
+
+export function isDailyCycleExecutionConfirmedResponse(response: any): boolean {
+  if (!response || response.ok !== true) return false;
+  const data = response.data ?? response;
+  const reports = Array.isArray(data?.reports) ? data.reports : [];
+  return reports.length > 0 && reports.every((report: any) =>
+    report?.daily_cycle?.status === 'confirmed' &&
+    report?.execution?.executor === 'confirmed' &&
+    report?.execution?.confirmation === 'confirmed'
+  );
+}
 
 export function isSuccessfulJobResponse(response: any): boolean {
   if (!response || response.ok !== true || response.data?.ok === false) return false;
@@ -44,6 +57,29 @@ export function shouldDispatchRun(
   if (Number(run.attempt_count || 0) >= maxAttempts) return false;
   const nextAttempt = Date.parse(String(run.next_attempt_at || ''));
   return !Number.isFinite(nextAttempt) || nextAttempt <= nowMs;
+}
+
+export function shouldRecoverDailyCatchUpRun(
+  job: SchedulerJob,
+  run: SchedulerRun | null | undefined,
+  nowMs: number,
+  cooldownMs = 60 * 60_000,
+  maxRecoveries = 1,
+): boolean {
+  if (job.catch_up_daily !== true || run?.status !== 'exhausted') return false;
+  if (Number(run.recovery_count || 0) >= maxRecoveries) return false;
+  const finishedAt = Date.parse(String(run.finished_at || ''));
+  return Number.isFinite(finishedAt) && nowMs - finishedAt >= cooldownMs;
+}
+
+export function shouldDispatchScheduledRun(
+  job: SchedulerJob,
+  run: SchedulerRun | null | undefined,
+  nowMs: number,
+  maxAttempts: number,
+): boolean {
+  return shouldDispatchRun(run, nowMs, maxAttempts) ||
+    shouldRecoverDailyCatchUpRun(job, run, nowMs);
 }
 
 export function isStaleFinalAttempt(

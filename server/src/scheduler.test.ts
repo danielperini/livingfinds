@@ -1,11 +1,14 @@
 import { assertEquals } from 'jsr:@std/assert@1';
 import {
   dailyCatchUpSlot,
+  isDailyCycleExecutionConfirmedResponse,
   isStaleFinalAttempt,
   isSuccessfulJobResponse,
   retryDelaySeconds,
   runWithLock,
   shouldDispatchRun,
+  shouldDispatchScheduledRun,
+  shouldRecoverDailyCatchUpRun,
   validateSchedule,
 } from './schedulerPolicy.ts';
 
@@ -144,6 +147,31 @@ Deno.test('persistent scheduler states retry only after due time and stop termin
   assertEquals(isStaleFinalAttempt(finalStaleRun, now, 6), true);
 });
 
+Deno.test('exhausted daily catch-up receives one bounded recovery after cooldown', () => {
+  const job = { name: 'daily motor', function: 'runCanonicalDecisionCycle', cron: '25 1 * * *', catch_up_daily: true };
+  const now = Date.parse('2026-10-13T12:00:00Z');
+  const exhausted = { status: 'exhausted', attempt_count: 6, recovery_count: 0, finished_at: '2026-10-13T10:59:00Z' };
+  assertEquals(shouldRecoverDailyCatchUpRun(job, exhausted, now), true);
+  assertEquals(shouldDispatchScheduledRun(job, exhausted, now, 6), true);
+  assertEquals(shouldRecoverDailyCatchUpRun(job, { ...exhausted, finished_at: '2026-10-13T11:01:00Z' }, now), false);
+  assertEquals(shouldRecoverDailyCatchUpRun(job, { ...exhausted, recovery_count: 1 }, now), false);
+  assertEquals(shouldRecoverDailyCatchUpRun({ ...job, catch_up_daily: false }, exhausted, now), false);
+  assertEquals(shouldDispatchRun(exhausted, now, 6), false);
+});
+
+Deno.test('watchdog reconciles a confirmed Ads cycle despite unrelated audit failure', () => {
+  const response = { ok: true, data: { ok: false, reports: [{
+    daily_cycle: { status: 'confirmed' },
+    execution: { executor: 'confirmed', confirmation: 'confirmed' },
+    sku_coverage: { health: 'incomplete' },
+  }] } };
+  assertEquals(isDailyCycleExecutionConfirmedResponse(response), true);
+  assertEquals(isDailyCycleExecutionConfirmedResponse({ ok: true, data: { reports: [{
+    daily_cycle: { status: 'confirmed' },
+    execution: { executor: 'confirmed', confirmation: 'failed' },
+  }] } }), false);
+  assertEquals(isDailyCycleExecutionConfirmedResponse({ ok: true, data: { reports: [] } }), false);
+});
 Deno.test('partial engine responses are not recorded as successful scheduler runs', () => {
   assertEquals(
     isSuccessfulJobResponse({ ok: true, data: { ok: true, stages: { metrics: { ok: true } } } }),
