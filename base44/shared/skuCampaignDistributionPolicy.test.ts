@@ -33,7 +33,7 @@ Deno.test('manual exact promotion requires fresh available stock and two verifie
 
 Deno.test('campaign count is not treated as a target and over-concentrated SKUs stop expanding', () => {
   const crowded = evaluateManualExactExpansion({
-    availableFbaUnits: 2,
+    availableFbaUnits: 5,
     sameSkuAttributionVerified: true,
     sameSkuOrders: 8,
     manualCampaignCount: 47,
