@@ -10,11 +10,14 @@ import { makeFunctions } from './sdk/functions.ts';
 import { schedulerSql } from './db.ts';
 import {
   dailyCatchUpSlot,
+  isDailyCycleExecutionConfirmedResponse,
   isStaleFinalAttempt,
   isSuccessfulJobResponse,
   retryDelaySeconds,
   runWithLock,
   shouldDispatchRun,
+  shouldDispatchScheduledRun,
+  shouldRecoverDailyCatchUpRun,
   validateSchedule,
 } from './schedulerPolicy.ts';
 
@@ -146,7 +149,7 @@ export async function getDailyMotorRunStatus(timezone = 'America/Sao_Paulo') {
   }`;
   const rows = await schedulerSql.unsafe(
     `
-    select status,attempt_count,started_at,finished_at,next_attempt_at,last_error
+    select status,attempt_count,recovery_count,started_at,finished_at,next_attempt_at,last_error
     from scheduler_job_runs
     where function_name='runCanonicalDecisionCycle' and slot_key=$1
     limit 1
@@ -161,6 +164,7 @@ export async function getDailyMotorRunStatus(timezone = 'America/Sao_Paulo') {
     due,
     status: String(run?.status || (due ? 'missing' : 'not_due')),
     attempts: Number(run?.attempt_count || 0),
+    recovery_count: Number(run?.recovery_count || 0),
     started_at: run?.started_at ?? null,
     finished_at: run?.finished_at ?? null,
     next_attempt_at: run?.next_attempt_at ?? null,
@@ -186,6 +190,7 @@ async function ensureRunLedger(): Promise<void> {
       function_name text not null,
       status text not null check (status in ('running','succeeded','failed','exhausted')),
       attempt_count integer not null default 0,
+      recovery_count integer not null default 0,
       started_at timestamptz,
       finished_at timestamptz,
       next_attempt_at timestamptz,
@@ -195,20 +200,25 @@ async function ensureRunLedger(): Promise<void> {
     )
   `);
   await schedulerSql.unsafe(
+    'alter table scheduler_job_runs add column if not exists recovery_count integer not null default 0',
+  );
+  await schedulerSql.unsafe(
     'create index if not exists scheduler_job_runs_retry_idx on scheduler_job_runs (status, next_attempt_at)',
   );
 }
 
 async function getRun(jobKey: string, slotKey: string) {
   const rows = await schedulerSql.unsafe(
-    'select status, attempt_count, next_attempt_at, started_at from scheduler_job_runs where job_key=$1 and slot_key=$2 limit 1',
+    'select status, attempt_count, recovery_count, next_attempt_at, started_at, finished_at from scheduler_job_runs where job_key=$1 and slot_key=$2 limit 1',
     [jobKey, slotKey],
   );
   return rows[0] as unknown as {
     status: string;
     attempt_count: number;
+    recovery_count: number;
     next_attempt_at: string | null;
     started_at: string | null;
+    finished_at: string | null;
   } | undefined;
 }
 
@@ -304,11 +314,18 @@ export async function startScheduler(): Promise<void> {
         const maxAttempts = Math.max(1, Math.min(12, Number(job.retry?.max_attempts ?? 1)));
         const beforeLock = await getRun(jobKey, slotKey);
         if (
-          !shouldDispatchRun(beforeLock, Date.now(), maxAttempts) &&
+          !shouldDispatchScheduledRun(job, beforeLock, Date.now(), maxAttempts) &&
           !isStaleFinalAttempt(beforeLock, Date.now(), maxAttempts)
         ) return;
         const result = await runWithDistributedLock(`livingfinds:scheduler:${jobKey}`, async () => {
-          const previous = await getRun(jobKey, slotKey);
+          let previous = await getRun(jobKey, slotKey);
+          if (shouldRecoverDailyCatchUpRun(job, previous, Date.now())) {
+            const reopened = await schedulerSql.unsafe(
+              "update scheduler_job_runs set status='failed',attempt_count=0, recovery_count=recovery_count+1, next_attempt_at=now(), last_error='bounded_daily_recovery_scheduled', updated_at=now() where job_key=$1 and slot_key=$2 and status='exhausted' and recovery_count < 1 and finished_at <= now() - interval '1 hour' returning status,attempt_count,recovery_count,next_attempt_at,started_at,finished_at",
+              [jobKey, slotKey],
+            );
+            if (reopened[0]) previous = reopened[0] as typeof previous;
+          }
           if (!shouldDispatchRun(previous, Date.now(), maxAttempts)) {
             if (isStaleFinalAttempt(previous, Date.now(), maxAttempts)) {
               await schedulerSql.unsafe(
@@ -397,11 +414,20 @@ export async function startScheduler(): Promise<void> {
               succeeded ? 'succeeded' : exhausted ? 'exhausted' : 'retry_scheduled'
             }`,
           );
-          return { skipped: false, succeeded, exhausted, attempt };
+          return {
+            skipped: false,
+            succeeded,
+            exhausted,
+            attempt,
+            dailyCycleConfirmed: isDailyCycleExecutionConfirmedResponse(response),
+          };
         });
         if (!result.acquired) {
           console.warn('[scheduler] skipped_concurrent_execution ' + job.name + '/' + slotKey);
-        } else if (!result.value.skipped && result.value.succeeded && job.reconciles_daily_function) {
+        } else if (
+          !result.value.skipped && job.reconciles_daily_function &&
+          (result.value.succeeded || result.value.dailyCycleConfirmed)
+        ) {
           const reconciledJob = jobs.find((candidate) => candidate.function === job.reconciles_daily_function && candidate.catch_up_daily === true);
           const reconciledDay = /^\d{4}-\d{2}-\d{2}/.exec(slotKey)?.[0];
           if (reconciledJob && reconciledDay) {
