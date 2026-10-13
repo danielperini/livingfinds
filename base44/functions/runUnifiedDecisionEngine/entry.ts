@@ -170,7 +170,7 @@ Deno.serve(async (request) => {
           delivery_lookback_days: 7,
           max_replacements_per_run: replacementCapacity,
           max_structure_repairs_per_run: body.max_structure_repairs_per_run ?? 5,
-          max_bid_recoveries_per_run: body.max_bid_recoveries_per_run ?? 8,
+          max_bid_recoveries_per_run: body.max_bid_recoveries_per_run ?? 20,
         });
 
     const daypartConfiguration = body.skip_scheduled_daypart === true || !daypartWindow
@@ -290,7 +290,7 @@ Deno.serve(async (request) => {
         max_bid_recovery_attempts: 2,
         max_replacements_per_run: replacementCapacity,
         max_structure_repairs_per_run: body.max_structure_repairs_per_run ?? 5,
-        max_bid_recoveries_per_run: body.max_bid_recoveries_per_run ?? 8,
+        max_bid_recoveries_per_run: body.max_bid_recoveries_per_run ?? 20,
         economic_bid_cap: true,
         trusted_bootstrap_economics: 'somente custo confirmado, preço, break-even e safe_max_cpc explícitos',
         asin_zero_sale_spend_cap: 'clamp(4 x safe_max_cpc, R$2,50, R$5,00)',
