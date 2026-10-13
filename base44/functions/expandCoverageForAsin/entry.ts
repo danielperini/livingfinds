@@ -151,7 +151,7 @@ Deno.serve(async (req) => {
       const kw = extractKeywordFromCampaignName(c.name || c.campaign_name || '');
       if (kw !== null) {
         if (!coveredTermsByAsin.has(asin)) coveredTermsByAsin.set(asin, new Set());
-        coveredTermsByAsin.get(asin)!.add(normTerm(kw));
+        coveredTermsByAsin.get(asin)!.add(normTerm(kw || ''));
       }
     }
 
