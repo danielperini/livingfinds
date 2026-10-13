@@ -103,6 +103,7 @@
       "name": "Independent daily motor watchdog and active-SKU E2E recovery - 01:50 BRT",
       "function": "runDailyMotorWatchdog",
       "cron": "50 1 * * *",
+      "catch_up_daily": true,
       "reconciles_daily_function": "runCanonicalDecisionCycle",
       "retry": { "max_attempts": 4, "base_delay_seconds": 300, "max_delay_seconds": 1800 },
       "payload": { "_service_role": true, "trigger_type": "scheduler_daily_motor_watchdog" }

@@ -29,6 +29,7 @@ Deno.test('schedule diária declara watchdog redundante ligado ao ciclo canônic
   const config = JSON.parse(await Deno.readTextFile(schedulePath));
   const jobs = config.jobs;
   const watchdog = jobs.find((job: any) => job.function === 'runDailyMotorWatchdog');
+  assertEquals(watchdog?.catch_up_daily, true);
   assertEquals(watchdog?.reconciles_daily_function, 'runCanonicalDecisionCycle');
   assertEquals(jobs.some((job: any) => job.function === watchdog?.reconciles_daily_function && job.catch_up_daily === true), true);
   assertEquals(validateSchedule(jobs), []);
