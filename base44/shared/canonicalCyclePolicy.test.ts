@@ -1,6 +1,6 @@
 import { assertEquals } from 'jsr:@std/assert@1';
 import { campaignCoverageAsin, campaignCoverageProductEligible } from './campaignCoverageEligibility.ts';
-import { collectUnconfirmedCycleStages, describeUnconfirmedCycleStage, isConfirmedCycleStage, isDecisionExecutionConfirmed, shouldRecoverDailyCycle, shouldRepairSkuCoverage } from './canonicalCyclePolicy.ts';
+import { collectUnconfirmedCycleStages, describeUnconfirmedCycleStage, isConfirmedCycleStage, resolveCanonicalCycleOutcome, isDecisionExecutionConfirmed, shouldRecoverDailyCycle, shouldRepairSkuCoverage } from './canonicalCyclePolicy.ts';
 
 Deno.test('etapa do motor só é sucesso com confirmação explícita', () => {
   assertEquals(isConfirmedCycleStage({ ok: true }), true);
@@ -62,4 +62,23 @@ Deno.test('E2E só confirma execução sem falhas, itens pendentes ou divergênc
   assertEquals(isDecisionExecutionConfirmed({ ok: true, failed: 0, remaining: 2 }, { ok: true, divergences: 0 }), false);
   assertEquals(isDecisionExecutionConfirmed({ ok: true, failed: 0, remaining: 0 }, { ok: true, divergences: 1 }), false);
   assertEquals(isDecisionExecutionConfirmed({ ok: true, skipped: true }, { ok: true, skipped: true }), false);
+});
+
+
+Deno.test('falha da supervisão IA fica parcial e não bloqueia etapas centrais confirmadas', () => {
+  assertEquals(resolveCanonicalCycleOutcome([], true, { ok: false, error: 'AI unavailable' }), {
+    ok: true, core_ok: true, supervision_ok: false, partial: true,
+  });
+  assertEquals(resolveCanonicalCycleOutcome([], true, { ok: true }), {
+    ok: true, core_ok: true, supervision_ok: true, partial: false,
+  });
+});
+
+Deno.test('falha de etapa central continua bloqueando o ciclo, mesmo com supervisão confirmada', () => {
+  assertEquals(resolveCanonicalCycleOutcome(['unified_engine'], true, { ok: true }), {
+    ok: false, core_ok: false, supervision_ok: true, partial: false,
+  });
+  assertEquals(resolveCanonicalCycleOutcome([], false, null), {
+    ok: true, core_ok: true, supervision_ok: true, partial: false,
+  });
 });
