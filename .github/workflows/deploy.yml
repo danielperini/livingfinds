@@ -438,16 +438,16 @@ jobs:
               if (!response.ok || data.ok === false) throw new Error("Falha no motor intradiario: " + JSON.stringify(data).slice(0, 3000));
             ' </dev/null
 
-            echo '--- garantia FINAL remota: 1 AUTO + 5 MANUAIS por SKU elegivel ---'
+            echo '--- garantia FINAL remota: cobertura AUTO sem piso artificial de campanhas MANUAIS ---'
             docker compose -f server/docker-compose.yml exec -T app deno eval '
               const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
               const response = await fetch("http://127.0.0.1:8000/functions/ensureSkuCampaignFloor", {
                 method: "POST", headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({ _service_role: true, manual_floor: 5, trigger_type: "deploy_clear_locks_and_restore_floor" })
+                body: JSON.stringify({ _service_role: true, manual_floor: 0, trigger_type: "deploy_verify_auto_coverage_without_manual_floor" })
               });
               const data = await response.json().catch(() => ({}));
               console.log("SKU_CAMPAIGN_RESTORE_HTTP=" + response.status + "|OK=" + data.ok + "|DEFICITS=" + (data.deficits_count ?? "unknown"));
-              if (!response.ok || data.ok === false) throw new Error("Falha ao restaurar piso: " + JSON.stringify(data.deficits || []).slice(0, 5000));
+              if (!response.ok || data.ok === false) throw new Error("Falha ao verificar cobertura AUTO: " + JSON.stringify(data.deficits || []).slice(0, 5000));
             ' </dev/null
             echo '--- reconciliar AUTO canonica apos restauracao do piso ---'
             docker compose -f server/docker-compose.yml exec -T app deno eval '
@@ -465,11 +465,11 @@ jobs:
               const response = await fetch("http://127.0.0.1:8000/functions/verifyRemoteSkuCampaignFloor", {
                 method: "POST",
                 headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({ _service_role: true, manual_floor: 5 })
+                body: JSON.stringify({ _service_role: true, manual_floor: 0 })
               });
               const data = await response.json().catch(() => ({}));
-              console.log("SKU_CAMPAIGN_FLOOR_HTTP=" + response.status + "|OK=" + data.ok + "|PRODUCTS=" + (data.products ?? 0) + "|COMPLIANT=" + (data.compliant ?? 0) + "|DEFICITS=" + (data.deficits_count ?? "unknown") + "|DATA=" + JSON.stringify(data).slice(0, 20000));
-              if (!response.ok || data.ok === false) throw new Error("Piso remoto 1 AUTO + 5 MANUAIS nao confirmado: " + JSON.stringify(data.deficits || []).slice(0, 5000));
+              console.log("SKU_AUTO_COVERAGE_HTTP=" + response.status + "|OK=" + data.ok + "|PRODUCTS=" + (data.products ?? 0) + "|COMPLIANT=" + (data.compliant ?? 0) + "|DEFICITS=" + (data.deficits_count ?? "unknown") + "|DATA=" + JSON.stringify(data).slice(0, 20000));
+              if (!response.ok || data.ok === false) throw new Error("Cobertura AUTO remota nao confirmada: " + JSON.stringify(data.deficits || []).slice(0, 5000));
             ' </dev/null
 
             echo '--- verificação do frontend publicado ---'

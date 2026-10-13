@@ -58,12 +58,16 @@ Deno.serve(async (req) => {
       if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
     }
 
+    // Retired broad expansion: generic relevance/suggestion signals are not proof of sales.
+    // Verified winners are promoted only by runTermBankToCampaigns.
+    return Response.json({ ok: true, skipped: true, reason: 'manual_expansion_requires_verified_term_bank_winner' });
+
     const { amazon_account_id: bodyAccountId, asin: bodyAsin, max_campaigns = MAX_CAMPAIGNS_PER_ASIN, trigger_type = 'automatic' } = body;
 
     // ── Resolver conta ────────────────────────────────────────────────────
     let account: any = null;
     if (bodyAccountId) {
-      const rows = await base44.asServiceRole.entities.AmazonAccount.filter({ id: bodyAccountId }, null, 1).catch(() => []);
+      const rows = await base44.asServiceRole.entities.AmazonAccount.filter({ id: bodyAccountId }, undefined, 1).catch(() => []);
       account = rows[0];
     }
     if (!account) {
@@ -83,14 +87,14 @@ Deno.serve(async (req) => {
     } else {
       // Todos os produtos authorized + eligible + com estoque
       const products = await base44.asServiceRole.entities.Product.filter(
-        { amazon_account_id: aid, ads_scope_status: 'authorized', ads_eligibility_status: 'eligible' }, null, 200
+        { amazon_account_id: aid, ads_scope_status: 'authorized', ads_eligibility_status: 'eligible' }, undefined, 200
       ).catch(() => []);
 
       const eligible = products.filter((p: any) => Number(p.fba_inventory || 0) > 0 && p.asin);
 
       // Priorizar ASINs com menos campanhas manuais ativas
       const manualCamps = await base44.asServiceRole.entities.Campaign.filter(
-        { amazon_account_id: aid, targeting_type: 'MANUAL' }, null, 1000
+        { amazon_account_id: aid, targeting_type: 'MANUAL' }, undefined, 1000
       ).catch(() => []);
 
       const manualCountByAsin = new Map<string, number>();
@@ -120,8 +124,8 @@ Deno.serve(async (req) => {
 
     // ── Carregar dados compartilhados ────────────────────────────────────
     const [allKeywords, allCampaigns] = await Promise.all([
-      base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, null, 5000).catch(() => []),
-      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 2000).catch(() => []),
+      base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, undefined, 5000).catch(() => []),
+      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, undefined, 2000).catch(() => []),
     ]);
 
     // Índice: keywords EXACT por asin (normalizadas) — para verificar cobertura existente
@@ -145,9 +149,9 @@ Deno.serve(async (req) => {
       const asin = String(c.asin || '').toUpperCase();
       if (!asin || String(c.targeting_type || '').toUpperCase() !== 'MANUAL') continue;
       const kw = extractKeywordFromCampaignName(c.name || c.campaign_name || '');
-      if (kw) {
+      if (kw !== null) {
         if (!coveredTermsByAsin.has(asin)) coveredTermsByAsin.set(asin, new Set());
-        coveredTermsByAsin.get(asin)!.add(normTerm(kw));
+        coveredTermsByAsin.get(asin)!.add(normTerm(kw || ''));
       }
     }
 
@@ -169,7 +173,7 @@ Deno.serve(async (req) => {
       // ── FONTE 1: KeywordBank (WINNER/PROVEN/CANDIDATE + intent >= 75) ──
       try {
         const bankTerms = await base44.asServiceRole.entities.KeywordBank.filter(
-          { amazon_account_id: aid, asin }, null, 300
+          { amazon_account_id: aid, asin }, undefined, 300
         ).catch(() => []);
 
         const validStatuses = new Set(['WINNER', 'PROVEN', 'CANDIDATE']);
@@ -185,7 +189,7 @@ Deno.serve(async (req) => {
       // ── FONTE 2: KeywordSuggestion (confidence >= 0.95) ───────────────
       try {
         const suggestions = await base44.asServiceRole.entities.KeywordSuggestion.filter(
-          { amazon_account_id: aid, asin }, null, 200
+          { amazon_account_id: aid, asin }, undefined, 200
         ).catch(() => []);
 
         for (const s of suggestions) {

@@ -177,8 +177,8 @@ Deno.serve(async (req) => {
     // Auditoria de competição AUTO vs MANUAL: sempre — detecta colisões e negativa fire-and-forget
     add('auditAutoManualCompetition', 'audit_auto_manual_competition', { trigger_type: 'automatic' });
 
-    // Expansão de cobertura: sempre — cria campanhas canônicas para ASINs elegíveis
-    add('expandCoverageForAsin', 'expand_coverage_auto', { trigger_type: 'automatic', max_campaigns: 30 });
+    // Promoção manual ocorre somente pelo TermBank, com duas vendas verificadas do mesmo SKU.
+    // O antigo expandCoverageForAsin aceitava sugestões sem conversão comprovada e foi retirado do ciclo.
 
     // 1x/dia: Auditoria de divergência de budget — ativa KillSwitch se delta > 5%
     const budgetAuditDone = await wasRunTodaySuccessfully(base44, aid, 'audit_budget_divergence');
@@ -214,11 +214,11 @@ Deno.serve(async (req) => {
 
     // Ultima acao de Ads: restaura e confirma remotamente o piso depois dos
     // guardrails, motores de lucro e reparos que podem alterar estados.
-    add('ensureSkuCampaignFloor', 'sku_campaign_floor_final', { manual_floor: 5 });
+    add('ensureSkuCampaignFloor', 'sku_campaign_floor_final', { manual_floor: 0 });
     // Trava final: reduz qualquer excesso ao teto salvo em Configurações.
     add('bulkSetAllBids', 'amazon_bid_ceiling_final');
     // O estado local nao e prova de ativacao; confirmar novamente na Amazon.
-    add('verifyRemoteSkuCampaignFloor', 'sku_campaign_floor_remote_verification', { manual_floor: 5 });
+    add('verifyRemoteSkuCampaignFloor', 'sku_campaign_floor_remote_verification', { manual_floor: 0 });
 
     // 1x/dia: backup
     if (!backupDone || force) add('runBackupToDrive', 'daily_backup', { backup_type: 'daily_incremental' }, true);

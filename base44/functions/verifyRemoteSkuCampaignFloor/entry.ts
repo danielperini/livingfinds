@@ -1,5 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { availableAdsStock, stockAdsDecision } from '../../shared/stockAdsPolicy.ts';
+import { resolveManualCampaignFloor } from '../../shared/skuCampaignDistributionPolicy.ts';
 
 async function listEnabled(base44: any, aid: string) {
   const campaigns: any[] = [];
@@ -26,9 +27,9 @@ Deno.serve(async (req) => {
     const base44 = createClientFromRequest(req);
     const body = await req.json().catch(() => ({}));
     if (body._service_role !== true) return Response.json({ ok: false, error: 'Uso interno' }, { status: 403 });
-    const floor = Math.max(5, Number(body.manual_floor || 5));
+    const floor = resolveManualCampaignFloor(body.manual_floor);
     const accounts = body.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.list('-updated_date', 50);
     const connected = accounts.filter((a: any) => a.ads_profile_id && (a.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN')));
     const results: any[] = [];

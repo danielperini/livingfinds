@@ -15,9 +15,11 @@
  *  - Registra resultado no SyncExecutionLog
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
+import { availableAdsStock } from '../../shared/stockAdsPolicy.ts';
+import { evaluateManualExactExpansion, resolveManualExpansionLimits, SKU_CAMPAIGN_DISTRIBUTION } from '../../shared/skuCampaignDistributionPolicy.ts';
 
-const DEFAULT_MAX_PER_RUN  = 10;
-const DEFAULT_MAX_PER_ASIN = 15; // ASINs com muitos termos winners no TermBank
+const DEFAULT_MAX_PER_RUN  = SKU_CAMPAIGN_DISTRIBUTION.maxNewManualExactPerAccountPerCycle;
+const DEFAULT_MAX_PER_ASIN = SKU_CAMPAIGN_DISTRIBUTION.maxManualExactCampaignsPerSku;
 const DEFAULT_MIN_BID      = 0.50;
 const DEFAULT_BUDGET       = 15;
 const COOLDOWN_HOURS       = 24; // aguardar entre tentativas para o mesmo ASIN+termo
@@ -43,13 +45,14 @@ Deno.serve(async (req) => {
 
     // ── Resolver conta ────────────────────────────────────────────────────
     const accountId   = body.amazon_account_id as string | undefined;
-    const maxPerRun   = Number(body.max_per_run  ?? DEFAULT_MAX_PER_RUN);
-    const maxPerAsin  = Number(body.max_per_asin ?? DEFAULT_MAX_PER_ASIN);
+    const limits = resolveManualExpansionLimits(body.max_per_run ?? DEFAULT_MAX_PER_RUN, body.max_per_asin ?? DEFAULT_MAX_PER_ASIN);
+    const maxPerRun = limits.perRun;
+    const maxPerAsin = DEFAULT_MAX_PER_ASIN;
     const dryRun      = body.dry_run === true;
     const forceAsin   = body.asin_filter as string | undefined;
 
     const accounts = accountId
-      ? await db.entities.AmazonAccount.filter({ id: accountId }, null, 1)
+      ? await db.entities.AmazonAccount.filter({ id: accountId }, undefined, 1)
       : await db.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_date', 1);
     const account = accounts[0];
     if (!account) return Response.json({ ok: false, error: 'Nenhuma conta conectada' }, { status: 404 });
@@ -58,24 +61,29 @@ Deno.serve(async (req) => {
     // ── Carregar dados em paralelo ─────────────────────────────────────────
     const [termBankRaw, products, campaigns] = await Promise.all([
       db.entities.TermBank.filter({ amazon_account_id: aid }, '-orders', 2000).catch(() => [] as any[]),
-      db.entities.Product.filter({ amazon_account_id: aid }, null, 1000).catch(() => [] as any[]),
-      db.entities.Campaign.filter({ amazon_account_id: aid }, null, 3000).catch(() => [] as any[]),
+      db.entities.Product.filter({ amazon_account_id: aid }, undefined, 1000).catch(() => [] as any[]),
+      db.entities.Campaign.filter({ amazon_account_id: aid }, undefined, 3000).catch(() => [] as any[]),
     ]);
 
     // ── Índices ────────────────────────────────────────────────────────────
     const productMap = new Map<string, any>();
     for (const p of products) { if (p.asin) productMap.set(p.asin, p); }
 
-    // Campanhas MANUAL EXACT ativas/pausadas por ASIN → contar e indexar por keyword
+    // Contar campanhas MANUAL EXACT únicas por ASIN. Pausadas também contam para
+    // impedir que reexecuções fabriquem um portfólio excessivamente fragmentado.
     const manualExactByAsin = new Map<string, number>();
     const existingCampaignNames = new Set<string>();
+    const seenManualCampaignIds = new Set<string>();
     for (const c of campaigns) {
-      const st    = (c.state || c.status || '').toLowerCase();
-      const isManualExact = /^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(c.name || c.campaign_name || '');
-      if (isManualExact && ['enabled', 'paused', 'incomplete'].includes(st)) {
-        if (c.asin) manualExactByAsin.set(c.asin, (manualExactByAsin.get(c.asin) || 0) + 1);
-        existingCampaignNames.add((c.name || c.campaign_name || '').toLowerCase().trim());
-      }
+      const st = String(c.state || c.status || '').toLowerCase();
+      const name = String(c.name || c.campaign_name || '');
+      const isManualExact = /^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(name);
+      const campaignId = String(c.campaign_id || c.amazon_campaign_id || c.id || '').trim();
+      if (!isManualExact || !['enabled', 'active', 'paused', 'incomplete'].includes(st) || !campaignId || seenManualCampaignIds.has(campaignId)) continue;
+      seenManualCampaignIds.add(campaignId);
+      const asin = String(c.asin || name.match(/B0[A-Z0-9]{8}/i)?.[0] || '').toUpperCase();
+      if (asin) manualExactByAsin.set(asin, (manualExactByAsin.get(asin) || 0) + 1);
+      existingCampaignNames.add(name.toLowerCase().trim());
     }
 
     // ── Filtrar candidatos do TermBank ─────────────────────────────────────
@@ -85,17 +93,23 @@ Deno.serve(async (req) => {
       if (!t.term || !t.asin) return false;
       if (forceAsin && t.asin !== forceAsin) return false;
 
-      // Apenas termos com boa classificação ou alta confiança
-      const isWinner     = t.classification === 'winner';
+      // Classificação/IA sozinha não comprova conversão do SKU. Exigir a mesma
+      // evidência verificável usada pelo fluxo canônico de vencedores.
+      const isWinner = t.classification === 'winner' || t.is_winner === true;
       const highConfidence = safeFloat(t.confidence) >= 85;
       if (!isWinner && !highConfidence) return false;
 
-      // Produto deve existir e ter estoque
       const prod = productMap.get(t.asin);
       if (!prod) return false;
-      if (safeFloat(prod.fba_inventory) <= 0) return false;
-
-      return true;
+      const eligibility = evaluateManualExactExpansion({
+        availableFbaUnits: availableAdsStock(prod),
+        sameSkuAttributionVerified: t.same_sku_attribution_verified === true,
+        sameSkuOrders: t.same_sku_orders,
+        manualCampaignCount: manualExactByAsin.get(String(t.asin).toUpperCase()) || 0,
+        createdThisCycle: 0,
+        alreadyExact: false,
+      });
+      return eligibility.eligible;
     });
 
     // Ordenar: winners primeiro, depois por orders desc
@@ -110,6 +124,7 @@ Deno.serve(async (req) => {
     const skipped: any[]  = [];
     const errors: any[]   = [];
     const asinCount = new Map<string, number>(manualExactByAsin);
+    const createdThisCycleByAsin = new Map<string, number>();
 
     for (const term of candidateTerms) {
       if (created.length >= maxPerRun) break;
@@ -118,16 +133,26 @@ Deno.serve(async (req) => {
       const kw   = String(term.term || '').trim();
       if (!kw) { skipped.push({ term: kw, asin, reason: 'empty_term' }); continue; }
 
-      // Cap por ASIN
-      if ((asinCount.get(asin) || 0) >= maxPerAsin) {
-        skipped.push({ term: kw, asin, reason: 'asin_cap_reached' });
+      // Limitar novas campanhas por SKU e por ciclo, além do teto total do SKU.
+      const prod = productMap.get(asin)!;
+      const kwSlug = kw.replace(/[^a-z0-9\sáéíóúâêôãõç-]/gi, '').trim().slice(0, 40);
+      const campaignName = `SP | MANUAL | EXACT | ${asin} | ${kwSlug}`.slice(0, 128).toLowerCase().trim();
+      const eligibility = evaluateManualExactExpansion({
+        availableFbaUnits: availableAdsStock(prod),
+        sameSkuAttributionVerified: term.same_sku_attribution_verified === true,
+        sameSkuOrders: term.same_sku_orders,
+        manualCampaignCount: asinCount.get(asin) || 0,
+        createdThisCycle: createdThisCycleByAsin.get(asin) || 0,
+        alreadyExact: existingCampaignNames.has(campaignName),
+      });
+      if (!eligibility.eligible) {
+        skipped.push({ term: kw, asin, reason: eligibility.reason });
         continue;
       }
-
-      // Verificar se campanha com este nome já existe
-      const prod         = productMap.get(asin)!;
-      const kwSlug       = kw.replace(/[^a-z0-9\sáéíóúâêôãõç-]/gi, '').trim().slice(0, 40);
-      const campaignName = `SP | MANUAL | EXACT | ${asin} | ${kwSlug}`.slice(0, 128).toLowerCase().trim();
+      if ((asinCount.get(asin) || 0) >= maxPerAsin) {
+        skipped.push({ term: kw, asin, reason: 'manual_campaign_cap_reached' });
+        continue;
+      }
       if (existingCampaignNames.has(campaignName)) {
         skipped.push({ term: kw, asin, reason: 'campaign_already_exists' });
         // Marcar como promovido para não tentar novamente
@@ -155,6 +180,7 @@ Deno.serve(async (req) => {
           acos: term.acos,
         });
         asinCount.set(asin, (asinCount.get(asin) || 0) + 1);
+        createdThisCycleByAsin.set(asin, (createdThisCycleByAsin.get(asin) || 0) + 1);
         continue;
       }
 
@@ -181,6 +207,7 @@ Deno.serve(async (req) => {
           }).catch(() => {});
 
           asinCount.set(asin, (asinCount.get(asin) || 0) + 1);
+          createdThisCycleByAsin.set(asin, (createdThisCycleByAsin.get(asin) || 0) + 1);
           existingCampaignNames.add(campaignName);
           created.push({
             asin, keyword: kw, bid: parseFloat(bid.toFixed(2)),

@@ -1,8 +1,7 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { availableAdsStock, stockAdsDecision } from '../../shared/stockAdsPolicy.ts';
 import { clearManualPauseLockPatch } from '../../shared/productCampaignPauseGuard.ts';
-
-const MANUAL_FLOOR = 5;
+import { resolveManualCampaignFloor } from '../../shared/skuCampaignDistributionPolicy.ts';
 const enabled = (c: any) => String(c.amazon_status || c.state || c.status || '').toUpperCase() === 'ENABLED';
 const manual = (c: any) => {
   const type = String(c.targeting_type || '').toUpperCase();
@@ -71,9 +70,9 @@ Deno.serve(async (req) => {
       if (!user || user.role !== 'admin') return Response.json({ ok: false, error: 'Admin only' }, { status: 403 });
     }
 
-    const floor = Math.max(MANUAL_FLOOR, Number(body.manual_floor || MANUAL_FLOOR));
+    const floor = resolveManualCampaignFloor(body.manual_floor);
     const accounts = body.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.list('-updated_date', 50);
     const connected = accounts.filter((a: any) => a.ads_profile_id && (a.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN')));
     const results: any[] = [];
