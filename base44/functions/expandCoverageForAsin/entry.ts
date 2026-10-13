@@ -58,6 +58,10 @@ Deno.serve(async (req) => {
       if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
     }
 
+    // Retired broad expansion: generic relevance/suggestion signals are not proof of sales.
+    // Verified winners are promoted only by runTermBankToCampaigns.
+    return Response.json({ ok: true, skipped: true, reason: 'manual_expansion_requires_verified_term_bank_winner' });
+
     const { amazon_account_id: bodyAccountId, asin: bodyAsin, max_campaigns = MAX_CAMPAIGNS_PER_ASIN, trigger_type = 'automatic' } = body;
 
     // ── Resolver conta ────────────────────────────────────────────────────
