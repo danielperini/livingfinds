@@ -44,6 +44,7 @@ test('decision alert includes only executable work that is past its due time', (
   assert.equal(isDecisionQueueOverdue({ status: 'waiting_retry', queue_status: 'scheduled', next_retry_at: future, created_at: old }, now), false);
   assert.equal(isDecisionQueueOverdue({ status: 'pending_approval', queue_status: 'pending', created_at: old }, now), false);
   assert.equal(isDecisionQueueOverdue({ status: 'pending', queue_status: 'completed', created_at: old }, now), false);
+  assert.equal(isDecisionQueueOverdue({ status: 'pending', queue_status: 'pending', created_at: old }, now), false);
   assert.equal(isDecisionQueueOverdue({ status: 'approved', queue_status: 'failed', created_at: old }, now), false);
   assert.equal(isDecisionQueueOverdue({ status: 'completed', queue_status: 'completed', created_at: old }, now), false);
   assert.equal(isDecisionQueueOverdue({ status: 'approved', queue_status: 'pending', queued_at: new Date(now - 10 * 60_000).toISOString() }, now), false);
