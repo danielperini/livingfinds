@@ -8,6 +8,7 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { hasFreshAdsInventory } from '../../shared/stockAdsPolicy.ts';
+import { evaluateManualExactExpansion, resolveManualExpansionLimits } from '../../shared/skuCampaignDistributionPolicy.ts';
 import { campaignCoverageEligible } from '../../shared/campaignCoverageEligibility.ts';
 import {
   aggregateSearchTermSnapshots,
@@ -142,7 +143,7 @@ Deno.serve(async (request) => {
     if (!accounts.length) return Response.json({ ok: false, error: 'Nenhuma conta Amazon conectada' }, { status: 404 });
 
     const dryRun = body.dry_run === true;
-    const maxPromotions = Math.max(1, Math.min(50, Number(body.max_promotions || 25)));
+    const maxPromotions = resolveManualExpansionLimits(body.max_promotions || 10, 1).perRun;
     const lookbackDays = Math.max(1, Math.min(65, Number(body.lookback_days || 65)));
     const today = brazilDate();
     const cutoff = dateOffset(today, -(lookbackDays - 1));
@@ -169,6 +170,20 @@ Deno.serve(async (request) => {
         for (const id of [campaign.id, campaign.campaign_id, campaign.amazon_campaign_id].filter(Boolean)) {
           campaignById.set(String(id), campaign);
         }
+      }
+      // Count manual campaigns once; paused ones still consume capacity.
+      const manualCampaignCountByAsin = new Map<string, number>();
+      const countedManualCampaignIds = new Set<string>();
+      for (const campaign of campaigns) {
+        const name = String(campaign.name || campaign.campaign_name || '');
+        const type = String(campaign.targeting_type || campaign.amazon_targeting_type || '').toUpperCase();
+        const isManual = type.includes('MANUAL') || /^SP\s*\|\s*MANUAL\s*\|/i.test(name);
+        if (!isManual || String(campaign.state || campaign.status || '').toLowerCase() === 'archived') continue;
+        const id = campaignIdOf(campaign) || String(campaign.id || '');
+        if (!id || countedManualCampaignIds.has(id)) continue;
+        countedManualCampaignIds.add(id);
+        const asin = String(campaign.asin || name.match(/B0[A-Z0-9]{8}/i)?.[0] || '').toUpperCase();
+        if (asin) manualCampaignCountByAsin.set(asin, (manualCampaignCountByAsin.get(asin) || 0) + 1);
       }
       const assessmentByAsin = new Map<string, any>();
       for (const row of assessments) {
@@ -383,7 +398,29 @@ Deno.serve(async (request) => {
         b.aggregate.sameSkuOrders - a.aggregate.sameSkuOrders ||
         (a.evaluation.sameSkuAcos ?? 9999) - (b.evaluation.sameSkuAcos ?? 9999)
       );
-      const selected = candidates.slice(0, maxPromotions);
+      const selected: any[] = [];
+      const selectedByAsin = new Map<string, number>();
+      const workingCountByAsin = new Map<string, number>(manualCampaignCountByAsin);
+      for (const candidate of candidates) {
+        if (selected.length >= maxPromotions) break;
+        const asin = String(candidate.aggregate.asin || '').toUpperCase();
+        const eligible = evaluateManualExactExpansion({
+          availableFbaUnits: availableInventory(candidate.product),
+          sameSkuAttributionVerified: candidate.aggregate.attributionVerified === true
+            || String(candidate.aggregate.attributionFallbackReason || '').includes('single_advertised_sku_fallback'),
+          sameSkuOrders: candidate.aggregate.sameSkuOrders,
+          manualCampaignCount: workingCountByAsin.get(asin) || 0,
+          createdThisCycle: selectedByAsin.get(asin) || 0,
+          alreadyExact: false,
+        });
+        if (!eligible.eligible) {
+          rejected.push({ asin, term: candidate.aggregate.term, reason: eligible.reason });
+          continue;
+        }
+        selected.push(candidate);
+        selectedByAsin.set(asin, (selectedByAsin.get(asin) || 0) + 1);
+        workingCountByAsin.set(asin, (workingCountByAsin.get(asin) || 0) + 1);
+      }
       const promoted: any[] = [];
       const failed: any[] = [];
 
