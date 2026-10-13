@@ -1,5 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
-import { collectUnconfirmedCycleStages } from '../../shared/canonicalCyclePolicy.ts';
+import { collectUnconfirmedCycleStages, describeUnconfirmedCycleStage } from '../../shared/canonicalCyclePolicy.ts';
 
 const invoke = async (base44:any,name:string,payload:Record<string,unknown>) => {
   try {
@@ -82,10 +82,7 @@ Deno.serve(async(request)=>{
     const stageResults: Record<string, any> = { economic_evidence: economicEvidence, unified_engine: engine, reconciliation, arbitration };
     const failedStageNames = collectUnconfirmedCycleStages(stageResults, ['economic_evidence', 'unified_engine', 'reconciliation', 'arbitration']);
     const failedStages = failedStageNames
-      .map((stage) => {
-        const result: any = stageResults[stage];
-        return { stage, ok: false, error: String(result?.error || result?.reason || 'stage_not_confirmed').slice(0, 400) };
-      });
+      .map((stage) => describeUnconfirmedCycleStage(stage, stageResults[stage]));
     const shouldSupervise = body.daily_close === true || failedStages.length > 0;
     const supervision = shouldSupervise
       ? await invoke(base44, 'superviseV6SIA', {
@@ -125,6 +122,7 @@ Deno.serve(async(request)=>{
         result_summary: JSON.stringify({
           engine_version: 'V6SIA', correlation_id: correlationId,
           stages: Object.fromEntries(Object.entries(stageResults).map(([name, result]: [string, any]) => [name, result?.ok === false ? 'failed' : result?.skipped ? 'skipped' : 'ok'])),
+          stage_failures: failedStages,
           supervision_status: supervision?.status || (supervision?.skipped ? 'skipped' : supervision?.ok === false ? 'failed' : 'ok'),
         }).slice(0, 1400),
       }).catch(() => {});
