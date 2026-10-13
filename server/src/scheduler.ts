@@ -324,7 +324,7 @@ export async function startScheduler(): Promise<void> {
               "update scheduler_job_runs set status='failed',attempt_count=0, recovery_count=recovery_count+1, next_attempt_at=now(), last_error='bounded_daily_recovery_scheduled', updated_at=now() where job_key=$1 and slot_key=$2 and status='exhausted' and recovery_count < 1 and finished_at <= now() - interval '1 hour' returning status,attempt_count,recovery_count,next_attempt_at,started_at,finished_at",
               [jobKey, slotKey],
             );
-            if (reopened[0]) previous = reopened[0] as typeof previous;
+            if (reopened[0]) previous = reopened[0] as unknown as typeof previous;
           }
           if (!shouldDispatchRun(previous, Date.now(), maxAttempts)) {
             if (isStaleFinalAttempt(previous, Date.now(), maxAttempts)) {
