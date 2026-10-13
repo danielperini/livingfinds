@@ -1,5 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
-import { collectUnconfirmedCycleStages, describeUnconfirmedCycleStage } from '../../shared/canonicalCyclePolicy.ts';
+import { collectUnconfirmedCycleStages, describeUnconfirmedCycleStage, resolveCanonicalCycleOutcome } from '../../shared/canonicalCyclePolicy.ts';
 
 const invoke = async (base44:any,name:string,payload:Record<string,unknown>) => {
   try {
