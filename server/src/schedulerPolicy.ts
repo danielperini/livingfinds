@@ -5,6 +5,8 @@ export type SchedulerJob = {
   payload?: Record<string, unknown>;
   /** Reexecuta no dia local se a janela do cron foi perdida durante uma queda. */
   catch_up_daily?: boolean;
+  /** Função watchdog cuja confirmação pode reconciliar este ciclo diário. */
+  reconciles_daily_function?: string;
   retry?: { max_attempts?: number; base_delay_seconds?: number; max_delay_seconds?: number };
 };
 
@@ -89,6 +91,12 @@ export function validateSchedule(jobs: SchedulerJob[]): string[] {
     else seen.set(key, job.name);
     if (!job.name || !job.function || !job.cron || job.cron.trim().split(/\s+/).length !== 5) {
       issues.push('invalid:' + (job.name || job.function || 'unnamed'));
+    }
+  }
+  const dailyCatchUpFunctions = new Set(jobs.filter((job) => job.catch_up_daily === true).map((job) => job.function));
+  for (const job of jobs) {
+    if (job.reconciles_daily_function && !dailyCatchUpFunctions.has(job.reconciles_daily_function)) {
+      issues.push('invalid_daily_reconciliation:' + job.function + ':' + job.reconciles_daily_function);
     }
   }
   return issues;

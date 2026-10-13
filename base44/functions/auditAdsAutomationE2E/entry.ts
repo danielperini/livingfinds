@@ -1,5 +1,7 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { campaignCoverageEligible } from '../../shared/campaignCoverageEligibility.ts';
+import { availableAdsStock, hasFreshAdsInventory } from '../../shared/stockAdsPolicy.ts';
+import { isProductEligibleForCampaignActivation } from '../../shared/productCampaignPauseGuard.ts';
 
 const MINUTE = 60_000;
 const isEnabled = (row: any) => ['enabled', 'active'].includes(String(row?.state || row?.status || '').toLowerCase());
@@ -20,8 +22,8 @@ Deno.serve(async (request) => {
   if (!authenticated && !body._service_role) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
 
   const accounts = body.amazon_account_id
-    ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
-    : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, null, 20);
+    ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
+    : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, undefined, 20);
   const reports: any[] = [];
 
   for (const account of accounts) {
@@ -38,10 +40,21 @@ Deno.serve(async (request) => {
     const autos = active.filter((c: any) => String(c.amazon_targeting_type || c.targeting_type || '').toUpperCase() === 'AUTO');
     const manuals = active.filter((c: any) => String(c.amazon_targeting_type || c.targeting_type || '').toUpperCase() === 'MANUAL');
     const activeKeywords = keywords.filter(isEnabled);
-    const eligibleAsins = [...new Set(products.filter(campaignCoverageEligible)
+    const validActivationProducts = products.filter((product: any) =>
+      Boolean(String(product?.sku || '').trim()) &&
+      /^B0[A-Z0-9]{8}$/.test(String(product?.asin || '').trim().toUpperCase()) &&
+      isProductEligibleForCampaignActivation(product)
+    );
+    const inventoryUnknownAsins = [...new Set(validActivationProducts.filter((product: any) => availableAdsStock(product) < 0)
       .map((product: any) => String(product.asin).trim().toUpperCase()))];
-    const autoAsins = new Set(autos.map((campaign: any) => campaign.asin).filter(Boolean));
+    const coverageCandidates = validActivationProducts.filter(campaignCoverageEligible);
+    const staleInventoryAsins = [...new Set(coverageCandidates.filter((product: any) => !hasFreshAdsInventory(product))
+      .map((product: any) => String(product.asin).trim().toUpperCase()))];
+    const eligibleAsins = [...new Set(coverageCandidates.filter((product: any) => hasFreshAdsInventory(product))
+      .map((product: any) => String(product.asin).trim().toUpperCase()))];
+    const autoAsins = new Set(autos.map((campaign: any) => String(campaign.asin || '').trim().toUpperCase()).filter(Boolean));
     const missingAutoAsins = eligibleAsins.filter((asin: string) => !autoAsins.has(asin));
+    const coveredAutoAsins = eligibleAsins.filter((asin: string) => autoAsins.has(asin));
     const recentDecisions = decisions.filter((d: any) => ageMinutes(d.evaluated_at || d.created_at) <= 45);
     const executed = decisions.filter((d: any) => ['executed', 'completed'].includes(d.status) && ageMinutes(d.executed_at || d.updated_at || d.created_at) <= 24 * 60);
     const confirmed = decisions.filter((d: any) => d.confirmation_status === 'confirmed' && ageMinutes(d.confirmed_at || d.updated_at || d.created_at) <= 24 * 60);
@@ -58,6 +71,8 @@ Deno.serve(async (request) => {
     if (active.length && !activeKeywords.length) alerts.push('ACTIVE_CAMPAIGNS_WITHOUT_ACTIVE_KEYWORDS');
     if (!autos.length) alerts.push('NO_ACTIVE_AUTO_CAMPAIGN');
     if (missingAutoAsins.length) alerts.push('AUTO_COVERAGE_GAP');
+    if (staleInventoryAsins.length) alerts.push('STOCK_DATA_STALE');
+    if (inventoryUnknownAsins.length) alerts.push('STOCK_DATA_UNKNOWN');
     if (!manuals.length) alerts.push('NO_ACTIVE_MANUAL_CAMPAIGN');
     if (queueFailed.length) alerts.push('QUEUE_FAILURES');
     if (recentErrors.length) alerts.push('RECENT_SYNC_ERRORS');
@@ -80,7 +95,11 @@ Deno.serve(async (request) => {
         active_manual_campaigns: manuals.length,
         active_keywords: activeKeywords.length,
         eligible_asins: eligibleAsins.length,
+        eligible_asin_ids: eligibleAsins,
+        covered_auto_asins: coveredAutoAsins,
         missing_auto_asins: missingAutoAsins,
+        stale_inventory_asins: staleInventoryAsins,
+        inventory_unknown_asins: inventoryUnknownAsins,
       },
       alerts,
     };

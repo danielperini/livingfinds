@@ -1,7 +1,12 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
+import { collectUnconfirmedCycleStages } from '../../shared/canonicalCyclePolicy.ts';
 
 const invoke = async (base44:any,name:string,payload:Record<string,unknown>) => {
-  try { const r=await base44.asServiceRole.functions.invoke(name,payload); return r?.data||r||{ok:true}; }
+  try {
+    const r=await base44.asServiceRole.functions.invoke(name,payload);
+    const result=r?.data||r;
+    return result && typeof result === 'object' ? result : {ok:false,error:'empty_or_invalid_stage_response'};
+  }
   catch(error:any){ return {ok:false,error:error?.response?.data?.error||error?.message||String(error)}; }
 };
 
@@ -74,10 +79,13 @@ Deno.serve(async(request)=>{
           trigger_type:'canonical_pre_execution_arbitration',
         });
 
-    const stageResults = { economic_evidence: economicEvidence, unified_engine: engine, reconciliation, arbitration };
-    const failedStages = Object.entries(stageResults)
-      .filter(([, result]: [string, any]) => result?.ok === false)
-      .map(([stage, result]: [string, any]) => ({ stage, ok: false, error: String(result?.error || result?.reason || 'stage_failed').slice(0, 400) }));
+    const stageResults: Record<string, any> = { economic_evidence: economicEvidence, unified_engine: engine, reconciliation, arbitration };
+    const failedStageNames = collectUnconfirmedCycleStages(stageResults, ['economic_evidence', 'unified_engine', 'reconciliation', 'arbitration']);
+    const failedStages = failedStageNames
+      .map((stage) => {
+        const result: any = stageResults[stage];
+        return { stage, ok: false, error: String(result?.error || result?.reason || 'stage_not_confirmed').slice(0, 400) };
+      });
     const shouldSupervise = body.daily_close === true || failedStages.length > 0;
     const supervision = shouldSupervise
       ? await invoke(base44, 'superviseV6SIA', {
@@ -98,7 +106,7 @@ Deno.serve(async(request)=>{
         })
       : { ok: true, skipped: true, reason: 'no_daily_review_or_stage_failure' };
 
-    const cycleOk = economicEvidence?.ok !== false && engine?.ok !== false && reconciliation?.ok !== false && arbitration?.ok !== false;
+    const cycleOk = failedStageNames.length === 0;
     const accountRows = body.amazon_account_id
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1).catch(() => [])
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 1).catch(() => []);
@@ -108,12 +116,12 @@ Deno.serve(async(request)=>{
         amazon_account_id: accountId,
         operation: 'v6sia_canonical_decision_cycle',
         trigger_type: String(body.trigger_type || 'canonical_decision_cycle').slice(0, 100),
-        status: cycleOk && supervision?.ok !== false ? 'success' : 'warning',
+      status: cycleOk && (!shouldSupervise || supervision?.ok === true) ? 'success' : 'warning',
         started_at: cycleStartedAt,
         completed_at: new Date().toISOString(),
         duration_ms: Date.now() - new Date(cycleStartedAt).getTime(),
         records_processed: 4,
-        error_message: !cycleOk ? JSON.stringify(failedStages).slice(0, 900) : (supervision?.ok === false ? String(supervision?.error || 'V6SIA supervisor unavailable').slice(0, 500) : null),
+      error_message: !cycleOk ? JSON.stringify(failedStages).slice(0, 900) : (shouldSupervise && supervision?.ok !== true ? String(supervision?.error || 'V6SIA supervisor was not confirmed').slice(0, 500) : null),
         result_summary: JSON.stringify({
           engine_version: 'V6SIA', correlation_id: correlationId,
           stages: Object.fromEntries(Object.entries(stageResults).map(([name, result]: [string, any]) => [name, result?.ok === false ? 'failed' : result?.skipped ? 'skipped' : 'ok'])),
@@ -123,7 +131,7 @@ Deno.serve(async(request)=>{
     }
 
     return Response.json({
-      ok:cycleOk,
+      ok:cycleOk && (!shouldSupervise || supervision?.ok === true),
       engine:'canonical-decision-cycle',
       engine_version:'V6SIA',
       correlation_id:correlationId,
