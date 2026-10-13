@@ -1,7 +1,7 @@
 import { stockAdsDecision } from './stockAdsPolicy.ts';
 import { isProductEligibleForCampaignActivation } from './productCampaignPauseGuard.ts';
 
-const ASIN_PATTERN = /\\b(B0[A-Z0-9]{8})\\b/i;
+const ASIN_PATTERN = /\b(B0[A-Z0-9]{8})\b/i;
 
 export function campaignCoverageAsin(campaign: any): string {
   const explicit = [
