@@ -75,10 +75,9 @@ export function isDecisionQueueOverdue(decision, now = Date.now(), graceMinutes 
   if (status === 'pending_approval' || decision?.execution_mode === 'MANUAL_REVIEW') return false;
   if (decision?.requires_approval === true && !['approved', 'auto_approved', 'approved_by_user'].includes(approval)) return false;
 
-  const executable = EXECUTABLE_DECISION_STATES.has(status) ||
-    (ACTIVE_DECISION_QUEUE_STATES.has(queueStatus) &&
-      (status === 'pending' || status === 'proposed' || EXECUTABLE_DECISION_STATES.has(status)));
+  const executable = EXECUTABLE_DECISION_STATES.has(status);
   if (!executable) return false;
+  if (queueStatus && !ACTIVE_DECISION_QUEUE_STATES.has(queueStatus)) return false;
 
   const dueValue = decision?.next_retry_at || decision?.scheduled_for || decision?.not_before;
   const dueAt = dueValue ? new Date(dueValue).getTime() : NaN;
