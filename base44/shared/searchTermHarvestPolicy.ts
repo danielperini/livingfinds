@@ -63,6 +63,23 @@ export function normalizeSearchTerm(value: unknown): string {
     .replace(/\s+/g, ' ');
 }
 
+/** Detecta keywords montadas recortando palavras contíguas do título do produto.
+ * Usada apenas em fontes de sugestão (IA/catálogo); termos realmente observados
+ * em Search Term Reports são avaliados pela evidência de conversão abaixo. */
+export function isTitleFragmentKeyword(keyword: unknown, productTitle: unknown): boolean {
+  const term = normalizeSearchTerm(keyword).replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  const title = normalizeSearchTerm(productTitle).replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!term || !title || term === title) return false;
+  const stopWords = new Set(['a', 'as', 'ao', 'aos', 'com', 'da', 'das', 'de', 'do', 'dos', 'e', 'em', 'na', 'nas', 'no', 'nos', 'o', 'os', 'para', 'por', 'sem', 'um', 'uma']);
+  const termTokens = term.split(' ').filter((token) => token && !stopWords.has(token));
+  const titleTokens = title.split(' ').filter((token) => token && !stopWords.has(token));
+  if (termTokens.length < 2 || termTokens.length >= titleTokens.length) return false;
+  return titleTokens.some((_, index) =>
+    index + termTokens.length <= titleTokens.length &&
+    termTokens.every((token, offset) => titleTokens[index + offset] === token)
+  );
+}
+
 const TERM_ALIASES: Record<string, string> = {
   'p': 'para',
   'p/': 'para',
@@ -296,6 +313,80 @@ export function aggregateSearchTerms(rows: any[]): HarvestAggregate[] {
   return [...aggregates.values()];
 }
 
+/** Agrupa snapshots diarios sem somar várias vezes as mesmas conversões de
+ * janelas móveis (7/14/30 dias). Custos e tráfego são somados uma vez por
+ * origem/dia; pedidos e vendas usam o snapshot mais recente de cada origem. */
+export function aggregateSearchTermSnapshots(rows: any[]): HarvestAggregate[] {
+  return aggregateSearchTerms(rows).map((aggregate) => {
+    const latestBySource = new Map<string, any>();
+    const dailyBySource = new Map<string, Map<string, any>>();
+    const sourceKey = (row: any) => [
+      row.campaign_id || '', row.ad_group_id || '',
+      row.source_target_id || row.target_id || row.keyword_id || '',
+      canonicalMatchType(row.source_target_type || row.match_type, row.source_campaign_type || row.campaign_type),
+    ].join('|');
+    const newer = (candidate: any, current: any) => {
+      const candidateFreshness = `${candidate.date || ''}|${candidate.metrics_fresh_at || candidate.synced_at || ''}|${candidate.report_job_id || ''}`;
+      const currentFreshness = `${current.date || ''}|${current.metrics_fresh_at || current.synced_at || ''}|${current.report_job_id || ''}`;
+      return candidateFreshness > currentFreshness;
+    };
+
+    for (const row of aggregate.sourceRows) {
+      const origin = sourceKey(row);
+      const currentLatest = latestBySource.get(origin);
+      if (!currentLatest || newer(row, currentLatest)) latestBySource.set(origin, row);
+      const date = String(row.date || '');
+      if (!date) continue;
+      const byDate = dailyBySource.get(origin) || new Map<string, any>();
+      const currentDay = byDate.get(date);
+      if (!currentDay || newer(row, currentDay)) byDate.set(date, row);
+      dailyBySource.set(origin, byDate);
+    }
+
+    let impressions = 0;
+    let clicks = 0;
+    let spend = 0;
+    let totalOrders = 0;
+    let totalSales = 0;
+    let sameSkuOrders = 0;
+    let sameSkuSales = 0;
+    let haloOrders = 0;
+    let haloSales = 0;
+    let attributionVerified = true;
+    let latestDate = '';
+
+    for (const [origin, latest] of latestBySource) {
+      const latestDateForSource = String(latest.date || '');
+      if (latestDateForSource > latestDate) latestDate = latestDateForSource;
+      const attributionDays = Math.max(1, numberValue(latest.attribution_window_days, 7));
+      const cutoff = latestDateForSource
+        ? new Date(new Date(`${latestDateForSource}T00:00:00.000Z`).getTime() - (attributionDays - 1) * 86400000).toISOString().slice(0, 10)
+        : '';
+      for (const [date, row] of dailyBySource.get(origin) || []) {
+        if (cutoff && date < cutoff || latestDateForSource && date > latestDateForSource) continue;
+        impressions += numberValue(row.impressions);
+        clicks += numberValue(row.clicks);
+        spend += numberValue(row.spend ?? row.cost);
+      }
+      totalOrders += numberValue(latest.total_orders ?? latest.orders_7d ?? latest.orders_14d ?? latest.orders_30d);
+      totalSales += numberValue(latest.total_sales ?? latest.sales_7d ?? latest.sales_14d ?? latest.sales_30d);
+      sameSkuOrders += numberValue(latest.same_sku_orders);
+      sameSkuSales += numberValue(latest.same_sku_sales);
+      haloOrders += numberValue(latest.halo_orders);
+      haloSales += numberValue(latest.halo_sales);
+      attributionVerified = attributionVerified && latest.same_sku_attribution_verified === true;
+    }
+
+    return {
+      ...aggregate,
+      impressions, clicks, spend,
+      totalOrders, totalSales, sameSkuOrders, sameSkuSales, haloOrders, haloSales,
+      attributionVerified,
+      latestDate,
+    };
+  });
+}
+
 export function calculateSafeHarvestBid(input: { observedCpc: number; safeCpc: number; minBid: number; maxBid: number }): number | null {
   const minBid = Math.max(0.02, numberValue(input.minBid, 0.25));
   const maxBid = Math.max(minBid, numberValue(input.maxBid, 3));
@@ -340,7 +431,7 @@ export function evaluateHarvestCandidate(input: {
   const hasValidAttribution = aggregate.attributionVerified || aggregate.attributionFallbackReason?.includes('single_advertised_sku_fallback');
   if (!hasValidAttribution) return { eligible: false, reason: 'same_sku_attribution_unavailable', sameSkuAcos };
   
-  if (aggregate.sameSkuOrders < 1 || aggregate.sameSkuSales <= 0) return { eligible: false, reason: 'no_same_sku_sale', sameSkuAcos };
+  if (aggregate.sameSkuOrders < 2 || aggregate.sameSkuSales <= 0) return { eligible: false, reason: 'requires_two_verified_same_sku_orders', sameSkuAcos };
   if (!input.inStock) return { eligible: false, reason: 'out_of_stock', sameSkuAcos };
   if (!input.economicsActionable || input.safeBid == null || input.breakEvenAcos == null || input.breakEvenAcos <= 0) return { eligible: false, reason: 'unsafe_or_missing_economics', sameSkuAcos };
   if (input.breakEvenAcos && sameSkuAcos != null && sameSkuAcos >= input.breakEvenAcos) return { eligible: false, reason: 'same_sku_acos_above_break_even', sameSkuAcos };

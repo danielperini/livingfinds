@@ -26,6 +26,7 @@
  * Não cria motor paralelo. Integrado via runDailyMasterOrchestrator.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { aggregateSearchTermSnapshots } from '../../shared/searchTermHarvestPolicy.ts';
 
 // ── Configurações (sobrescritas por AutopilotConfig / PerformanceSettings) ──
 const CFG = {
@@ -215,8 +216,8 @@ Deno.serve(async (req) => {
 
     // ── Carregar configurações ────────────────────────────────────────────
     const [perfList, apList] = await Promise.all([
-      base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, null, 1).catch(() => []),
-      base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, null, 1).catch(() => []),
+      base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, undefined, 1).catch(() => []),
+      base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, undefined, 1).catch(() => []),
     ]);
     const perf = perfList[0] || {}, ap = apList[0] || {};
     const TARGET_ACOS   = Number(perf.target_acos || ap.target_acos || CFG.TARGET_ACOS);
@@ -234,12 +235,12 @@ Deno.serve(async (req) => {
       base44.asServiceRole.entities.SearchTerm.filter(
         { amazon_account_id: aid }, '-orders_14d', 5000
       ).catch(() => []),
-      base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 500).catch(() => []),
-      base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid, match_type: 'exact' }, null, 3000).catch(() => []),
+      base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, undefined, 500).catch(() => []),
+      base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid, match_type: 'exact' }, undefined, 3000).catch(() => []),
       base44.asServiceRole.entities.SearchTermPromotion.filter({ amazon_account_id: aid }, '-created_at', 2000).catch(() => []),
-      base44.asServiceRole.entities.ListingSnapshot.filter({ amazon_account_id: aid }, null, 500).catch(() => []),
-      base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, null, 500).catch(() => []),
-      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 3000).catch(() => []),
+      base44.asServiceRole.entities.ListingSnapshot.filter({ amazon_account_id: aid }, undefined, 500).catch(() => []),
+      base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, undefined, 500).catch(() => []),
+      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, undefined, 3000).catch(() => []),
     ]);
 
     const productMap = new Map(products.map((p: any) => [p.asin, p]));
@@ -275,51 +276,36 @@ Deno.serve(async (req) => {
         .map((p: any) => `${p.asin}|${normalizeTerm(p.normalized_search_term || p.source_search_term || '')}`)
     );
 
-    // ── FASE 1: Agregar Search Terms ──────────────────────────────────────
-    // Janela: dados anteriores à janela de atribuição de 72h
+    // ── FASE 1: Agregar Search Terms sem somar janelas móveis sobrepostas ──
+    // Mantém gasto diário da janela de atribuição e lê conversões do snapshot
+    // mais recente por origem, para uma única venda não virar várias vendas.
     const termMap = new Map<string, any>();
-
-    for (const st of searchTerms) {
-      const sourceCampaign = campaignById.get(String(st.campaign_id || ''));
-      const advertisedAsin = st.advertised_asin || sourceCampaign?.asin;
-      if (!advertisedAsin || !st.search_term) continue;
-      if (!autoCampaignIds.has(String(st.campaign_id || ''))) continue;
-      // Excluir apenas dados MUITO recentes (atribuição incompleta).
-      // Se date >= SAFE_CUTOFF → dentro dos últimos 72h → ignorar.
-      // Se date for null ou muito antigo → incluir (dados estáveis).
-      if (st.date && st.date >= SAFE_CUTOFF) continue;
-      if (force_asin && advertisedAsin !== force_asin) continue;
-
-      const norm = normalizeTerm(st.search_term);
-      if (!norm || norm.length < 2) continue;
-
-      const key = `${advertisedAsin}|${norm}`;
-      if (!termMap.has(key)) {
-        termMap.set(key, {
-          asin: advertisedAsin,
-          search_term: st.search_term, // texto original preservado
-          normalized_term: norm,
-          campaign_id: st.campaign_id,
-          ad_group_id: st.ad_group_id,
-          orders: 0, sales: 0, spend: 0, clicks: 0, impressions: 0,
-          orders_3d: 0, sales_3d: 0, spend_3d: 0,
-          last_sale_at: null,
-        });
-      }
-      const agg = termMap.get(key)!;
-      // Agregar janelas disponíveis
-      agg.orders += st.orders_14d || st.orders_7d || st.orders_30d || 0;
-      agg.sales  += st.sales_14d  || st.sales_7d  || st.sales_30d  || 0;
-      agg.spend  += st.spend || 0;
-      agg.clicks += st.clicks || 0;
-      agg.impressions += st.impressions || 0;
-      agg.orders_3d += st.orders_7d || 0; // proxy para 3d quando não disponível
-      agg.sales_3d  += st.sales_7d  || 0;
-      agg.spend_3d  += st.spend || 0;
-
-      // last_sale_at
-      if (st.last_sale_at && (!agg.last_sale_at || st.last_sale_at > agg.last_sale_at))
-        agg.last_sale_at = st.last_sale_at;
+    const sourceRows = searchTerms.filter((row: any) => {
+      const campaign = campaignById.get(String(row.campaign_id || ''));
+      const asin = String(row.advertised_asin || campaign?.asin || '');
+      return Boolean(asin && row.search_term && autoCampaignIds.has(String(row.campaign_id || '')) &&
+        row.same_sku_attribution_verified === true && (!force_asin || asin === force_asin) &&
+        (!row.date || row.date < SAFE_CUTOFF));
+    });
+    for (const aggregate of aggregateSearchTermSnapshots(sourceRows)) {
+      const key = `${aggregate.asin}|${normalizeTerm(aggregate.term)}`;
+      if (!key || termMap.has(key)) continue;
+      termMap.set(key, {
+        asin: aggregate.asin,
+        search_term: aggregate.term,
+        normalized_term: normalizeTerm(aggregate.term),
+        campaign_id: aggregate.sources[0]?.campaignId || '',
+        ad_group_id: aggregate.sources[0]?.adGroupId || '',
+        orders: aggregate.sameSkuOrders,
+        sales: aggregate.sameSkuSales,
+        spend: aggregate.spend,
+        clicks: aggregate.clicks,
+        impressions: aggregate.impressions,
+        orders_3d: aggregate.sameSkuOrders,
+        sales_3d: aggregate.sameSkuSales,
+        spend_3d: aggregate.spend,
+        last_sale_at: aggregate.latestDate || null,
+      });
     }
 
     // ── FASE 2: Detectar termos vencedores ──────────────────────────────
@@ -549,7 +535,7 @@ Deno.serve(async (req) => {
         const termBankItems = await base44.asServiceRole.entities.TermBank.filter({
           amazon_account_id: aid,
           asin: winner.asin,
-        }, null, 500).catch(() => []);
+        }, undefined, 500).catch(() => []);
         const existingTB = termBankItems.find((t: any) =>
           normalizeTerm(t.term || t.keyword || '') === winner.normalized_term
         );

@@ -8,8 +8,10 @@
  *             should_create_campaign = true, produto com estoque, sem campanha ativa igual.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { isTitleFragmentKeyword, normalizeSearchTerm } from '../../shared/searchTermHarvestPolicy.ts';
 
 const KEYWORDS_PER_CAMPAIGN = 4;  // 1 campanha com 4 keywords
+const MAX_CAMPAIGNS_PER_PRODUCT = 4;
 const MIN_BUDGET = 15.0;           // mínimo por campanha consolidada
 const MIN_BID = 0.35;
 const MAX_BID = 3.0;
@@ -107,6 +109,8 @@ Deno.serve(async (req) => {
     const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid, asin });
     const prod = products[0];
     if (!prod) return Response.json({ ok: false, error: 'Produto não encontrado' });
+    const productTitle = String(prod.product_name || prod.display_name || '').trim();
+    if (!productTitle) return Response.json({ ok: false, error: 'Produto sem título para validar keywords sugeridas.' });
     if ((prod.fba_inventory || 0) === 0 || prod.inventory_status === 'out_of_stock') {
       return Response.json({ ok: false, error: 'Produto sem estoque' });
     }
@@ -134,13 +138,14 @@ Deno.serve(async (req) => {
       asin,
       source: 'AMAZON_ADS_SUGGESTED_KEYWORD',
       status: 'ranked',
-    }, null, 50).catch(() => []);
+    }, undefined, 50).catch(() => []);
 
     const eligible = suggestions.filter((s: any) =>
       (s.ai_confidence || 0) >= 0.90 &&
       s.should_create_campaign === true &&
       ['low', 'medium'].includes(s.risk_level || 'high') &&
-      s.keyword && s.keyword.trim().length >= 2
+      s.keyword && normalizeSearchTerm(s.keyword).split(' ').filter(Boolean).length >= 2 &&
+      !isTitleFragmentKeyword(s.keyword, productTitle)
     ).sort((a: any, b: any) => (a.ai_rank || 99) - (b.ai_rank || 99));
 
     if (!eligible.length) {
@@ -148,24 +153,32 @@ Deno.serve(async (req) => {
     }
 
     // Verificar keywords já ativas para evitar duplicatas
-    const existingKeywords = await base44.asServiceRole.entities.Keyword.filter({
-      amazon_account_id: aid,
-    }, null, 500).catch(() => []);
+    const [existingKeywords, asinCampaigns] = await Promise.all([
+      base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, undefined, 5000).catch(() => []),
+      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid, asin }, undefined, 2000).catch(() => []),
+    ]);
+    const campaignIdsForAsin = new Set(asinCampaigns.map((campaign: any) => String(campaign.campaign_id || campaign.amazon_campaign_id || campaign.id)));
     const activeCampaignKeywords = new Set(
       existingKeywords
-        .filter((k: any) => k.state === 'ENABLED' || k.status === 'enabled')
-        .map((k: any) => (k.keyword_text || k.keyword || '').toLowerCase().trim())
+        .filter((keyword: any) =>
+          (keyword.state === 'ENABLED' || keyword.status === 'enabled' || keyword.state === 'enabled') &&
+          (String(keyword.asin || '').toUpperCase() === String(asin).toUpperCase() || campaignIdsForAsin.has(String(keyword.campaign_id || '')))
+        )
+        .map((keyword: any) => normalizeSearchTerm(keyword.keyword_text || keyword.keyword || ''))
     );
 
     // KeywordSuggestions já criadas recentemente (evitar duplicata por status)
     const alreadyCreated = await base44.asServiceRole.entities.KeywordSuggestion.filter({
       amazon_account_id: aid, asin, status: 'created',
-    }, null, 100).catch(() => []);
-    const createdKeywords = new Set(alreadyCreated.map((s: any) => (s.keyword || '').toLowerCase().trim()));
+    }, undefined, 100).catch(() => []);
+    const createdKeywords = new Set(alreadyCreated.map((suggestion: any) => normalizeSearchTerm(suggestion.keyword || '')));
 
-    const dedupedEligible = eligible.filter((s: any) => {
-      const kw = (s.normalized_keyword || s.keyword || '').toLowerCase().trim();
-      return !activeCampaignKeywords.has(kw) && !createdKeywords.has(kw);
+    const seenKeywords = new Set([...activeCampaignKeywords, ...createdKeywords]);
+    const dedupedEligible = eligible.filter((suggestion: any) => {
+      const term = normalizeSearchTerm(suggestion.normalized_keyword || suggestion.keyword || '');
+      if (!term || seenKeywords.has(term)) return false;
+      seenKeywords.add(term);
+      return true;
     });
 
     // Pegar até KEYWORDS_PER_CAMPAIGN keywords para 1 campanha consolidada
@@ -188,7 +201,7 @@ Deno.serve(async (req) => {
     const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID') || '';
     const clientId  = Deno.env.get('ADS_CLIENT_ID') || '';
 
-    const ap = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, null, 1)
+    const ap = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, undefined, 1)
       .then((r: any[]) => r[0]).catch(() => null);
     const maxBudget = ap?.maximum_campaign_budget || 100;
 

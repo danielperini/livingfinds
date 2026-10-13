@@ -10,7 +10,7 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { hasFreshAdsInventory } from '../../shared/stockAdsPolicy.ts';
 import { campaignCoverageEligible } from '../../shared/campaignCoverageEligibility.ts';
 import {
-  aggregateSearchTerms,
+  aggregateSearchTermSnapshots,
   calculateSafeHarvestBid,
   calculateWinnerExactBudget,
   evaluateHarvestCandidate,
@@ -242,7 +242,7 @@ Deno.serve(async (request) => {
         const key = `${String(row.advertised_asin || '').toUpperCase()}|${normalizeSearchTerm(row.search_term)}`;
         return !verifiedKeys.has(key) || row.same_sku_attribution_verified === true;
       });
-      const aggregates = aggregateSearchTerms(rowsInWindow);
+      const aggregates = aggregateSearchTermSnapshots(rowsInWindow);
       const rejected: any[] = [];
       const candidates: any[] = [];
       let bankCreated = 0;
