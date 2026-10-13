@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { autoCampaignRepairCancellationPatch, autoCampaignRepairPreflight } from '../../shared/autoCampaignRepairPolicy.ts';
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const DEFAULT_ASINS = [
@@ -73,17 +74,43 @@ function isThrottle(result: any) {
 
 async function queueRepair(base44: any, accountId: string, asin: string, campaign: any = null) {
   const slot = nextSlot();
-  const existing = await base44.asServiceRole.entities.AutoCampaignRepairQueue.filter({
-    amazon_account_id: accountId,
-    asin,
-    status: 'scheduled',
-  }, '-created_date', 1).catch(() => []);
+  let campaignId = String(campaign?.campaignId || campaign?.campaign_id || campaign?.amazon_campaign_id || '').trim();
 
-  if (!existing.length) {
-    await base44.asServiceRole.entities.AutoCampaignRepairQueue.create({
+  // Sem campanha remota confirmada, não criar reparo inválido. Campanhas novas
+  // são responsabilidade do fluxo de cobertura/Kick-off com validação de estoque.
+  if (!campaignId) {
+    const localRows = await base44.asServiceRole.entities.Campaign.filter({
       amazon_account_id: accountId,
       asin,
-      campaign_id: campaign?.campaignId ? String(campaign.campaignId) : null,
+    }, '-updated_at', 100).catch(() => []);
+    const localAuto = localRows.find((row: any) => {
+      const id = String(row.campaign_id || row.amazon_campaign_id || '').trim();
+      const name = String(row.name || row.campaign_name || '').trim().toUpperCase();
+      const type = String(row.targeting_type || row.targetingType || row.campaign_type || row.campaignType || '').trim().toUpperCase();
+      const state = String(row.state || row.status || '').trim().toLowerCase();
+      return id && !['archived', 'ended', 'deleted'].includes(state)
+        && (type === 'AUTO' || type === 'AUTOMATIC' || name.startsWith('AUTO |') || name.startsWith('SP-AUTO-'));
+    });
+    campaignId = String(localAuto?.campaign_id || localAuto?.amazon_campaign_id || '').trim();
+    if (!campaignId) return { queued: false, reason: 'missing_campaign_id', slot };
+  }
+
+  const existing = await base44.asServiceRole.entities.AutoCampaignRepairQueue.filter({
+    amazon_account_id: accountId,
+    status: 'scheduled',
+  }, '-created_date', 500).catch(() => []);
+  for (const item of existing.filter((row: any) =>
+    !String(row.campaign_id || '').trim() && String(row.asin || '').toUpperCase() === asin.toUpperCase()
+  )) {
+    await base44.asServiceRole.entities.AutoCampaignRepairQueue.update(item.id, autoCampaignRepairCancellationPatch(item)).catch(() => {});
+  }
+
+  const sameCampaign = existing.find((row: any) => String(row.campaign_id || '').trim() === campaignId);
+  if (!sameCampaign) {
+    const entry = {
+      amazon_account_id: accountId,
+      asin,
+      campaign_id: campaignId,
       campaign_name: campaign?.name || null,
       status: 'scheduled',
       queue_hour: slot.hour,
@@ -91,9 +118,11 @@ async function queueRepair(base44: any, accountId: string, asin: string, campaig
       scheduled_at: slot.at.toISOString(),
       attempt_count: 0,
       max_attempts: 5,
-    });
+    };
+    if (!autoCampaignRepairPreflight(entry).ok) return { queued: false, reason: 'invalid_repair_identity', slot };
+    await base44.asServiceRole.entities.AutoCampaignRepairQueue.create(entry);
   }
-  return slot;
+  return { queued: true, existing: Boolean(sameCampaign), campaignId, slot };
 }
 
 async function updateLocalCampaign(base44: any, accountId: string, campaignId: string, fields: any) {
@@ -110,15 +139,17 @@ Deno.serve(async (request) => {
 
     const accountId = body.amazon_account_id;
     if (!accountId) return Response.json({ ok: false, error: 'amazon_account_id obrigatório' }, { status: 400 });
-    const asins = [...new Set((Array.isArray(body.asins) && body.asins.length ? body.asins : DEFAULT_ASINS).map((value: any) => String(value).trim()).filter(Boolean))];
+    const asins: string[] = Array.from(new Set<string>((Array.isArray(body.asins) && body.asins.length ? body.asins : DEFAULT_ASINS).map((value: any) => String(value).trim()).filter(Boolean)));
 
     if (!body._window_execution && !inWindow()) {
       const queued = [];
+      const skipped = [];
       for (const asin of asins) {
-        const slot = await queueRepair(base44, accountId, asin);
-        queued.push({ asin, queue_window: slot.window, scheduled_at: slot.at.toISOString() });
+        const result = await queueRepair(base44, accountId, asin);
+        if (result.queued) queued.push({ asin, campaign_id: result.campaignId, queue_window: result.slot.window, scheduled_at: result.slot.at.toISOString() });
+        else skipped.push({ asin, reason: result.reason });
       }
-      return Response.json({ ok: true, scheduled: true, queued: queued.length, results: queued, message: 'Reparo programado para a próxima janela Amazon, com intervalo de 14 segundos.' });
+      return Response.json({ ok: true, scheduled: queued.length > 0, queued: queued.length, skipped, results: queued, message: 'Reparos só são enfileirados para campanhas AUTO existentes com ID confirmado; novas campanhas seguem pelo fluxo de cobertura/Kick-off.' });
     }
 
     const campaignResult = await ads(base44, accountId, 'listAutoCampaignsForRepair', 'POST', '/sp/campaigns/list', {
@@ -130,18 +161,20 @@ Deno.serve(async (request) => {
     if (!campaignResult?.ok) {
       if (isThrottle(campaignResult)) {
         const queued = [];
+        const skipped = [];
         for (const asin of asins) {
-          const slot = await queueRepair(base44, accountId, asin);
-          queued.push({ asin, queue_window: slot.window });
+          const result = await queueRepair(base44, accountId, asin);
+          if (result.queued) queued.push({ asin, campaign_id: result.campaignId, queue_window: result.slot.window });
+          else skipped.push({ asin, reason: result.reason });
         }
-        return Response.json({ ok: true, scheduled: true, queued: queued.length, results: queued, message: 'A Amazon limitou as chamadas. O reparo foi mantido para a próxima janela.' });
+        return Response.json({ ok: false, retryable: true, scheduled: queued.length > 0, queued: queued.length, skipped, results: queued, message: 'A Amazon limitou as chamadas; somente reparos AUTO com campanha existente foram reprogramados.' });
       }
       return Response.json({ ok: false, error: campaignResult?.errors?.[0]?.message || 'Falha ao listar campanhas AUTO' });
     }
 
     const remoteCampaigns = listOf(campaignResult, 'campaigns');
     const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, '-updated_at', 5000).catch(() => []);
-    const productByAsin = new Map(products.map((product: any) => [String(product.asin), product]));
+    const productByAsin = new Map<string, any>(products.map((product: any): [string, any] => [String(product.asin), product]));
     const results = [];
 
     for (const asin of asins) {
@@ -244,7 +277,7 @@ Deno.serve(async (request) => {
             repaired_at: new Date().toISOString(),
             last_repair_error: null,
           });
-        } catch (error) {
+        } catch (error: any) {
           item.ok = false;
           item.complete = false;
           item.error = error?.message || String(error);
@@ -257,9 +290,10 @@ Deno.serve(async (request) => {
           });
 
           if (isThrottle(error)) {
-            const slot = await queueRepair(base44, accountId, asin, campaign);
-            item.retry_scheduled = true;
-            item.queue_window = slot.window;
+            const queued = await queueRepair(base44, accountId, asin, campaign);
+            item.retry_scheduled = queued.queued;
+            if (queued.queued) item.queue_window = queued.slot.window;
+            else item.retry_skipped_reason = queued.reason;
           }
         }
 
@@ -277,7 +311,7 @@ Deno.serve(async (request) => {
       spacing_seconds: 14,
       results,
     });
-  } catch (error) {
+  } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || 'Erro ao reparar campanhas AUTO' }, { status: 500 });
   }
 });

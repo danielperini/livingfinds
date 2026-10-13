@@ -1,5 +1,6 @@
 // v3 — lógica de reparo inlinada (sem invoke intermediário para evitar 403)
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { autoCampaignRepairCancellationPatch, autoCampaignRepairPreflight } from '../../shared/autoCampaignRepairPolicy.ts';
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -208,12 +209,25 @@ Deno.serve(async (request) => {
       return Response.json({ ok: true, skipped: true, hour, reason: 'Fora da janela Amazon' });
     }
 
-    const scheduled = await base44.asServiceRole.entities.AutoCampaignRepairQueue.filter({
+    const scheduledCandidates = await base44.asServiceRole.entities.AutoCampaignRepairQueue.filter({
       ...(body.amazon_account_id ? { amazon_account_id: body.amazon_account_id } : {}),
       status: 'scheduled',
-    }, 'scheduled_at', 100).catch(() => []);
+    }, 'scheduled_at', 500).catch(() => []);
+    const failedCandidates = await base44.asServiceRole.entities.AutoCampaignRepairQueue.filter({
+      ...(body.amazon_account_id ? { amazon_account_id: body.amazon_account_id } : {}),
+      status: 'failed',
+    }, '-completed_at', 500).catch(() => []);
 
-    // Processar apenas 1 item por invocação para evitar Rate Limit
+    // Itens sem identidade remota são encerrados sem chamada à Amazon nem retry.
+    const invalidCandidates = [...scheduledCandidates, ...failedCandidates].filter((item) => !autoCampaignRepairPreflight(item).ok);
+    let cancelledMissingIdentity = 0;
+    for (const item of invalidCandidates) {
+      await base44.asServiceRole.entities.AutoCampaignRepairQueue.update(item.id, autoCampaignRepairCancellationPatch(item));
+      cancelledMissingIdentity += 1;
+    }
+    const scheduled = scheduledCandidates.filter((item) => autoCampaignRepairPreflight(item).ok);
+
+    // Processar apenas 1 item válido por invocação para evitar Rate Limit
     const rows = scheduled.filter(due).slice(0, 1);
     const results: any[] = [];
 
@@ -257,6 +271,7 @@ Deno.serve(async (request) => {
 
     return Response.json({
       ok: true, hour, scheduled_found: scheduled.length,
+      cancelled_unrepairable: cancelledMissingIdentity,
       overdue_processed: results.length, spacing_seconds: 2, results,
     });
   } catch (error: any) {

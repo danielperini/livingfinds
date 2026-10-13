@@ -75,7 +75,8 @@ jobs:
             base44/shared/v6siaReviewEvidence.test.ts \
             base44/shared/v6siaEvidencePaging.test.ts \
             base44/shared/v6siaLifecycle.e2e.test.ts \
-            base44/shared/metricsToAmazonMutation.e2e.test.ts
+            base44/shared/metricsToAmazonMutation.e2e.test.ts \
+            base44/shared/autoCampaignRepairPolicy.test.ts
       - name: Check economic evidence policy
         run: deno check --node-modules-dir=auto base44/shared/economicEvidencePolicy.ts
       - name: Check economic evidence evaluator
@@ -88,6 +89,8 @@ jobs:
         run: deno check --node-modules-dir=auto base44/functions/runCanonicalDecisionCycle/entry.ts
       - name: Check daily motor watchdog and SKU E2E recovery
         run: deno check --node-modules-dir=auto base44/functions/runDailyMotorWatchdog/entry.ts server/src/scheduler.ts
+      - name: Check automatic campaign repair queue guards
+        run: deno check --node-modules-dir=auto base44/shared/autoCampaignRepairPolicy.ts base44/functions/processAutoCampaignRepairQueue/entry.ts base44/functions/processAutoCampaignRepairQueueV2/entry.ts base44/functions/repairIncompleteAutoCampaigns/entry.ts
       - name: Check V6SIA execution and supervision
         run: |
           deno check --node-modules-dir=auto \
