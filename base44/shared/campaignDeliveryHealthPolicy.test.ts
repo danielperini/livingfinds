@@ -3,6 +3,8 @@ import {
   classifyCampaignDeliveryHealth,
   evaluateZeroDeliveryBootstrap,
   nextConservativeBid,
+  MAX_ZERO_DELIVERY_BID_RECOVERIES_PER_RUN,
+  resolveZeroDeliveryRecoveryLimit,
 } from './campaignDeliveryHealthPolicy.ts';
 
 const base = {
@@ -112,4 +114,14 @@ Deno.test('bootstrap não inventa economia quando safe CPC ou custo confirmado f
 Deno.test('bootstrap respeita bloqueio de listing e hard stop da conta', () => {
   assert.equal(evaluateZeroDeliveryBootstrap({ ...bootstrap, assessmentStatus: 'listing_blocked' }).reason, 'PRODUCT_DELIVERY_BLOCKED');
   assert.equal(evaluateZeroDeliveryBootstrap({ ...bootstrap, hardStop: true }).reason, 'ACCOUNT_SPEND_GUARD');
+});
+
+
+Deno.test('recuperação cobre todos os SKUs elegíveis do portfólio dentro do limite seguro', () => {
+  assert.equal(MAX_ZERO_DELIVERY_BID_RECOVERIES_PER_RUN, 20);
+  assert.equal(resolveZeroDeliveryRecoveryLimit(undefined), 20);
+  assert.equal(resolveZeroDeliveryRecoveryLimit(13), 13);
+  assert.equal(resolveZeroDeliveryRecoveryLimit(50), 20);
+  assert.equal(resolveZeroDeliveryRecoveryLimit(0), 0);
+  assert.equal(resolveZeroDeliveryRecoveryLimit(-2), 0);
 });
