@@ -3,6 +3,7 @@ import {
   classifyCampaignDeliveryHealth,
   evaluateZeroDeliveryBootstrap,
   nextConservativeBid,
+  resolveZeroDeliveryRecoveryLimit,
 } from '../../shared/campaignDeliveryHealthPolicy.ts';
 import { productAdsEligibility } from '../../shared/productAdsEligibility.ts';
 import { economicsAreActionable, resolveOperatingAcos, resolveSafeMaxCpc } from '../../shared/profitGuardPolicy.ts';
@@ -104,7 +105,7 @@ Deno.serve(async (request) => {
     };
     const maxReplacementsPerRun = configuredLimit(body.max_replacements_per_run, 6, 20);
     const maxStructureRepairsPerRun = configuredLimit(body.max_structure_repairs_per_run, 5, 5);
-    const maxBidRecoveriesPerRun = configuredLimit(body.max_bid_recoveries_per_run, 8, 8);
+    const maxBidRecoveriesPerRun = resolveZeroDeliveryRecoveryLimit(body.max_bid_recoveries_per_run);
     const accounts = body.amazon_account_id
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 50);
