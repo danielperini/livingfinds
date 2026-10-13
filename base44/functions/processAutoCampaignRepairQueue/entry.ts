@@ -102,7 +102,7 @@ Deno.serve(async (request) => {
           retry_scheduled: retry,
           retryable,
         });
-      } catch (error) {
+      } catch (error: any) {
         const retry = attempts < Number(item.max_attempts || 5);
         await base44.asServiceRole.entities.AutoCampaignRepairQueue.update(item.id, {
           status: retry ? 'scheduled' : 'failed',
@@ -134,7 +134,7 @@ Deno.serve(async (request) => {
       queue_identity: 'campaign_id',
       results,
     });
-  } catch (error) {
+  } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || 'Erro ao processar reparos AUTO' }, { status: 500 });
   }
 });
