@@ -161,3 +161,12 @@ export function nextConservativeBid(
   const percentageStep = Math.round(safeCurrent * 1.05 * 100) / 100;
   return Math.min(cappedMax, Math.max(safeMin, percentageStep));
 }
+
+
+export const MAX_ZERO_DELIVERY_BID_RECOVERIES_PER_RUN = 20;
+
+export function resolveZeroDeliveryRecoveryLimit(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return MAX_ZERO_DELIVERY_BID_RECOVERIES_PER_RUN;
+  return Math.max(0, Math.min(MAX_ZERO_DELIVERY_BID_RECOVERIES_PER_RUN, Math.floor(parsed)));
+}
