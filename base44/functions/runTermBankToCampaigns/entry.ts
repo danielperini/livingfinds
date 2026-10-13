@@ -52,7 +52,7 @@ Deno.serve(async (req) => {
     const forceAsin   = body.asin_filter as string | undefined;
 
     const accounts = accountId
-      ? await db.entities.AmazonAccount.filter({ id: accountId }, null, 1)
+      ? await db.entities.AmazonAccount.filter({ id: accountId }, undefined, 1)
       : await db.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_date', 1);
     const account = accounts[0];
     if (!account) return Response.json({ ok: false, error: 'Nenhuma conta conectada' }, { status: 404 });
@@ -61,8 +61,8 @@ Deno.serve(async (req) => {
     // ── Carregar dados em paralelo ─────────────────────────────────────────
     const [termBankRaw, products, campaigns] = await Promise.all([
       db.entities.TermBank.filter({ amazon_account_id: aid }, '-orders', 2000).catch(() => [] as any[]),
-      db.entities.Product.filter({ amazon_account_id: aid }, null, 1000).catch(() => [] as any[]),
-      db.entities.Campaign.filter({ amazon_account_id: aid }, null, 3000).catch(() => [] as any[]),
+      db.entities.Product.filter({ amazon_account_id: aid }, undefined, 1000).catch(() => [] as any[]),
+      db.entities.Campaign.filter({ amazon_account_id: aid }, undefined, 3000).catch(() => [] as any[]),
     ]);
 
     // ── Índices ────────────────────────────────────────────────────────────
