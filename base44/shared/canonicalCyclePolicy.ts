@@ -61,3 +61,24 @@ export function isDecisionExecutionConfirmed(executor: any, confirmation: any): 
     confirmation?.ok === true && confirmation?.skipped !== true &&
     Number(confirmation?.divergences || 0) === 0;
 }
+
+
+/**
+ * Keeps the deterministic cycle's completion independent from its AI diagnostic.
+ * Core stage failures still block execution; an AI outage remains visible as a
+ * partial supervision result but does not strand already validated decisions.
+ */
+export function resolveCanonicalCycleOutcome(
+  failedCoreStages: unknown,
+  supervisionRequired: boolean,
+  supervision: unknown,
+) {
+  const coreOk = Array.isArray(failedCoreStages) && failedCoreStages.length === 0;
+  const supervisionOk = !supervisionRequired || isConfirmedCycleStage(supervision);
+  return {
+    ok: coreOk,
+    core_ok: coreOk,
+    supervision_ok: supervisionOk,
+    partial: coreOk && !supervisionOk,
+  };
+}
