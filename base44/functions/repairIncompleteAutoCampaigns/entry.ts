@@ -311,7 +311,7 @@ Deno.serve(async (request) => {
       spacing_seconds: 14,
       results,
     });
-  } catch (error) {
+  } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || 'Erro ao reparar campanhas AUTO' }, { status: 500 });
   }
 });
