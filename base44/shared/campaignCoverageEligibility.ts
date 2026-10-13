@@ -17,11 +17,18 @@ export function campaignCoverageAsin(campaign: any): string {
   return label.match(ASIN_PATTERN)?.[1]?.toUpperCase() || '';
 }
 
-// Discovery must not depend on past sales, ACOS or campaign activity.
-// Paused-by-stock products can resume; explicit manual locks remain respected.
-export function campaignCoverageEligible(product: any): boolean {
-  return stockAdsDecision(product) === 'activate'
+export function campaignCoverageProductEligible(product: any): boolean {
+  const status = String(product?.status || '').trim().toLowerCase();
+  const syncStatus = String(product?.catalog_sync_status || '').trim().toLowerCase();
+  return status !== 'archived'
+    && syncStatus !== 'duplicate'
     && Boolean(String(product?.sku || '').trim())
     && /^B0[A-Z0-9]{8}$/.test(String(product?.asin || '').trim().toUpperCase())
     && isProductEligibleForCampaignActivation(product);
+}
+
+// Discovery must not depend on past sales, ACOS or campaign activity.
+// Paused-by-stock products can resume; explicit manual locks remain respected.
+export function campaignCoverageEligible(product: any): boolean {
+  return campaignCoverageProductEligible(product) && stockAdsDecision(product) === 'activate';
 }

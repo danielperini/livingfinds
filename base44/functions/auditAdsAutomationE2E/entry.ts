@@ -1,7 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
-import { campaignCoverageEligible, campaignCoverageAsin } from '../../shared/campaignCoverageEligibility.ts';
+import { campaignCoverageEligible, campaignCoverageAsin, campaignCoverageProductEligible } from '../../shared/campaignCoverageEligibility.ts';
 import { availableAdsStock, hasFreshAdsInventory } from '../../shared/stockAdsPolicy.ts';
-import { isProductEligibleForCampaignActivation } from '../../shared/productCampaignPauseGuard.ts';
 
 const MINUTE = 60_000;
 const isEnabled = (row: any) => ['enabled', 'active'].includes(String(row?.state || row?.status || '').toLowerCase());
@@ -40,11 +39,7 @@ Deno.serve(async (request) => {
     const autos = active.filter((c: any) => String(c.amazon_targeting_type || c.targeting_type || '').toUpperCase() === 'AUTO');
     const manuals = active.filter((c: any) => String(c.amazon_targeting_type || c.targeting_type || '').toUpperCase() === 'MANUAL');
     const activeKeywords = keywords.filter(isEnabled);
-    const validActivationProducts = products.filter((product: any) =>
-      Boolean(String(product?.sku || '').trim()) &&
-      /^B0[A-Z0-9]{8}$/.test(String(product?.asin || '').trim().toUpperCase()) &&
-      isProductEligibleForCampaignActivation(product)
-    );
+    const validActivationProducts = products.filter(campaignCoverageProductEligible);
     const inventoryUnknownAsins = [...new Set(validActivationProducts.filter((product: any) => availableAdsStock(product) < 0)
       .map((product: any) => String(product.asin).trim().toUpperCase()))];
     const coverageCandidates = validActivationProducts.filter(campaignCoverageEligible);
