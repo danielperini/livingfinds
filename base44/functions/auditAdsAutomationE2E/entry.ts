@@ -1,5 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
-import { campaignCoverageEligible } from '../../shared/campaignCoverageEligibility.ts';
+import { campaignCoverageEligible, campaignCoverageAsin } from '../../shared/campaignCoverageEligibility.ts';
 import { availableAdsStock, hasFreshAdsInventory } from '../../shared/stockAdsPolicy.ts';
 import { isProductEligibleForCampaignActivation } from '../../shared/productCampaignPauseGuard.ts';
 
@@ -52,7 +52,7 @@ Deno.serve(async (request) => {
       .map((product: any) => String(product.asin).trim().toUpperCase()))];
     const eligibleAsins = [...new Set(coverageCandidates.filter((product: any) => hasFreshAdsInventory(product))
       .map((product: any) => String(product.asin).trim().toUpperCase()))];
-    const autoAsins = new Set(autos.map((campaign: any) => String(campaign.asin || '').trim().toUpperCase()).filter(Boolean));
+    const autoAsins = new Set(autos.map(campaignCoverageAsin).filter(Boolean));
     const missingAutoAsins = eligibleAsins.filter((asin: string) => !autoAsins.has(asin));
     const coveredAutoAsins = eligibleAsins.filter((asin: string) => autoAsins.has(asin));
     const recentDecisions = decisions.filter((d: any) => ageMinutes(d.evaluated_at || d.created_at) <= 45);
