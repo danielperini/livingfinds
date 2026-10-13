@@ -77,6 +77,16 @@ jobs:
             base44/shared/v6siaLifecycle.e2e.test.ts \
             base44/shared/metricsToAmazonMutation.e2e.test.ts \
             base44/shared/autoCampaignRepairPolicy.test.ts
+            base44/shared/skuCampaignDistributionPolicy.test.ts
+      - name: Check SKU campaign distribution enforcement
+        run: |
+          deno check --node-modules-dir=auto \
+            base44/shared/skuCampaignDistributionPolicy.ts \
+            base44/functions/runImmediateSameSkuSearchTermHarvest/entry.ts \
+            base44/functions/runTermBankToCampaigns/entry.ts \
+            base44/functions/ensureSkuCampaignFloor/entry.ts \
+            base44/functions/verifyRemoteSkuCampaignFloor/entry.ts \
+            base44/functions/expandCoverageForAsin/entry.ts
       - name: Check economic evidence policy
         run: deno check --node-modules-dir=auto base44/shared/economicEvidencePolicy.ts
       - name: Check economic evidence evaluator
