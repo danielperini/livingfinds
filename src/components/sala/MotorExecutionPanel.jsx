@@ -10,10 +10,10 @@ import { Link } from 'react-router-dom';
 // ── Fases do pipeline ─────────────────────────────────────────────────────────
 const PHASES = [
   { id: 'phase1', number: 1, name: 'Sync de Dados',        icon: Database,  description: 'Atualiza campanhas, keywords e métricas da Amazon Ads' },
-  { id: 'phase2', number: 2, name: 'Motor Determinístico', icon: Cpu,        description: 'Gera decisões com guardrails v8 (winner protection, ACoS ponderado)' },
-  { id: 'phase3', number: 3, name: 'Análise IA',           icon: Bot,        description: 'Camada IA complementar — analisa dados dos últimos 14d', isAi: true },
-  { id: 'phase4', number: 4, name: 'Execução Amazon Ads',  icon: Send,       description: 'Aplica decisões via API: bids, budgets, pausas' },
-  { id: 'phase5', number: 5, name: 'Confirmação',          icon: RotateCcw,  description: 'Reconcilia estado local vs Amazon Ads' },
+  { id: 'phase2', number: 2, name: 'Motor Determinístico', icon: Cpu,        description: 'Gera decisões com proteções econômicas e de dados' },
+  { id: 'phase3', number: 3, name: 'Análise IA',           icon: Bot,        description: 'Supervisão V6SIA das decisões e falhas', isAi: true },
+  { id: 'phase4', number: 4, name: 'Reconciliação',        icon: Send,       description: 'Concilia decisões e conflitos antes da fila' },
+  { id: 'phase5', number: 5, name: 'Arbitragem',           icon: RotateCcw,  description: 'Mantém uma ação líquida por entidade' },
 ];
 
 function PhaseStatusIcon({ status }) {
@@ -146,33 +146,31 @@ export default function MotorExecutionPanel({ account }) {
   const [recentDecisions, setRecentDecisions] = useState([]);
   const [kpis, setKpis] = useState({ lastRun: null, decisionsLastCycle: 0, executedToday: 0, tokenStatus: 'unknown' });
   const [loading, setLoading] = useState(true);
+  const [skuCoverage, setSkuCoverage] = useState(null);
+  const [isCanonicalCycle, setIsCanonicalCycle] = useState(false);
 
   const aid = account?.id;
-
-  // Próxima execução automática (a cada hora cheia)
-  const nextAutoRun = (() => {
-    const now = new Date();
-    const next = new Date(now);
-    next.setMinutes(0, 0, 0);
-    next.setHours(next.getHours() + 1);
-    const diffMin = Math.round((next - now) / 60000);
-    return diffMin <= 1 ? 'menos de 1 min' : `${diffMin} min`;
-  })();
 
   const load = useCallback(async () => {
     if (!aid) return;
     setLoading(true);
     try {
-      const todayStr = new Date().toISOString().slice(0, 10);
-      const [aggLogs, pipelineLogs, execDecisions, acc] = await Promise.all([
+      const todayStr = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
+      }).format(new Date());
+      const [aggLogs, pipelineLogs, canonicalLogs, auditLogs, watchdogLogs, execDecisions, acc] = await Promise.all([
         base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid, operation: 'aggressive_execution_pipeline' }, '-started_at', 3),
         base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid, operation: 'motor_v8_pipeline' }, '-started_at', 3),
+        base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid, operation: 'v6sia_canonical_decision_cycle' }, '-started_at', 3).catch(() => []),
+        base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid, operation: 'ads_automation_e2e_audit' }, '-started_at', 1).catch(() => []),
+        base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid, operation: 'daily_motor_watchdog_e2e' }, '-started_at', 1).catch(() => []),
         base44.entities.OptimizationDecision.filter({ amazon_account_id: aid, status: 'executed' }, '-created_date', 100),
         base44.entities.AmazonAccount.filter({ id: aid }, null, 1),
       ]);
 
-      // Último ciclo: preferir motor_v8_pipeline, fallback para aggressive_execution_pipeline
-      const allLogs = [...pipelineLogs, ...aggLogs].sort(
+      // O ciclo V6SIA é a fonte canônica do fechamento diário; os pipelines antigos
+      // continuam como fallback para execuções manuais já registradas.
+      const allLogs = [...canonicalLogs, ...pipelineLogs, ...aggLogs].sort(
         (a, b) => new Date(b.started_at || b.created_date) - new Date(a.started_at || a.created_date)
       );
       const lastLog = allLogs[0];
@@ -183,17 +181,70 @@ export default function MotorExecutionPanel({ account }) {
         try { summary = JSON.parse(lastLog.result_summary); } catch {}
       }
 
-      // Extrair fases do último log
+      const canonical = lastLog?.operation === 'v6sia_canonical_decision_cycle';
+      setIsCanonicalCycle(canonical);
       const newPhases = {};
-      for (const p of ['phase1', 'phase2', 'phase3', 'phase4', 'phase5']) {
-        if (summary[p]) newPhases[p] = summary[p];
+      if (canonical) {
+        const stageMap = {
+          phase1: summary.stages?.economic_evidence,
+          phase2: summary.stages?.unified_engine,
+          phase3: summary.stages?.reconciliation,
+          phase4: summary.stages?.arbitration,
+          phase5: summary.supervision_status,
+        };
+        for (const [phase, rawStatus] of Object.entries(stageMap)) {
+          if (!rawStatus) continue;
+          const status = rawStatus === 'ok' ? 'success'
+            : rawStatus === 'failed' ? 'error'
+            : rawStatus === 'skipped' ? 'skipped'
+            : rawStatus === 'warning' ? 'warning' : 'pending';
+          newPhases[phase] = { status, error: status === 'error' ? lastLog?.error_message : undefined };
+        }
+      } else {
+        for (const p of ['phase1', 'phase2', 'phase3', 'phase4', 'phase5']) {
+          if (summary[p]) newPhases[p] = summary[p];
+        }
       }
       setPhases(newPhases);
       setLastSummary(summary.final || null);
       if (summary.correlation_id) setCorrelationId(summary.correlation_id);
 
-      const executedToday = execDecisions.filter(d => (d.created_date || d.created_at || '').slice(0, 10) === todayStr).length;
-      const lastCycleDecisions = summary.final?.total_decisions || 0;
+      const localDate = (value) => {
+        if (!value) return '';
+        const parsed = new Date(value);
+        return Number.isNaN(parsed.getTime()) ? '' : new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
+        }).format(parsed);
+      };
+      const executedToday = execDecisions.filter(d => localDate(d.executed_at || d.created_date || d.created_at) === todayStr).length;
+      const lastCycleDecisions = summary.final?.total_decisions ?? (canonical ? null : 0);
+
+      let audit = null;
+      for (const log of [auditLogs[0], watchdogLogs[0]]) {
+        if (!log?.result_summary) continue;
+        try {
+          const parsed = JSON.parse(log.result_summary);
+          const candidate = parsed?.ads ? {
+            eligible: Number(parsed.ads.eligible_asins ?? 0),
+            covered: Array.isArray(parsed.ads.covered_auto_asins) ? parsed.ads.covered_auto_asins.length : null,
+            missing: Array.isArray(parsed.ads.missing_auto_asins) ? parsed.ads.missing_auto_asins : [],
+            stale: Array.isArray(parsed.ads.stale_inventory_asins) ? parsed.ads.stale_inventory_asins : [],
+            unknown: Array.isArray(parsed.ads.inventory_unknown_asins) ? parsed.ads.inventory_unknown_asins : [],
+            checkedAt: parsed.checked_at || log.completed_at || log.started_at,
+            health: parsed.health || 'unknown',
+          } : parsed?.sku_coverage ? {
+            eligible: Number(parsed.sku_coverage.eligible_asins ?? 0),
+            covered: Array.isArray(parsed.sku_coverage.covered_auto_asins) ? parsed.sku_coverage.covered_auto_asins.length : null,
+            missing: Array.isArray(parsed.sku_coverage.missing_auto_asins_after) ? parsed.sku_coverage.missing_auto_asins_after : [],
+            stale: Array.isArray(parsed.sku_coverage.stale_inventory_asins) ? parsed.sku_coverage.stale_inventory_asins : [],
+            unknown: Array.isArray(parsed.sku_coverage.inventory_unknown_asins) ? parsed.sku_coverage.inventory_unknown_asins : [],
+            checkedAt: parsed.e2e_checked_at || log.completed_at || log.started_at,
+            health: parsed.sku_coverage.health || 'unknown',
+          } : null;
+          if (candidate) { audit = candidate; break; }
+        } catch {}
+      }
+      setSkuCoverage(audit);
 
       setKpis({
         lastRun: lastLog?.completed_at || lastLog?.started_at,
@@ -226,7 +277,14 @@ export default function MotorExecutionPanel({ account }) {
 
   const tokenOk      = ['active', 'valid'].includes(kpis.tokenStatus);
   const tokenExpired = ['expired', 'revoked', 'missing'].includes(kpis.tokenStatus);
-  const allPhasesData = PHASES.map(p => ({ ...p, data: phases[p.id] }));
+  const canonicalPhases = [
+    { ...PHASES[0], name: 'Evidências econômicas', description: 'Validação de métricas e custos usados pelo motor' },
+    { ...PHASES[1], name: 'Motor determinístico', description: 'Geração das decisões e proteções por produto' },
+    { ...PHASES[2], name: 'Reconciliação', description: 'Revalidação das decisões e evidências' },
+    { ...PHASES[3], name: 'Arbitragem', description: 'Resolução de ações conflitantes antes da fila' },
+    { ...PHASES[4], name: 'Supervisão V6SIA', description: 'Revisão de portfólio e análise de falhas', isAi: true },
+  ];
+  const allPhasesData = (isCanonicalCycle ? canonicalPhases : PHASES).map(p => ({ ...p, data: phases[p.id] }));
   const hasPhaseData  = Object.keys(phases).length > 0;
 
   // Status geral do último ciclo
@@ -250,9 +308,9 @@ export default function MotorExecutionPanel({ account }) {
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5">
             <Activity className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="text-xs font-semibold text-emerald-300">Automático — executa a cada hora</span>
+            <span className="text-xs font-semibold text-emerald-300">Fechamento diário às 01:25 BRT</span>
           </div>
-          <span className="text-[10px] text-slate-500">Próxima: ~{nextAutoRun}</span>
+          <span className="text-[10px] text-slate-500">Auditoria de cobertura e sincronizações intradia a cada 15 min</span>
         </div>
         <button
           onClick={load}
@@ -277,7 +335,7 @@ export default function MotorExecutionPanel({ account }) {
         </div>
         <div className="bg-surface-1 border border-surface-2 rounded-xl p-3">
           <p className="text-[10px] text-slate-500 mb-1">Decisões Geradas</p>
-          <p className="text-xl font-bold text-cyan">{loading ? '...' : kpis.decisionsLastCycle}</p>
+          <p className="text-xl font-bold text-cyan">{loading ? '...' : (kpis.decisionsLastCycle ?? '—')}</p>
           <p className="text-[10px] text-slate-500">último ciclo</p>
         </div>
         <div className="bg-surface-1 border border-surface-2 rounded-xl p-3">
@@ -303,6 +361,31 @@ export default function MotorExecutionPanel({ account }) {
           )}
         </div>
       </div>
+
+      {skuCoverage && (
+        <div className={`rounded-xl border px-4 py-3 flex flex-wrap items-center justify-between gap-3 ${
+          skuCoverage.missing.length || skuCoverage.stale.length || skuCoverage.unknown.length
+            ? 'border-amber-500/25 bg-amber-500/5'
+            : skuCoverage.health === 'healthy'
+              ? 'border-emerald-500/20 bg-emerald-500/5'
+              : 'border-surface-2 bg-surface-1'
+        }`}>
+          <div>
+            <p className="text-xs font-semibold text-white">Cobertura de SKUs elegíveis por campanha automática</p>
+            <p className="text-[10px] text-slate-400 mt-1">
+              {skuCoverage.covered === null ? 'Cobertura não informada pelo relatório' : `${skuCoverage.covered}/${skuCoverage.eligible} cobertos`}
+              {skuCoverage.missing.length ? ` · ${skuCoverage.missing.length} sem campanha automática` : ''}
+              {skuCoverage.stale.length ? ` · ${skuCoverage.stale.length} estoques desatualizados` : ''}
+              {skuCoverage.unknown.length ? ` · ${skuCoverage.unknown.length} estoques sem confirmação` : ''}
+              {!skuCoverage.missing.length && !skuCoverage.stale.length && !skuCoverage.unknown.length && skuCoverage.health === 'healthy'
+                ? ' · cobertura e estoque confirmados' : ''}
+            </p>
+          </div>
+          <span className="text-[10px] text-slate-500">
+            {skuCoverage.checkedAt ? `Verificado ${new Date(skuCoverage.checkedAt).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : 'Data de verificação indisponível'}
+          </span>
+        </div>
+      )}
 
       {/* ── Status das fases do último ciclo ─────────────────────────────── */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-4 space-y-2">
