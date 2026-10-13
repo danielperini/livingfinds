@@ -70,7 +70,7 @@ Deno.serve(async (req) => {
       if (!user || user.role !== 'admin') return Response.json({ ok: false, error: 'Admin only' }, { status: 403 });
     }
 
-    const floor = Math.max(MANUAL_FLOOR, Number(body.manual_floor || MANUAL_FLOOR));
+    const floor = resolveManualCampaignFloor(body.manual_floor);
     const accounts = body.amazon_account_id
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
       : await base44.asServiceRole.entities.AmazonAccount.list('-updated_date', 50);
