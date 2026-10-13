@@ -1,5 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { availableAdsStock, stockAdsDecision } from '../../shared/stockAdsPolicy.ts';
+import { resolveManualCampaignFloor } from '../../shared/skuCampaignDistributionPolicy.ts';
 
 async function listEnabled(base44: any, aid: string) {
   const campaigns: any[] = [];
