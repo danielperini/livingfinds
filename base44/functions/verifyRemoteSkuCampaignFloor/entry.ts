@@ -29,7 +29,7 @@ Deno.serve(async (req) => {
     if (body._service_role !== true) return Response.json({ ok: false, error: 'Uso interno' }, { status: 403 });
     const floor = resolveManualCampaignFloor(body.manual_floor);
     const accounts = body.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.list('-updated_date', 50);
     const connected = accounts.filter((a: any) => a.ads_profile_id && (a.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN')));
     const results: any[] = [];
