@@ -52,3 +52,41 @@ export function safeQueueError(item) {
     .replace(/[\r\n\t]+/g, ' ')
     .slice(0, 240);
 }
+
+
+const TERMINAL_DECISION_STATES = new Set([
+  'confirmed', 'executed', 'completed', 'cancelled', 'canceled', 'rejected',
+  'expired', 'skipped', 'blocked', 'failed', 'failed_final', 'superseded', 'rolled_back',
+]);
+const EXECUTABLE_DECISION_STATES = new Set([
+  'approved', 'waiting_retry', 'scheduled', 'executing',
+]);
+const ACTIVE_DECISION_QUEUE_STATES = new Set([
+  'pending', 'scheduled', 'queued', 'processing', 'retrying',
+]);
+
+/** Alert only on work that can be sent/retried and is actually past due. */
+export function isDecisionQueueOverdue(decision, now = Date.now(), graceMinutes = 15) {
+  const status = String(decision?.status || '').trim().toLowerCase();
+  const queueStatus = String(decision?.queue_status || '').trim().toLowerCase();
+  const approval = String(decision?.approval_status || '').trim().toLowerCase();
+
+  if (TERMINAL_DECISION_STATES.has(status) || TERMINAL_DECISION_STATES.has(queueStatus)) return false;
+  if (status === 'pending_approval' || decision?.execution_mode === 'MANUAL_REVIEW') return false;
+  if (decision?.requires_approval === true && !['approved', 'auto_approved', 'approved_by_user'].includes(approval)) return false;
+
+  const executable = EXECUTABLE_DECISION_STATES.has(status);
+  if (!executable) return false;
+  if (queueStatus && !ACTIVE_DECISION_QUEUE_STATES.has(queueStatus)) return false;
+
+  const dueValue = decision?.next_retry_at || decision?.scheduled_for || decision?.not_before;
+  const dueAt = dueValue ? new Date(dueValue).getTime() : NaN;
+  if (Number.isFinite(dueAt) && dueAt > now) return false;
+
+  const reference = dueValue || decision?.queued_at || decision?.approved_at ||
+    decision?.last_attempt_at || decision?.updated_at || decision?.updated_date ||
+    decision?.created_at || decision?.created_date;
+  const timestamp = new Date(reference || 0).getTime();
+  return Number.isFinite(timestamp) && timestamp > 0 &&
+    now - timestamp >= Math.max(0, Number(graceMinutes) || 0) * 60_000;
+}

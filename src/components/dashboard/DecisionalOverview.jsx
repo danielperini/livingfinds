@@ -4,6 +4,7 @@ import { RefreshCw, Loader2, AlertTriangle, CheckCircle2, ShieldAlert } from 'lu
 import MetricCard from '@/components/ui/MetricCard';
 import DataFreshnessBadge from '@/components/ui/DataFreshnessBadge';
 import MotorDecisionFeed from '@/components/dashboard/MotorDecisionFeed';
+import { isDecisionQueueOverdue } from '@/lib/operationalQueueHealth';
 
 const fmtBRL = (v) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2 }).format(Number(v) || 0);
 const fmtPct = (v) => `${(Number(v) || 0).toFixed(1)}%`;
@@ -121,16 +122,9 @@ function AttentionPanel({ accountId, decisions = [] }) {
       </div>
     );
   }
-  const overdueQueue = (decisions || []).filter((decision) => {
-    const status = String(decision?.status || '').toLowerCase();
-    const queueStatus = String(decision?.queue_status || '').toLowerCase();
-    const created = new Date(decision?.created_at || decision?.created_date || 0).getTime();
-    const ageMinutes = created ? (Date.now() - created) / 60000 : 0;
-    return ageMinutes >= 15 && (
-      ['approved', 'waiting_retry', 'scheduled', 'pending'].includes(status) ||
-      ['scheduled', 'pending', 'queued'].includes(queueStatus)
-    );
-  });
+  const overdueQueue = (decisions || []).filter((decision) =>
+    isDecisionQueueOverdue(decision, Date.now())
+  );
   if ((!alerts || alerts.length === 0) && overdueQueue.length === 0) {
     return (
       <div className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
@@ -153,7 +147,7 @@ function AttentionPanel({ accountId, decisions = [] }) {
               <div>
                 <p className="text-sm font-semibold text-theme-primary">Fila Amazon atrasada</p>
                 <p className="text-xs text-theme-secondary mt-1 leading-relaxed">
-                  {overdueQueue.length} decisão(ões) aguardam envio ou nova tentativa há mais de 15 minutos. O motor deve revalidar e reenviar somente as decisões ainda elegíveis.
+                  {overdueQueue.length} decisão(ões) executáveis estão vencidas para envio ou nova tentativa há mais de 15 minutos. Itens concluídos, bloqueados ou aguardando aprovação não entram nesta contagem.
                 </p>
               </div>
             </div>

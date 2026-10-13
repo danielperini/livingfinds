@@ -32,3 +32,20 @@ test('queue error presentation redacts credentials and truncates long details', 
   assert.equal(safeQueueError({ last_error: 'Bearer abc.def Atzr|secret client_secret=hidden' }), 'Bearer [token ocultado] [token ocultado] client_secret=[ocultado]');
   assert.equal(safeQueueError({ last_error: 'x'.repeat(400) }).length, 240);
 });
+
+
+import { isDecisionQueueOverdue } from './operationalQueueHealth.js';
+
+test('decision alert includes only executable work that is past its due time', () => {
+  const now = Date.now();
+  const old = new Date(now - 30 * 60_000).toISOString();
+  const future = new Date(now + 30 * 60_000).toISOString();
+  assert.equal(isDecisionQueueOverdue({ status: 'approved', queue_status: 'pending', queued_at: old }, now), true);
+  assert.equal(isDecisionQueueOverdue({ status: 'waiting_retry', queue_status: 'scheduled', next_retry_at: future, created_at: old }, now), false);
+  assert.equal(isDecisionQueueOverdue({ status: 'pending_approval', queue_status: 'pending', created_at: old }, now), false);
+  assert.equal(isDecisionQueueOverdue({ status: 'pending', queue_status: 'completed', created_at: old }, now), false);
+  assert.equal(isDecisionQueueOverdue({ status: 'pending', queue_status: 'pending', created_at: old }, now), false);
+  assert.equal(isDecisionQueueOverdue({ status: 'approved', queue_status: 'failed', created_at: old }, now), false);
+  assert.equal(isDecisionQueueOverdue({ status: 'completed', queue_status: 'completed', created_at: old }, now), false);
+  assert.equal(isDecisionQueueOverdue({ status: 'approved', queue_status: 'pending', queued_at: new Date(now - 10 * 60_000).toISOString() }, now), false);
+});
