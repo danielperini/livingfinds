@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { autoCampaignRepairCancellationPatch, autoCampaignRepairPreflight } from '../../shared/autoCampaignRepairPolicy.ts';
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -28,11 +29,22 @@ Deno.serve(async (request) => {
       return Response.json({ ok: true, skipped: true, hour, reason: 'Fora da janela Amazon' });
     }
 
-    const allScheduled = await base44.asServiceRole.entities.AutoCampaignRepairQueue.filter({
+    const scheduledCandidates = await base44.asServiceRole.entities.AutoCampaignRepairQueue.filter({
       ...(body.amazon_account_id ? { amazon_account_id: body.amazon_account_id } : {}),
       status: 'scheduled',
-    }, 'scheduled_at', 100).catch(() => []);
+    }, 'scheduled_at', 500).catch(() => []);
+    const failedCandidates = await base44.asServiceRole.entities.AutoCampaignRepairQueue.filter({
+      ...(body.amazon_account_id ? { amazon_account_id: body.amazon_account_id } : {}),
+      status: 'failed',
+    }, '-completed_at', 500).catch(() => []);
 
+    const invalidCandidates = [...scheduledCandidates, ...failedCandidates].filter((item) => !autoCampaignRepairPreflight(item).ok);
+    let cancelledUnrepairable = 0;
+    for (const item of invalidCandidates) {
+      await base44.asServiceRole.entities.AutoCampaignRepairQueue.update(item.id, autoCampaignRepairCancellationPatch(item));
+      cancelledUnrepairable += 1;
+    }
+    const allScheduled = scheduledCandidates.filter((item) => autoCampaignRepairPreflight(item).ok);
     const queue = allScheduled.filter(isDue).slice(0, 10);
     const results: any[] = [];
 
@@ -118,6 +130,7 @@ Deno.serve(async (request) => {
       scheduled_found: allScheduled.length,
       overdue_processed: results.length,
       spacing_seconds: 14,
+      cancelled_unrepairable: cancelledUnrepairable,
       queue_identity: 'campaign_id',
       results,
     });
