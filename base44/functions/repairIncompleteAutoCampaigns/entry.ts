@@ -139,7 +139,7 @@ Deno.serve(async (request) => {
 
     const accountId = body.amazon_account_id;
     if (!accountId) return Response.json({ ok: false, error: 'amazon_account_id obrigatório' }, { status: 400 });
-    const asins = [...new Set((Array.isArray(body.asins) && body.asins.length ? body.asins : DEFAULT_ASINS).map((value: any) => String(value).trim()).filter(Boolean))];
+    const asins: string[] = Array.from(new Set<string>((Array.isArray(body.asins) && body.asins.length ? body.asins : DEFAULT_ASINS).map((value: any) => String(value).trim()).filter(Boolean)));
 
     if (!body._window_execution && !inWindow()) {
       const queued = [];
@@ -174,7 +174,7 @@ Deno.serve(async (request) => {
 
     const remoteCampaigns = listOf(campaignResult, 'campaigns');
     const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, '-updated_at', 5000).catch(() => []);
-    const productByAsin = new Map(products.map((product: any) => [String(product.asin), product]));
+    const productByAsin = new Map<string, any>(products.map((product: any): [string, any] => [String(product.asin), product]));
     const results = [];
 
     for (const asin of asins) {
@@ -277,7 +277,7 @@ Deno.serve(async (request) => {
             repaired_at: new Date().toISOString(),
             last_repair_error: null,
           });
-        } catch (error) {
+        } catch (error: any) {
           item.ok = false;
           item.complete = false;
           item.error = error?.message || String(error);
