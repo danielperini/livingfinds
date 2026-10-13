@@ -26,6 +26,8 @@ type Job = {
   payload?: Record<string, any>;
   run_on_startup?: boolean;
   catch_up_daily?: boolean;
+  /** Um watchdog confirmado pode reconciliar o ledger do ciclo diário que ele recuperou. */
+  reconciles_daily_function?: string;
   retry?: { max_attempts?: number; base_delay_seconds?: number; max_delay_seconds?: number };
 };
 
@@ -399,6 +401,18 @@ export async function startScheduler(): Promise<void> {
         });
         if (!result.acquired) {
           console.warn('[scheduler] skipped_concurrent_execution ' + job.name + '/' + slotKey);
+        } else if (!result.value.skipped && result.value.succeeded && job.reconciles_daily_function) {
+          const reconciledJob = jobs.find((candidate) => candidate.function === job.reconciles_daily_function && candidate.catch_up_daily === true);
+          const reconciledDay = /^\d{4}-\d{2}-\d{2}/.exec(slotKey)?.[0];
+          if (reconciledJob && reconciledDay) {
+            const reconciledKey = jobKeyOf(reconciledJob);
+            await schedulerSql.unsafe(`
+              insert into scheduler_job_runs (job_key,slot_key,job_name,function_name,status,attempt_count,started_at,finished_at,next_attempt_at,last_error,updated_at)
+              values ($1,$2,$3,$4,'succeeded',0,now(),now(),null,null,now())
+              on conflict (job_key,slot_key) do update set
+                status='succeeded',finished_at=now(),next_attempt_at=null,last_error=null,updated_at=now()
+            `, [reconciledKey, reconciledDay, reconciledJob.name, reconciledJob.function]);
+          }
         }
       } catch (error) {
         schedulerHealth.last_error_at = new Date().toISOString();

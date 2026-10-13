@@ -1,9 +1,11 @@
 import {
+  aggregateSearchTermSnapshots,
   aggregateSearchTerms,
   calculateSafeHarvestBid,
   calculateWinnerExactBudget,
   evaluateHarvestCandidate,
   isAsinSearchTerm,
+  isTitleFragmentKeyword,
   matchesRequestedCampaignType,
   normalizeSearchTerm,
   resolveSameSkuAttribution,
@@ -59,6 +61,18 @@ Deno.test('agrega o mesmo termo vindo de vaga e complementos sem duplicar campan
   if (result[0].rawVariants.length !== 2) throw new Error('variantes brutas não foram preservadas');
 });
 
+Deno.test('não soma conversões repetidas em snapshots móveis e deduplica a origem diária', () => {
+  const rows = [
+    { date: '2026-10-10', advertised_asin: 'B0FN4RCXY2', advertised_sku: 'SKU-1', search_term: 'lixeira inox sensor', campaign_id: 'C1', ad_group_id: 'A1', source_target_id: 'T1', source_target_type: 'close-match', spend: 0.20, clicks: 1, impressions: 10, same_sku_attribution_verified: true, same_sku_orders: 2, same_sku_sales: 100, total_orders: 2, total_sales: 100, attribution_window_days: 7, metrics_fresh_at: '2026-10-10T08:00:00Z' },
+    { date: '2026-10-11', advertised_asin: 'B0FN4RCXY2', advertised_sku: 'SKU-1', search_term: 'lixeira inox sensor', campaign_id: 'C1', ad_group_id: 'A1', source_target_id: 'T1', source_target_type: 'close-match', spend: 0.30, clicks: 2, impressions: 12, same_sku_attribution_verified: true, same_sku_orders: 2, same_sku_sales: 100, total_orders: 2, total_sales: 100, attribution_window_days: 7, metrics_fresh_at: '2026-10-11T08:00:00Z' },
+    { date: '2026-10-11', advertised_asin: 'B0FN4RCXY2', advertised_sku: 'SKU-1', search_term: 'lixeira inox sensor', campaign_id: 'C1', ad_group_id: 'A1', source_target_id: 'T1', source_target_type: 'close-match', spend: 0.35, clicks: 2, impressions: 14, same_sku_attribution_verified: true, same_sku_orders: 2, same_sku_sales: 100, total_orders: 2, total_sales: 100, attribution_window_days: 7, metrics_fresh_at: '2026-10-11T09:00:00Z' },
+    { date: '2026-10-12', advertised_asin: 'B0FN4RCXY2', advertised_sku: 'SKU-1', search_term: 'lixeira inox sensor', campaign_id: 'C1', ad_group_id: 'A1', source_target_id: 'T1', source_target_type: 'close-match', spend: 0.15, clicks: 1, impressions: 8, same_sku_attribution_verified: true, same_sku_orders: 2, same_sku_sales: 100, total_orders: 2, total_sales: 100, attribution_window_days: 7, metrics_fresh_at: '2026-10-12T08:00:00Z' },
+  ];
+  const [aggregate] = aggregateSearchTermSnapshots(rows);
+  if (aggregate.sameSkuOrders !== 2 || aggregate.sameSkuSales !== 100) throw new Error('a mesma conversão móvel foi somada mais de uma vez');
+  if (Math.abs(aggregate.spend - 0.70) > 0.001 || aggregate.clicks !== 4 || aggregate.impressions !== 32) throw new Error('métricas diárias não foram deduplicadas e somadas corretamente');
+});
+
 Deno.test('bid inicial nunca ultrapassa o CPC econômico seguro', () => {
   const bid = calculateSafeHarvestBid({ observedCpc: 1.2, safeCpc: 0.72, minBid: 0.25, maxBid: 3 });
   if (bid !== 0.72) throw new Error(`bid inseguro: ${bid}`);
@@ -71,21 +85,30 @@ Deno.test('orçamento de EXACT vencedor usa economia e CPC em vez de valor fixo'
   if (budget <= 15 || budget > 30) throw new Error(`orçamento vencedor não competitivo: ${budget}`);
 });
 
-Deno.test('uma venda do mesmo SKU é elegível, mas venda halo não é', () => {
+Deno.test('exige duas vendas verificadas do mesmo SKU e bloqueia venda halo', () => {
   const base = {
     asin: 'B0FN4RCXY2', sku: 'SKU-1', term: 'lixeira inox 15l', normalizedTerm: 'lixeira inox 15l',
     termFamilyKey: 'lixeira inox 15l', rawVariants: ['lixeira inox 15l'],
-    impressions: 10, clicks: 1, spend: 0.5, totalOrders: 1, totalSales: 203.8,
-    sameSkuOrders: 1, sameSkuSales: 203.8, haloOrders: 0, haloSales: 0, latestDate: '2026-07-31',
+    impressions: 20, clicks: 2, spend: 0.8, totalOrders: 2, totalSales: 407.6,
+    sameSkuOrders: 2, sameSkuSales: 407.6, haloOrders: 0, haloSales: 0, latestDate: '2026-07-31',
     sourceRows: [], sources: [], attributionVerified: true, skuResolutionVerified: true,
   };
   const eligible = evaluateHarvestCandidate({ aggregate: base, inStock: true, economicsActionable: true, breakEvenAcos: 40, safeBid: 0.45, alreadyExact: false, alreadyPromoted: false });
-  if (!eligible.eligible) throw new Error(`venda deveria promover: ${eligible.reason}`);
+  if (!eligible.eligible) throw new Error(`duas vendas do mesmo SKU deveriam promover: ${eligible.reason}`);
+  const oneSale = evaluateHarvestCandidate({ aggregate: { ...base, totalOrders: 1, sameSkuOrders: 1, totalSales: 203.8, sameSkuSales: 203.8 }, inStock: true, economicsActionable: true, breakEvenAcos: 40, safeBid: 0.45, alreadyExact: false, alreadyPromoted: false });
+  if (oneSale.eligible || oneSale.reason !== 'requires_two_verified_same_sku_orders') throw new Error('uma única venda não pode criar campanha manual');
   for (const breakEvenAcos of [null, 0, -5]) {
     if (evaluateHarvestCandidate({ aggregate: base, inStock: true, economicsActionable: true, breakEvenAcos, safeBid: 0.45, alreadyExact: false, alreadyPromoted: false }).eligible) throw new Error('margem ausente/negativa não pode promover');
   }
   const halo = evaluateHarvestCandidate({ aggregate: { ...base, sameSkuOrders: 0, sameSkuSales: 0, haloOrders: 1, haloSales: 203.8 }, inStock: true, economicsActionable: true, breakEvenAcos: 40, safeBid: 0.45, alreadyExact: false, alreadyPromoted: false });
-  if (halo.eligible || halo.reason !== 'no_same_sku_sale') throw new Error('venda halo não pode promover');
+  if (halo.eligible || halo.reason !== 'requires_two_verified_same_sku_orders') throw new Error('venda halo não pode promover');
+});
+
+Deno.test('identifica fragmento contíguo do título em sugestões geradas', () => {
+  const title = 'Moedor de Café Elétrico Portátil Configuração Multi Moagem USB';
+  if (!isTitleFragmentKeyword('moedor de cafe eletrico', title)) throw new Error('fragmento de título não identificado');
+  if (isTitleFragmentKeyword('moedor de cafe eletrico portátil configuração multi moagem usb', title)) throw new Error('título completo não deve ser classificado como fragmento');
+  if (isTitleFragmentKeyword('moedor de cafe recarregável', title)) throw new Error('termo de busca não contíguo foi bloqueado');
 });
 
 Deno.test('não promove ASIN/target de dez caracteres como keyword', () => {
@@ -104,7 +127,7 @@ Deno.test('EXACT equivalente ativa não é duplicada', () => {
   const aggregate = {
     asin: 'B0FN4RCXY2', sku: 'SKU-1', term: 'lixeira inox', normalizedTerm: 'lixeira inox',
     termFamilyKey: 'lixeira inox', rawVariants: ['lixeira inox'], impressions: 20, clicks: 2,
-    spend: 1, totalOrders: 1, totalSales: 30, sameSkuOrders: 1, sameSkuSales: 30,
+    spend: 1, totalOrders: 2, totalSales: 60, sameSkuOrders: 2, sameSkuSales: 60,
     haloOrders: 0, haloSales: 0, latestDate: '2026-08-25', sourceRows: [], sources: [],
     attributionVerified: true, skuResolutionVerified: true,
   };

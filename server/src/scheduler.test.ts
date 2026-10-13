@@ -24,6 +24,16 @@ Deno.test('schedule validation rejects malformed cron definitions', () => {
   ]);
 });
 
+Deno.test('schedule diária declara watchdog redundante ligado ao ciclo canônico', async () => {
+  const schedulePath = new URL('../../base44/schedules/amazon-automation-schedule.json', import.meta.url);
+  const config = JSON.parse(await Deno.readTextFile(schedulePath));
+  const jobs = config.jobs;
+  const watchdog = jobs.find((job: any) => job.function === 'runDailyMotorWatchdog');
+  assertEquals(watchdog?.reconciles_daily_function, 'runCanonicalDecisionCycle');
+  assertEquals(jobs.some((job: any) => job.function === watchdog?.reconciles_daily_function && job.catch_up_daily === true), true);
+  assertEquals(validateSchedule(jobs), []);
+});
+
 Deno.test('runWithLock skips when another owner holds the lock', async () => {
   let ran = false;
   const result = await runWithLock(async () => null, async () => {

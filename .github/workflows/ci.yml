@@ -68,6 +68,7 @@ jobs:
             base44/shared/amazonBidCeiling.test.ts \
             base44/shared/configuredBidPolicy.test.ts \
             base44/shared/searchTermHarvestPolicy.test.ts \
+            base44/shared/canonicalCyclePolicy.test.ts \
             base44/shared/servingCampaignGrowthPolicy.test.ts \
             base44/shared/economicEvidencePolicy.test.ts \
             base44/shared/v6siaFailurePolicy.test.ts \
@@ -85,6 +86,8 @@ jobs:
         run: deno check --node-modules-dir=auto base44/functions/arbitrateCanonicalDecisionConflicts/entry.ts
       - name: Check canonical decision cycle
         run: deno check --node-modules-dir=auto base44/functions/runCanonicalDecisionCycle/entry.ts
+      - name: Check daily motor watchdog and SKU E2E recovery
+        run: deno check --node-modules-dir=auto base44/functions/runDailyMotorWatchdog/entry.ts server/src/scheduler.ts
       - name: Check V6SIA execution and supervision
         run: |
           deno check --node-modules-dir=auto \
@@ -129,7 +132,7 @@ jobs:
             base44/functions/runSalesModeWasteRotation/entry.ts \
             base44/functions/runSalesMode/entry.ts
       - name: Test scheduler and Hostinger OpenAI routing
-        run: deno test --node-modules-dir=auto server/src/scheduler.test.ts server/src/sdk/integrations.test.ts
+        run: deno test --allow-read=base44/schedules/amazon-automation-schedule.json --node-modules-dir=auto server/src/scheduler.test.ts server/src/sdk/integrations.test.ts
       - name: Type-check Hostinger scheduler and health route
         run: deno check --node-modules-dir=auto server/src/scheduler.ts server/src/main.ts
       - name: Test environment status secret redaction
