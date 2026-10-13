@@ -1,5 +1,5 @@
 import { assertEquals } from 'jsr:@std/assert@1';
-import { campaignCoverageAsin } from './campaignCoverageEligibility.ts';
+import { campaignCoverageAsin, campaignCoverageProductEligible } from './campaignCoverageEligibility.ts';
 import { collectUnconfirmedCycleStages, describeUnconfirmedCycleStage, isConfirmedCycleStage, isDecisionExecutionConfirmed, shouldRecoverDailyCycle, shouldRepairSkuCoverage } from './canonicalCyclePolicy.ts';
 
 Deno.test('etapa do motor só é sucesso com confirmação explícita', () => {
@@ -46,6 +46,14 @@ Deno.test('auditoria reconhece identidade de campanha em campos diretos ou nome'
   assertEquals(campaignCoverageAsin({ asin: 'b0dj3rghk6', name: 'AUTO | B0OTHER1234' }), 'B0DJ3RGHK6');
   assertEquals(campaignCoverageAsin({ campaign_name: 'AUTO | B0HLMF8PPD | 2026-10-07' }), 'B0HLMF8PPD');
   assertEquals(campaignCoverageAsin({ campaign_name: 'AUTO | nome sem ASIN' }), '');
+});
+
+Deno.test('auditoria de estoque ignora catálogo arquivado e duplicado, mas mantém ofertas ativas elegíveis', () => {
+  const base = { asin: 'B0HLMF8PPD', sku: 'FBA-0122', fba_inventory: null, offer_active: true };
+  assertEquals(campaignCoverageProductEligible({ ...base, status: 'archived' }), false);
+  assertEquals(campaignCoverageProductEligible({ ...base, catalog_sync_status: 'duplicate' }), false);
+  assertEquals(campaignCoverageProductEligible(base), true);
+  assertEquals(campaignCoverageProductEligible({ ...base, offer_active: false }), false);
 });
 
 Deno.test('E2E só confirma execução sem falhas, itens pendentes ou divergências remotas', () => {
