@@ -223,9 +223,9 @@ Deno.serve(async (request) => {
       .map(([name, stage]: [string, any]) => ({
         stage: name,
         error: String(stage?.error || stage?.reason || 'stage_returned_ok_false')
-          .replace(/Bearer\\s+[A-Za-z0-9._~+\\/-]+=*/gi, 'Bearer [REDACTED]')
-          .replace(/(refresh_token|client_secret|access_token)[=:]\\s*[^\\s,}]+/gi, '$1=[REDACTED]')
-          .replace(/[\\r\\n\\t]+/g, ' ')
+          .replace(/Bearer\s+[A-Za-z0-9._~+\/-]+=*/gi, 'Bearer [REDACTED]')
+          .replace(/(refresh_token|client_secret|access_token)[=:]\s*[^\s,}]+/gi, '$1=[REDACTED]')
+          .replace(/[\r\n\t]+/g, ' ')
           .slice(0, 300),
       }))
       .slice(0, 12);
