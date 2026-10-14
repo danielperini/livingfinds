@@ -48,7 +48,7 @@ const learningHold = proposeEconomicAdjustment({
 assert.equal(learningHold.action, 'observe');
 
 const safeEntry = proposeEconomicAdjustment({
-  classification: 'NEW_NO_IMPRESSIONS', ageHours: 8, isAuto: false, highlyRelevant: true,
+  classification: 'NEW_NO_IMPRESSIONS', ageHours: 48, isAuto: false, highlyRelevant: true,
   economicsAvailable: true, currentBid: 0.30, currentBudget: 5, safeMaxCpc: 0.60,
   impressions: 0, clicks: 0, orders: 0, sales: 0, spend: 0,
   spendShare: 0, maxSpendWithoutSale: 15,
