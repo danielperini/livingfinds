@@ -76,7 +76,7 @@ Deno.serve(async (req) => {
     const isAutomatic = (campaign: any) => {
       const type = String(campaign.targeting_type || '').toUpperCase();
       const name = String(campaign.name || campaign.campaign_name || '').toUpperCase();
-      return type.includes('AUTO') || /^AUTO\\s*\\|/.test(name) || /\\|\\s*AUTO\\s*\\|/.test(name);
+      return type.includes('AUTO') || /^AUTO\s*\|/.test(name) || /\|\s*AUTO\s*\|/.test(name);
     };
     const isUsable = (campaign: any) =>
       !campaign.archived && !['archived', 'deleted'].includes(String(campaign.state || campaign.status || '').toLowerCase());
