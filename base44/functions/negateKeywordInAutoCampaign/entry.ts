@@ -14,11 +14,15 @@ const tokenCache: Record<string, { access_token: string; expires_at: number }> =
 async function getAdsToken(refreshToken: string | null | undefined): Promise<string> {
   const cached = tokenCache['neg'];
   if (cached && cached.expires_at > Date.now()) return cached.access_token;
-  const clientId = Deno.env.get('ADS_CLIENT_ID') || '';\n  const clientSecret = Deno.env.get('ADS_CLIENT_SECRET') || '';\n  const token = refreshToken || Deno.env.get('ADS_REFRESH_TOKEN') || '';\n  if (!clientId || !clientSecret || !token) throw new Error('Credenciais Amazon Ads incompletas');\n  const params = new URLSearchParams({
+  const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
+  const clientSecret = Deno.env.get('ADS_CLIENT_SECRET') || '';
+  const token = refreshToken || Deno.env.get('ADS_REFRESH_TOKEN') || '';
+  if (!clientId || !clientSecret || !token) throw new Error('Credenciais Amazon Ads incompletas');
+  const params = new URLSearchParams({
     grant_type: 'refresh_token',
-    refresh_token: refreshToken || Deno.env.get('ADS_REFRESH_TOKEN'),
-    client_id: Deno.env.get('ADS_CLIENT_ID'),
-    client_secret: Deno.env.get('ADS_CLIENT_SECRET'),
+    refresh_token: token,
+    client_id: clientId,
+    client_secret: clientSecret,
   });
   const res = await fetch('https://api.amazon.com/auth/o2/token', {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString(),
