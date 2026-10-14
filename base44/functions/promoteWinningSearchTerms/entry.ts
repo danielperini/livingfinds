@@ -27,6 +27,7 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { aggregateSearchTermSnapshotsByCampaign } from '../../shared/searchTermHarvestPolicy.ts';
+import { areDistinctProductTargets, calculateCrossSkuSeedBid, crossSkuAttributeConflict, evaluateCrossSkuCandidate } from '../../shared/crossSkuTermTransferPolicy.ts';
 
 // ── Configurações (sobrescritas por AutopilotConfig / PerformanceSettings) ──
 const CFG = {
@@ -44,6 +45,7 @@ const CFG = {
   HEURISTIC_HIGH_CONF: 95,            // acima → transfere sem LLM
   HEURISTIC_LOW_CONF: 70,             // abaixo → bloqueia sem LLM
   MAX_EXPANSIONS_PER_RUN: 10,         // rate limiting
+  STOCK_MAX_AGE_HOURS: 48,
   MAX_ORIGINALS_PER_RUN: 5,
   MIN_TERM_WORDS: 3,
 };
@@ -132,10 +134,10 @@ function hasHardBlocker(kwText: string, srcFull: string, dstFull: string): { blo
 }
 
 // ── LLM para zona cinzenta (70-95) ────────────────────────────────────────────
-async function llmRelevance(kwText: string, srcTitle: string, srcBullets: string,
-                            dstTitle: string, dstBullets: string, hScore: number): Promise<number> {
+async function llmRelevance(kwText: string, srcTitle: string, srcBullets: string, srcCat: string,
+                            dstTitle: string, dstBullets: string, dstCat: string, hScore: number): Promise<{ score: number; validated: boolean; reason: string; hardBlocker: boolean }> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
-  if (!apiKey) return hScore;
+  if (!apiKey) return { score: hScore, validated: false, reason: 'llm_not_configured', hardBlocker: false };
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -144,22 +146,26 @@ async function llmRelevance(kwText: string, srcTitle: string, srcBullets: string
         model: Deno.env.get('AI_WEEKLY_REVIEW_MODEL') || 'claude-3-5-haiku-20241022',
         max_tokens: 256,
         messages: [{ role: 'user', content:
-          `Relevância da keyword "${kwText}" para o produto DESTINO (Amazon Ads EXACT).\n` +
-          `ORIGEM: ${srcTitle}\nBullets: ${srcBullets.slice(0,300)}\n` +
-          `DESTINO: ${dstTitle}\nBullets: ${dstBullets.slice(0,300)}\n` +
-          `Responda apenas: {"score": 0-100, "hard_blocker": true/false, "reason": "1 frase"}`
+          'Relevância da busca observada "' + kwText + '" para anunciar o SKU destino em Amazon Ads EXACT.\n' +
+          'ORIGEM: ' + srcTitle + '\nCategoria: ' + srcCat + '\nAtributos: ' + srcBullets.slice(0,300) + '\n' +
+          'DESTINO: ' + dstTitle + '\nCategoria: ' + dstCat + '\nAtributos: ' + dstBullets.slice(0,300) + '\n' +
+          'Não transfira vendas nem margem entre produtos. Marque incompatibilidade de cor, tamanho, voltagem ou tipo quando explícita.\n' +
+          'Responda apenas: {"score": 0-100, "hard_blocker": true/false, "reason": "1 frase"}'
         }],
       }),
     });
-    if (!res.ok) return hScore;
+    if (!res.ok) return { score: hScore, validated: false, reason: 'llm_http_' + res.status, hardBlocker: false };
     const data = await res.json();
     const text = data?.content?.[0]?.text || '{}';
     const m = text.match(/\{[\s\S]*\}/);
-    if (!m) return hScore;
+    if (!m) return { score: hScore, validated: false, reason: 'llm_invalid_response', hardBlocker: false };
     const parsed = JSON.parse(m[0]);
-    if (parsed.hard_blocker) return 0;
-    return Number(parsed.score || hScore);
-  } catch { return hScore; }
+    const score = Number(parsed.score);
+    if (!Number.isFinite(score) || score < 0 || score > 100) return { score: hScore, validated: false, reason: 'llm_invalid_score', hardBlocker: false };
+    return { score, validated: true, reason: String(parsed.reason || '').slice(0,240), hardBlocker: parsed.hard_blocker === true };
+  } catch {
+    return { score: hScore, validated: false, reason: 'llm_request_failed', hardBlocker: false };
+  }
 }
 
 // ── amazonAdsCommand wrapper ──────────────────────────────────────────────────
@@ -231,7 +237,7 @@ Deno.serve(async (req) => {
     const safetyMs = CFG.ATTRIBUTION_SAFETY_HOURS * 3600000;
     const SAFE_CUTOFF   = new Date(Date.now() - safetyMs).toISOString().slice(0, 10);
 
-    // ── Carregar dados base em paralelo ──────────────────────────────────
+    // ── Carregar dados base em paralelo ─────────────────────────��────────
     const [searchTerms, products, existingKeywords, existingPromos, snapshots, economics, campaigns] = await Promise.all([
       base44.asServiceRole.entities.SearchTerm.filter(
         { amazon_account_id: aid }, '-orders_14d', 5000
@@ -685,60 +691,141 @@ Deno.serve(async (req) => {
     // ── FASE 4: Expansão Cross-ASIN ──────────────────────────────────────
     // Para cada winner: calcular relevância para outros ASINs ativos com estoque
     const activeProducts = products.filter((p: any) =>
-      p.status === 'active' && Number(p.fba_inventory || 0) > 0
+      p.status === 'active' && Number.isFinite(Number(p.fba_inventory)) && Number(p.fba_inventory) > 0
     );
 
     for (const winner of actionableWinners) {
       if (expansionsCount >= CFG.MAX_EXPANSIONS_PER_RUN) break;
 
       const srcSnap = snapshotMap.get(winner.asin);
-      if (!srcSnap) continue;
+      const srcProd = productForIdentity(winner.asin, winner.sku);
+      if (!srcProd) continue;
 
-      const srcTitle   = srcSnap.title || '';
-      const srcBullets = (() => { try { return JSON.parse(srcSnap.bullets || '[]').join(' '); } catch { return srcSnap.bullets || ''; } })();
-      const srcCat     = srcSnap.product_type || '';
-      const srcFull    = srcTitle + ' ' + srcBullets;
+      const srcTitle = srcProd.product_name || srcProd.display_name || srcSnap?.title || '';
+      const srcBullets = (() => { try { return JSON.parse(srcSnap?.bullets || srcProd.key_product_features || '[]').join(' '); } catch { return srcSnap?.bullets || srcProd.key_product_features || ''; } })();
+      const srcCat = srcProd.category || srcSnap?.product_type || '';
+      const srcFull = srcTitle + ' ' + srcBullets;
+      const srcEcon = econForIdentity(winner.asin, winner.sku);
+      const sourceIdentity = {
+        asin: winner.asin, sku: winner.sku,
+        uniqueSku: productsBySku.has(String(winner.sku || '').toUpperCase()),
+        uniqueAsin: uniqueProductByAsin.has(String(winner.asin || '').toUpperCase()),
+      };
 
       for (const destProd of activeProducts) {
-        if (destProd.asin === winner.asin) continue;
         if (expansionsCount >= CFG.MAX_EXPANSIONS_PER_RUN) break;
+        const destinationIdentity = {
+          asin: String(destProd.asin || '').toUpperCase(), sku: String(destProd.sku || '').toUpperCase(),
+          uniqueSku: productsBySku.has(String(destProd.sku || '').toUpperCase()),
+          uniqueAsin: uniqueProductByAsin.has(String(destProd.asin || '').toUpperCase()),
+        };
+        if (!areDistinctProductTargets({ source: sourceIdentity, destination: destinationIdentity })) continue;
 
         const destKey = termKey(destProd.asin, destProd.sku, winner.normalized_term);
         if (exactKeyIndex.has(destKey) || promoIndex.has(destKey)) continue;
 
         const destSnap = snapshotMap.get(destProd.asin);
-        if (!destSnap) continue;
+        const destTitle = destProd.product_name || destProd.display_name || destSnap?.title || '';
+        if (!destTitle) continue;
+        const destBullets = (() => { try { return JSON.parse(destSnap?.bullets || destProd.key_product_features || '[]').join(' '); } catch { return destSnap?.bullets || destProd.key_product_features || ''; } })();
+        const destCat = destProd.category || destSnap?.product_type || '';
+        const destFull = destTitle + ' ' + destBullets;
 
-        const destTitle   = destSnap.title || '';
-        const destBullets = (() => { try { return JSON.parse(destSnap.bullets || '[]').join(' '); } catch { return destSnap.bullets || ''; } })();
-        const destCat     = destSnap.product_type || '';
-        const destFull    = destTitle + ' ' + destBullets;
-
-        // Hard Blocker heurístico
+        const attributeConflict = crossSkuAttributeConflict(winner.search_term, srcFull, destFull);
+        if (attributeConflict) {
+          rejected.push({ asin: destProd.asin, sku: destProd.sku || '', term: winner.search_term, reject_reason: attributeConflict });
+          continue;
+        }
         const blocker = hasHardBlocker(winner.search_term, srcFull, destFull);
-        if (blocker.blocked) continue;
-
-        // Score heurístico
-        let score = calcHeuristic(winner.search_term, srcTitle, srcBullets, srcCat, destTitle, destBullets, destCat);
-        if (score < CFG.HEURISTIC_LOW_CONF) continue;
-
-        // Zona cinzenta: validar com LLM
-        if (score < CFG.HEURISTIC_HIGH_CONF) {
-          score = await llmRelevance(winner.search_term, srcTitle, srcBullets, destTitle, destBullets, score);
-          score = Math.round((calcHeuristic(winner.search_term, srcTitle, srcBullets, srcCat, destTitle, destBullets, destCat) * 0.4 + score * 0.6));
+        if (blocker.blocked) {
+          rejected.push({ asin: destProd.asin, sku: destProd.sku || '', term: winner.search_term, reject_reason: blocker.reason });
+          continue;
         }
 
-        if (score < CFG.MIN_CROSS_ASIN_RELEVANCE) continue;
+        const heuristicScore = calcHeuristic(winner.search_term, srcTitle, srcBullets, srcCat, destTitle, destBullets, destCat);
+        if (heuristicScore < CFG.HEURISTIC_LOW_CONF) continue;
 
-        // Calcular bid para destino
+        let aiScore: number | null = null;
+        let aiValidated = false;
+        let aiReason = '';
+        if (heuristicScore < CFG.HEURISTIC_HIGH_CONF) {
+          const ai = await llmRelevance(winner.search_term, srcTitle, srcBullets, srcCat, destTitle, destBullets, destCat, heuristicScore);
+          aiScore = ai.score;
+          aiValidated = ai.validated;
+          aiReason = ai.reason;
+          if (ai.hardBlocker) {
+            rejected.push({ asin: destProd.asin, sku: destProd.sku || '', term: winner.search_term, reject_reason: 'ai_detected_product_attribute_conflict', ai_reason: aiReason });
+            continue;
+          }
+        }
+
         const destEcon = econForIdentity(destProd.asin, destProd.sku);
-        const destAov  = Number(destEcon?.current_price || destProd.price || 0);
+        const destSku = String(destProd.sku || '').trim().toUpperCase();
+        const stockSyncAt = Date.parse(String(destProd.inventory_last_synced_at || destProd.last_inventory_sync_at || destProd.last_sync_at || destProd.synced_at || ''));
+        const listingCheckedAt = Date.parse(String(destProd.listing_checked_at || ''));
+        const nowMs = Date.now();
+        const stockFresh = Number.isFinite(stockSyncAt) && stockSyncAt <= nowMs && nowMs - stockSyncAt <= CFG.STOCK_MAX_AGE_HOURS * 3600000;
+        const listingFresh = Number.isFinite(listingCheckedAt) && listingCheckedAt <= nowMs && nowMs - listingCheckedAt <= CFG.STOCK_MAX_AGE_HOURS * 3600000;
+        const destinationEconomicsComplete = Boolean(destEcon && destSku &&
+          String(destEcon.sku || '').trim().toUpperCase() === destSku &&
+          destEcon.economic_data_complete === true &&
+          destEcon.economics_status === 'complete' &&
+          destEcon.costs_confirmed_by_user === true);
+        const transferCheck = evaluateCrossSkuCandidate({
+          source: {
+            asin: winner.asin, sku: winner.sku,
+            uniqueSku: sourceIdentity.uniqueSku, uniqueAsin: sourceIdentity.uniqueAsin,
+            term: winner.search_term, attributedOrders: winner.orders,
+            attributedSales: winner.sales, spend: winner.spend,
+            attributionVerified: true, breakEvenAcos: Number(srcEcon?.break_even_acos || 0),
+          },
+          destination: {
+            asin: destinationIdentity.asin, sku: destinationIdentity.sku,
+            uniqueSku: destinationIdentity.uniqueSku, uniqueAsin: destinationIdentity.uniqueAsin,
+            availableFba: destProd.fba_inventory == null ? null : Number(destProd.fba_inventory),
+            stockFresh,
+            adsAuthorized: destProd.ads_scope_status === 'authorized' && destProd.ads_authorized_by_user === true,
+            listingBuyable: destProd.listing_buyable === true && destProd.listing_status === 'active' && listingFresh,
+            economicsComplete: destinationEconomicsComplete,
+            safeMaxCpc: Number(destEcon?.safe_max_cpc || 0),
+            exactAlreadyExists: exactKeyIndex.has(destKey),
+            promotionAlreadyExists: promoIndex.has(destKey),
+          },
+          relevance: {
+            heuristicScore, aiScore, aiValidated,
+            minimumScore: CFG.MIN_CROSS_ASIN_RELEVANCE,
+            minimumHeuristicScore: CFG.HEURISTIC_LOW_CONF,
+            heuristicOnlyMinimum: CFG.HEURISTIC_HIGH_CONF,
+          },
+        });
+        if (!transferCheck.eligible) {
+          rejected.push({ asin: destProd.asin, sku: destSku, term: winner.search_term, reject_reason: transferCheck.reason, relevance_score: transferCheck.effectiveRelevance });
+          continue;
+        }
+        const score = transferCheck.effectiveRelevance;
+        const sourceObservedCpc = winner.clicks > 0 ? winner.spend / winner.clicks : 0;
+        const destinationSafeMaxCpc = Number(destEcon?.safe_max_cpc || 0);
+        const destBid = calculateCrossSkuSeedBid({
+          sourceObservedCpc, destinationSafeMaxCpc, minBid: MIN_BID, maxBid: MAX_BID,
+        });
+        if (destBid == null) {
+          rejected.push({ asin: destProd.asin, sku: destSku, term: winner.search_term, reject_reason: 'destination_economic_bid_below_minimum', relevance_score: score });
+          continue;
+        }
+        const destAov = Number(destEcon?.current_price || destProd.price || 0);
         const destTargetAcos = Number(destEcon?.target_acos || TARGET_ACOS);
-        const destCvr  = winner.clicks > 0 ? winner.orders / winner.clicks : 0.05;
-        const destSusCpc = destAov > 0 ? destAov * destCvr * (destTargetAcos / 100) : 0;
-        const srcCpc = winner.clicks > 0 ? winner.spend / winner.clicks : CFG.INITIAL_BID_DEFAULT;
-        let destBid = destSusCpc > 0 ? Math.min(srcCpc * 0.85, destSusCpc * 0.85) : srcCpc * 0.80;
-        destBid = Math.round(Math.max(MIN_BID, Math.min(MAX_BID, destBid)) * 100) / 100;
+
+        if (dry_run) {
+          crossAsinExpansions.push({
+            source_asin: winner.asin, source_sku: winner.sku,
+            destination_asin: destProd.asin, destination_sku: destSku,
+            term: winner.search_term, relevance_score: score,
+            ai_validated: aiValidated, ai_score: aiScore,
+            bid: destBid, campaign_name: campaignName(destProd.asin, winner.search_term, destSku), dry_run: true,
+          });
+          expansionsCount++;
+          continue;
+        }
 
         const destCampName = campaignName(destProd.asin, winner.search_term, destProd.sku);
         const testEndsAt = new Date(Date.now() + CFG.TEST_WINDOW_HOURS * 3600000).toISOString();
@@ -799,6 +886,9 @@ Deno.serve(async (req) => {
           await base44.asServiceRole.entities.SearchTermPromotion.create({
             amazon_account_id: aid,
             asin: destProd.asin,
+            sku: destProd.sku || '',
+            source_sku: winner.sku,
+            destination_sku: destProd.sku || '',
             source_campaign_id: winner.campaign_id,
             source_search_term: winner.search_term,
             normalized_search_term: winner.normalized_term,
@@ -815,6 +905,8 @@ Deno.serve(async (req) => {
             destination_ad_group_id: destAdGroupId || null,
             destination_keyword_id: destKeywordId || null,
             relevance_score: score,
+            ai_validated: aiValidated,
+            ai_relevance_check: JSON.stringify({ heuristic_score: heuristicScore, ai_score: aiScore, ai_reason: aiReason }).slice(0, 1000),
             source_asin: winner.asin,
             source_orders: winner.orders,
             source_acos: winner.acos,
@@ -822,7 +914,7 @@ Deno.serve(async (req) => {
             test_started_at: now,
             test_ends_at: testEndsAt,
             next_review_at: testEndsAt,
-            idempotency_key: `${aid}|${destProd.asin}|${winner.normalized_term}|EXACT_CROSS|${today}`,
+            idempotency_key: `${aid}|SKU:${destProd.sku || destProd.asin}|${winner.normalized_term}|EXACT_CROSS|${today}`,
             created_at: now,
             updated_at: now,
           }).catch(() => {});
@@ -835,6 +927,7 @@ Deno.serve(async (req) => {
             normalized_keyword: winner.normalized_term,
             match_type: 'exact',
             source_asin: winner.asin,
+            source_sku: winner.sku,
             source_orders: winner.orders,
             source_acos: winner.acos,
             source_roas: winner.roas,
@@ -844,12 +937,20 @@ Deno.serve(async (req) => {
             destination_product_name: destProd.product_name || destProd.display_name || '',
             destination_sku: destProd.sku || '',
             destination_fba_inventory: Number(destProd.fba_inventory || 0),
+            destination_aov: destAov,
+            destination_target_acos: destTargetAcos,
+            destination_sustainable_cpc: destinationSafeMaxCpc,
+            destination_safe_max_cpc: destinationSafeMaxCpc,
             relevance_score: score,
-            relevance_phase: score >= CFG.HEURISTIC_HIGH_CONF ? 'HEURISTIC_ONLY' : 'LLM_VALIDATED',
+            heuristic_score: heuristicScore,
+            llm_score: aiScore,
+            llm_reason: aiReason,
+            relevance_phase: aiValidated ? 'LLM_VALIDATED' : 'HEURISTIC_ONLY',
             transfer_decision: 'HIGH_CONFIDENCE_TRANSFER',
             rule_id: 'CROSS_ASIN_TERM_EXPANSION',
             initial_bid: destBid,
             campaign_job: 'VALIDATION',
+            idempotency_key: `${aid}|SKU:${destProd.sku || destProd.asin}|${winner.normalized_term}|EXACT_CROSS|${today}`,
             status: 'EXECUTING',
             created_campaign_id: destCampaignId,
             created_campaign_name: destCampName,
@@ -878,19 +979,7 @@ Deno.serve(async (req) => {
             created_at: now, last_sync_at: now, synced_at: now,
           }).catch(() => {});
 
-          // Negativar na AUTO do ASIN de destino se keyword confirmada
-          if (destKeywordId) {
-            await new Promise(r => setTimeout(r, 1500));
-            await base44.asServiceRole.functions.invoke('negateKeywordInAutoCampaign', {
-              amazon_account_id: aid,
-              asin: destProd.asin,
-              sku: destProd.sku || '',
-              keyword_text: winner.search_term,
-              manual_campaign_id: destCampaignId,
-              triggered_by: 'promoteWinningSearchTerms_crossAsin',
-              _service_role: true,
-            }).catch(() => {});
-          }
+          // Manter a AUTO do destino ativa durante o teste da EXACT.
 
           // Atualizar índices para evitar duplicação intra-run
           exactKeyIndex.add(destKey);
@@ -966,3 +1055,4 @@ Deno.serve(async (req) => {
     return Response.json({ ok: false, error: err.message, duration_ms: Date.now() - t0 }, { status: 500 });
   }
 });
+

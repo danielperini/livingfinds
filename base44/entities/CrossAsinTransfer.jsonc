@@ -105,7 +105,7 @@
     "evaluation_window_hours": {
       "type": "number",
       "default": 0,
-      "description": "Janela de avalia\u00e7\u00e3o em horas. 48 para keywords com conversion_score >= 70 (VALIDATION_FAST)."
+      "description": "Janela de avaliação em horas. 48 para keywords com conversion_score >= 70 (VALIDATION_FAST)."
     },
     "transfer_decision": {
       "type": "string",
@@ -211,6 +211,15 @@
     "created_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "source_sku": {
+      "type": "string"
+    },
+    "destination_safe_max_cpc": {
+      "type": "number"
+    },
+    "idempotency_key": {
+      "type": "string"
     }
   },
   "required": [
