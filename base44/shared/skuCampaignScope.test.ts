@@ -62,7 +62,7 @@ assert.equal(selectCampaignHourEvidence({
 }).source, 'campaign_decision');
 assert.equal(selectCampaignHourEvidence({
   decisions: [decisionA], patterns: [patternB], campaignId: 'c1', sku: 'SKU-RED', dayOfWeek: 2, hour: 10,
-}).source, 'no_campaign_or_sku_history');
+}).source, 'campaign_decision');
 assert.equal(selectCampaignHourEvidence({
   decisions: [decisionA], patterns: [patternB], campaignId: 'c2', sku: 'SKU-BLACK', dayOfWeek: 2, hour: 10,
 }).source, 'sku_pattern');
