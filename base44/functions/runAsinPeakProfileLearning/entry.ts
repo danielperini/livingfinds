@@ -31,9 +31,9 @@ export default async function(req: Request) {
       const startDate = dateStrBRT(90);
       const [metrics, campaigns, productAds, products] = await Promise.all([
         base44.asServiceRole.entities.UnifiedAdsMetricsHourly.filter({ amazon_account_id: accountId }, '-date', 10000).catch(() => []),
-        base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, null, 10000).catch(() => []),
-        base44.asServiceRole.entities.ProductAd.filter({ amazon_account_id: accountId }, null, 10000).catch(() => []),
-        base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, null, 10000).catch(() => []),
+        base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, undefined, 10000).catch(() => []),
+        base44.asServiceRole.entities.ProductAd.filter({ amazon_account_id: accountId }, undefined, 10000).catch(() => []),
+        base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, undefined, 10000).catch(() => []),
       ]);
       if (!metrics.length) {
         results.push({ account_id: accountId, skipped: true, reason: 'no_hourly_metrics' });
@@ -73,7 +73,7 @@ export default async function(req: Request) {
         const sku = token(row.advertised_sku) || campaignToSku.get(id) || '';
         const hour = Number(row.hour);
         const date = String(row.date || '');
-        if (!sku || !id || !date || !Number.isInteger(hour) || hour < 0 || hour > 23 || productCountBySku.get(sku) !== 1) continue;
+        if (!sku || !id || !date || !Number.isInteger(hour) || hour < 0 || hour > 23 || skuCounts.get(sku) !== 1) continue;
         // advertised_sku is a SKU from the Ads report; campaign fallback is allowed only for a single exact linked SKU.
         if (!token(row.advertised_sku) && !campaignToSku.has(id)) continue;
         const key = [id, sku, date, hour].join('|');
@@ -157,7 +157,7 @@ export default async function(req: Request) {
       const skippedAmbiguous = filtered.filter((row: any) => {
         const id = String(row.campaign_id || '');
         const reportedSku = token(row.advertised_sku) || campaignToSku.get(id) || '';
-        return !reportedSku || productCountBySku.get(reportedSku) !== 1;
+        return !reportedSku || skuCounts.get(reportedSku) !== 1;
       }).length;
       ambiguousMetrics += skippedAmbiguous;
       await base44.asServiceRole.entities.SyncExecutionLog.create({
@@ -180,14 +180,14 @@ export default async function(req: Request) {
     }
     return Response.json({ ok: true, results });
   } catch (error) {
-    return Response.json({ ok: false, error: error?.message || String(error) }, { status: 500 });
+    return Response.json({ ok: false, error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
 }
 
 async function upsertSkuProfile(base44: any, accountId: string, sku: string, asin: string, profileFields: Record<string, unknown>) {
   const existing = await base44.asServiceRole.entities.HourlySalesPattern.filter(
     { amazon_account_id: accountId, sku, day_of_week: 0, hour: 0 },
-    null, 10
+    undefined, 10
   ).catch(() => []);
   const payload = {
     amazon_account_id: accountId,
