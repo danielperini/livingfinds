@@ -19,6 +19,9 @@ assert.equal(resolveProductScope({ campaign_id: 'campaign-red' }, productAds, pr
 assert.equal(resolveProductScope({ campaign_id: 'campaign-asin', asin: 'B0VARIANT1' }, [], products).status, 'ambiguous');
 assert.equal(resolveProductScope({ campaign_id: 'campaign-asin', asin: 'B0SINGLE1' }, [], products).sku, 'SKU-ONLY');
 assert.equal(resolveProductScope({ campaign_id: 'campaign-missing' }, [], products).status, 'missing_identity');
+assert.equal(resolveProductScope({ campaign_id: 'campaign-conflict', sku: 'SKU-RED' }, [
+  { campaign_id: 'campaign-conflict', sku: 'SKU-BLACK', asin: 'B0VARIANT1' },
+], products).status, 'ambiguous');
 assert.equal(resolveProductScope({ campaign_id: 'campaign-multi' }, [
   { campaign_id: 'campaign-multi', sku: 'SKU-RED', asin: 'B0VARIANT1' },
   { campaign_id: 'campaign-multi', sku: 'SKU-BLACK', asin: 'B0VARIANT1' },
@@ -63,5 +66,28 @@ assert.equal(selectCampaignHourEvidence({
 assert.equal(selectCampaignHourEvidence({
   decisions: [decisionA], patterns: [patternB], campaignId: 'c2', sku: 'SKU-BLACK', dayOfWeek: 2, hour: 10,
 }).source, 'sku_pattern');
+
+
+const profileAnchor = {
+  sku: 'SKU-RED',
+  asin: 'B0VARIANT1',
+  slot_label: 'SKU_PROFILE_ANCHOR',
+  asin_data_maturity: 'sufficient',
+  asin_peak_hours_json: '[10,11]',
+  asin_low_hours_json: '[20,21]',
+  asin_profile_updated_at: '2026-10-14T09:00:00Z',
+};
+assert.equal(selectCampaignHourEvidence({
+  decisions: [], patterns: [profileAnchor], campaignId: 'c-red', sku: 'SKU-RED', dayOfWeek: 3, hour: 10,
+}).source, 'sku_profile');
+assert.equal(selectCampaignHourEvidence({ decisions: [], patterns: [profileAnchor], campaignId: 'c-red', sku: 'SKU-RED', dayOfWeek: 3, hour: 10,
+}).row?.classification, 'PEAK_STRONG');
+assert.equal(selectCampaignHourEvidence({
+  decisions: [], patterns: [profileAnchor], campaignId: 'c-black', sku: 'SKU-BLACK', dayOfWeek: 3, hour: 10,
+}).source, 'no_campaign_or_sku_history');
+const exactSlot = { sku: 'SKU-RED', day_of_week: 3, hour: 10, classification: 'LOSS', updated_at: '2026-10-14T08:00:00Z' };
+assert.equal(selectCampaignHourEvidence({
+  decisions: [], patterns: [profileAnchor, exactSlot], campaignId: 'c-red', sku: 'SKU-RED', dayOfWeek: 3, hour: 10,
+}).row, exactSlot);
 
 console.log('skuCampaignScope tests passed');
