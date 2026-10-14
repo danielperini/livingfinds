@@ -69,7 +69,9 @@ export function resolveSkuScopedRow<T extends Record<string, any>>(
     const exact = rows.filter((row) => token(row.sku) === sku && fresh(row))
       .sort((a, b) => new Date(String(b.updated_at || b.created_at || 0)).getTime() -
         new Date(String(a.updated_at || a.created_at || 0)).getTime());
-    if (exact.length) return exact[0];
+    // An ASIN-level row cannot be attributed to a SKU when variants share the ASIN.
+    // Do not borrow it for a SKU-scoped economics or performance decision.
+    return exact[0] || null;
   }
   const asinRows = rows.filter((row) => token(row.asin) === asin && fresh(row));
   const distinctSkus = new Set(asinRows.map((row) => token(row.sku)).filter(Boolean));
