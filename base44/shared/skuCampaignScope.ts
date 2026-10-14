@@ -24,8 +24,17 @@ export function uniqueCampaignRows(rows: any[]) {
 export function resolveProductScope(campaign: any, productAds: any[], products: any[]): ProductScope {
   const id = campaignId(campaign);
   const linkedAds = productAds.filter((row) => String(row?.campaign_id || '') === id);
-  const explicitSku = token(campaign?.sku || linkedAds.find((row) => row?.sku)?.sku);
-  const explicitAsin = token(campaign?.asin || linkedAds.find((row) => row?.asin)?.asin);
+  const linkedSkus = new Set(linkedAds.map((row) => token(row?.sku)).filter(Boolean));
+  const explicitSku = token(campaign?.sku || (linkedSkus.size === 1 ? [...linkedSkus][0] : ''));
+  const linkedAsins = new Set(linkedAds.map((row) => token(row?.asin)).filter(Boolean));
+  const explicitAsin = token(campaign?.asin || (linkedAsins.size === 1 ? [...linkedAsins][0] : ''));
+
+  if (!campaign?.sku && linkedSkus.size > 1) {
+    return { product: null, sku: '', asin: explicitAsin, status: 'ambiguous', identitySource: 'none' };
+  }
+  if (!campaign?.asin && linkedAsins.size > 1) {
+    return { product: null, sku: explicitSku, asin: '', status: 'ambiguous', identitySource: 'none' };
+  }
 
   if (explicitSku) {
     const matches = products.filter((row) => token(row?.sku) === explicitSku &&
@@ -55,8 +64,7 @@ export function resolveSkuScopedRow<T extends Record<string, any>>(
   if (!product) return null;
   const sku = token(product.sku);
   const asin = token(product.asin);
-  const fresh = (row: T) => !options.requireFresh ||
-    row[options.freshnessField || 'data_fresh'] === true;
+  const fresh = (row: T) => !options.requireFresh || row[options.freshnessField || 'data_fresh'] === true;
   if (sku) {
     const exact = rows.filter((row) => token(row.sku) === sku && fresh(row))
       .sort((a, b) => new Date(String(b.updated_at || b.created_at || 0)).getTime() -
@@ -81,7 +89,7 @@ export function latestMetricsByCampaign(rows: any[], date?: string) {
   return latest;
 }
 
-/** Account budget is a single hard spend cap. It is never apportioned to campaigns. */
+/** The account budget is one hard spend cap. It is never apportioned to campaigns. */
 export function resolveAccountHardCap(cap: number, confirmedSpend: number, pendingSpend = 0) {
   const hardCap = Math.max(0, Number(cap) || 0);
   const committed = Math.max(0, Number(confirmedSpend) || 0) + Math.max(0, Number(pendingSpend) || 0);
@@ -94,7 +102,7 @@ export function resolveAccountHardCap(cap: number, confirmedSpend: number, pendi
   };
 }
 
-/** A daypart learned from one campaign is never reused for another campaign/SKU. */
+/** Learned hourly evidence is isolated to the exact campaign or its exact SKU. */
 export function selectCampaignHourEvidence(params: {
   decisions: any[];
   patterns: any[];
