@@ -41,6 +41,26 @@ export function isSuccessfulJobResponse(response: any): boolean {
   return !hasFailedStage(response.data?.stages);
 }
 
+export function failedJobStages(response: any): Array<{ name: string; detail: string }> {
+  const data = response?.data ?? response;
+  const candidates: Record<string, any> = data?.stages && typeof data.stages === 'object' ? { ...data.stages } : {};
+  for (const [name, stage] of Object.entries({
+    economic_evidence: data?.economic_evidence,
+    unified_engine: data?.unified_engine,
+    reconciliation: data?.pre_execution_reconciliation ?? data?.reconciliation,
+    arbitration: data?.pre_execution_arbitration ?? data?.arbitration,
+    supervision: data?.v6sia_supervision ?? data?.supervision,
+  })) {
+    if (!(name in candidates) && stage !== undefined) candidates[name] = stage;
+  }
+  return Object.entries(candidates)
+    .filter(([, stage]) => stage && typeof stage === 'object' && stage.ok === false)
+    .map(([name, stage]) => ({
+      name,
+      detail: String(stage.error || stage.message || stage.reason || stage.status || 'stage_failed'),
+    }));
+}
+
 export function shouldDispatchRun(
   run: SchedulerRun | null | undefined,
   nowMs: number,
@@ -64,7 +84,7 @@ export function shouldRecoverDailyCatchUpRun(
   run: SchedulerRun | null | undefined,
   nowMs: number,
   cooldownMs = 60 * 60_000,
-  maxRecoveries = 1,
+  maxRecoveries = 3,
 ): boolean {
   if (job.catch_up_daily !== true || run?.status !== 'exhausted') return false;
   if (Number(run.recovery_count || 0) >= maxRecoveries) return false;

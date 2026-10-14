@@ -10,6 +10,7 @@ import { makeFunctions } from './sdk/functions.ts';
 import { schedulerSql } from './db.ts';
 import {
   dailyCatchUpSlot,
+  failedJobStages,
   isDailyCycleExecutionConfirmedResponse,
   isStaleFinalAttempt,
   isSuccessfulJobResponse,
@@ -47,6 +48,8 @@ type SchedulerHealth = {
   last_error: string | null;
   running_jobs: number;
 };
+
+const DAILY_CATCH_UP_MAX_RECOVERIES = 3;
 
 const schedulerHealth: SchedulerHealth = {
   enabled: true,
@@ -321,8 +324,8 @@ export async function startScheduler(): Promise<void> {
           let previous = await getRun(jobKey, slotKey);
           if (shouldRecoverDailyCatchUpRun(job, previous, Date.now())) {
             const reopened = await schedulerSql.unsafe(
-              "update scheduler_job_runs set status='failed',attempt_count=0, recovery_count=recovery_count+1, next_attempt_at=now(), last_error='bounded_daily_recovery_scheduled', updated_at=now() where job_key=$1 and slot_key=$2 and status='exhausted' and recovery_count < 1 and finished_at <= now() - interval '1 hour' returning status,attempt_count,recovery_count,next_attempt_at,started_at,finished_at",
-              [jobKey, slotKey],
+              "update scheduler_job_runs set status='failed',attempt_count=0, recovery_count=recovery_count+1, next_attempt_at=now(), last_error='bounded_daily_recovery_scheduled', updated_at=now() where job_key=$1 and slot_key=$2 and status='exhausted' and recovery_count < $3 and finished_at <= now() - interval '1 hour' returning status,attempt_count,recovery_count,next_attempt_at,started_at,finished_at",
+              [jobKey, slotKey, DAILY_CATCH_UP_MAX_RECOVERIES],
             );
             if (reopened[0]) previous = reopened[0] as unknown as typeof previous;
           }
@@ -362,13 +365,8 @@ export async function startScheduler(): Promise<void> {
               _scheduler_attempt: attempt,
             });
             if (!isSuccessfulJobResponse(response)) {
-              const failedStages = Object.entries(response?.data?.stages ?? {})
-                .filter(([, stage]: [string, any]) => stage?.ok === false)
-                .map(([name, stage]: [string, any]) =>
-                  `${name}:${
-                    safeError(stage?.error || stage?.message || stage?.reason || 'stage_failed')
-                  }`
-                );
+              const failedStages = failedJobStages(response)
+                .map(({ name, detail }) => `${name}:${safeError(detail)}`);
               errorText = failedStages.join('; ').slice(0, 500) ||
                 `${job.function} status=${
                   response?.status ?? 'unknown'
