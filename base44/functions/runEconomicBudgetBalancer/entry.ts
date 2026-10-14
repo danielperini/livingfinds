@@ -70,8 +70,14 @@ function latestIntradayByCampaign(rows: any[]): Map<string, any> {
 
 function aggregateHistory(rows: any[], campaignId: string, days: number) {
   const cutoff = cutoffDate(days);
-  const matching = rows.filter((row) => String(row.campaign_id || '') === campaignId && String(row.date || '') >= cutoff);
-  return matching.reduce((acc, row) => ({
+  const latestByDate = new Map<string, any>();
+  const matching = rows.filter((row) => String(row.campaign_id || '') === campaignId && String(row.date || '') >= cutoff)
+    .sort((a, b) => metricTimestamp(b) - metricTimestamp(a));
+  for (const row of matching) {
+    const date = String(row.date || '');
+    if (date && !latestByDate.has(date)) latestByDate.set(date, row);
+  }
+  return [...latestByDate.values()].reduce((acc, row) => ({
     impressions: acc.impressions + finite(row.impressions),
     clicks: acc.clicks + finite(row.clicks),
     spend: acc.spend + finite(row.spend ?? row.cost),
@@ -338,7 +344,7 @@ Deno.serve(async (request) => {
           currentBudget: finite(campaign.daily_budget || campaign.budget),
           productEligibility, age, history30, history65, profitAfterAds, acos, fresh, complete: complete && productScope.status === 'resolved', lowVolume,
           promotedFromAuto: promotedFromAuto.has(campaignId),
-          metricVersion: metricsVersion(intraday || campaign, metrics),
+          metricVersion: metricsVersion(liveMetric || campaign, metrics),
         };
       });
 
@@ -385,11 +391,7 @@ Deno.serve(async (request) => {
           acos: row.acos,
           targetAcos: row.econ.targetAcos,
         }, config);
-        if (row.promotedFromAuto && upper(row.campaign.targeting_type) === 'MANUAL' &&
-          row.metrics.impressions <= 0 && row.metrics.clicks <= 0 && row.metrics.spend <= 0 &&
-          row.econ.available && row.productEligibility.eligible) {
-          row.classification = 'PROTECTED_WINNER';
-        }
+
         classificationCounts[row.classification] = (classificationCounts[row.classification] || 0) + 1;
 
         if (mode === 'zero_delivery_only' && !['NEW_NO_IMPRESSIONS', 'NEW_IMPRESSIONS_NO_CLICKS', 'LOW_VOLUME_GUARDED', 'ACCOUNT_OUT_OF_BUDGET'].includes(row.classification)) continue;
@@ -801,7 +803,6 @@ Deno.serve(async (request) => {
           age_hours: roundMoney(row.age),
           classification: row.classification,
           spend: roundMoney(row.metrics.spend),
-          campaign_budget_utilization: row.spendShare,
           daily_budget_reference: row.currentBudget,
           campaign_budget_utilization: row.spendShare,
           product_scope_status: row.productScope.status,
