@@ -338,7 +338,7 @@ export function proposeEconomicAdjustment(
       rule = 'MAX_SPEND_WITHOUT_SALE';
     }
     return bidAdjustment('reduce_bid', input, config, pct, rule,
-      `${input.clicks} cliques e R$${input.spend.toFixed(2)} sem venda; reducao progressiva, sem pausa automatica.`,
+      `${input.clicks} cliques e R$${input.spend.toFixed(2)} sem venda; reducao progressiva, sem pausar automaticamente.`,
       rule === 'CLICKS_NO_SALE_SOFT' ? 82 : 94,
       input.classification === 'LOW_VOLUME_GUARDED' ? config.lowVolumeCooldownHours : config.cooldownHours);
   }
