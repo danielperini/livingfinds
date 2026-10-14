@@ -157,7 +157,8 @@ Deno.test('exhausted daily catch-up receives bounded recoveries after cooldown',
   assertEquals(shouldRecoverDailyCatchUpRun(job, { ...exhausted, finished_at: '2026-10-13T11:01:00Z' }, now), false);
   assertEquals(shouldRecoverDailyCatchUpRun(job, { ...exhausted, recovery_count: 1 }, now), true);
   assertEquals(shouldRecoverDailyCatchUpRun(job, { ...exhausted, recovery_count: 2 }, now), true);
-  assertEquals(shouldRecoverDailyCatchUpRun(job, { ...exhausted, recovery_count: 3 }, now), false);
+  assertEquals(shouldRecoverDailyCatchUpRun(job, { ...exhausted, recovery_count: 3 }, now), true);
+  assertEquals(shouldRecoverDailyCatchUpRun(job, { ...exhausted, recovery_count: 4 }, now), false);
   assertEquals(shouldRecoverDailyCatchUpRun({ ...job, catch_up_daily: false }, exhausted, now), false);
   assertEquals(shouldDispatchRun(exhausted, now, 6), false);
 });
