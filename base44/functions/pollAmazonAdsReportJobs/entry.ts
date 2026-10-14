@@ -9,64 +9,184 @@
  * - Erros inesperados capturados por job, não afetam o loop geral
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
-
-const REQUIRED_DAILY_REPORTS = ['spCampaigns', 'spSearchTerm', 'spAdvertisedProduct'];
-
-function todayBRT() {
-  return new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
-}
+import {
+  assessDailyReportOptimization,
+  isDailyReportOptimizationSuccessful,
+  isCanonicalDailyReportJob,
+} from '../../shared/dailyAdsReportOptimizationPolicy.ts';
 
 async function analyzeFreshDailyReports(db: any, accountIds: string[]) {
   const analyses: any[] = [];
   for (const accountId of [...new Set(accountIds.filter(Boolean))]) {
-    const jobs = await db.entities.AmazonAdsReportJob.filter(
-      { amazon_account_id: accountId, status: 'processed' }, '-processed_at', 100,
+    const jobs: any[] = await db.entities.AmazonAdsReportJob.filter(
+      { amazon_account_id: accountId, status: 'processed' }, '-processed_at', 500,
     ).catch(() => []);
-    const reportDate = jobs.map((job: any) => String(job.end_date || '')).filter(Boolean).sort().pop();
+    const dailyJobs = jobs.filter(isCanonicalDailyReportJob);
+    const reportDate = dailyJobs.map((job: any) => String(job.end_date || '')).filter(Boolean).sort().pop();
     if (!reportDate) continue;
-    const complete = REQUIRED_DAILY_REPORTS.every((type) =>
-      jobs.some((job: any) => job.report_type_id === type && job.end_date === reportDate)
-    );
-    if (!complete) {
-      analyses.push({ amazon_account_id: accountId, report_date: reportDate, analyzed: false, reason: 'required_reports_incomplete' });
-      continue;
-    }
-    const operation = `daily_ai_report_analysis:${reportDate}`;
-    const existing = await db.entities.SyncExecutionLog.filter(
+    const processedReportTypes = [...new Set(dailyJobs
+      .filter((job: any) => job.end_date === reportDate)
+      .map((job: any) => String(job.report_type_id)))];
+    const operation = `daily_ads_report_optimization_v1:${reportDate}`;
+    const existing: any[] = await db.entities.SyncExecutionLog.filter(
       { amazon_account_id: accountId, operation }, '-started_at', 5,
     ).catch(() => []);
-    if (existing.some((log: any) => ['processing', 'success', 'completed'].includes(String(log.status)))) {
-      analyses.push({ amazon_account_id: accountId, report_date: reportDate, analyzed: false, reason: 'already_analyzed' });
+    const latestRun = existing[0] || null;
+    const assessment = assessDailyReportOptimization({
+      now: new Date(), reportDate, processedReportTypes, existingRun: latestRun,
+    });
+    if (!assessment.eligible) {
+      analyses.push({
+        amazon_account_id: accountId,
+        report_date: reportDate,
+        analyzed: false,
+        reason: assessment.reason,
+      });
+      continue;
+    }
+    const lockOwnerId = crypto.randomUUID();
+    const lockResult = await db.functions.invoke('acquireAmazonSchedulerLock', {
+      amazon_account_id: accountId,
+      lock_key: `daily_ads_report_optimization:${reportDate}`,
+      owner_id: lockOwnerId,
+      ttl_ms: 60 * 60_000,
+      _service_role: true,
+    }).then((value: any) => value?.data || value || {})
+      .catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
+    if (lockResult?.acquired !== true) {
+      analyses.push({
+        amazon_account_id: accountId,
+        report_date: reportDate,
+        analyzed: false,
+        reason: lockResult?.ok === false ? 'optimization_lock_unavailable' : 'optimization_already_running',
+      });
       continue;
     }
     const startedAt = new Date().toISOString();
-    const log = await db.entities.SyncExecutionLog.create({
-      amazon_account_id: accountId, operation, trigger_type: 'report_completion',
-      status: 'processing', execution_date: todayBRT(), started_at: startedAt,
-      result_summary: JSON.stringify({ report_date: reportDate, required_reports: REQUIRED_DAILY_REPORTS }),
-    });
+    const initialSummary = {
+      engine: 'sales-mode-v1.3-safety',
+      report_date: reportDate,
+      report_types: processedReportTypes,
+      source: 'Amazon Ads Reporting API v3, daily closed-day reports',
+      execution_state: 'processing',
+    };
+    let log: any = null;
     try {
-      const response = await db.functions.invoke('runDailyAdsOptimization', {
-        amazon_account_id: accountId, trigger: 'fresh_daily_reports',
-        analysis_only: true, execute_actions: false, report_date: reportDate, _service_role: true,
+      log = latestRun?.id
+        ? await db.entities.SyncExecutionLog.update(latestRun.id, {
+          status: 'processing', started_at: startedAt, completed_at: null,
+          error_message: null, result_summary: JSON.stringify(initialSummary),
+        })
+        : await db.entities.SyncExecutionLog.create({
+          amazon_account_id: accountId, operation, trigger_type: 'daily_report_completion',
+          status: 'processing', started_at: startedAt,
+          result_summary: JSON.stringify(initialSummary),
+        });
+      // Recarrega o estado canônico pela Campaign Management API antes da
+      // análise. O relatório tem métricas, mas não substitui o inventário
+      // remoto de campanhas; se a Amazon devolver zero/erro, não age em uma
+      // fotografia local vazia ou antiga.
+      const stateSyncResponse = await db.functions.invoke('syncAdsCampaignStatesV2', {
+        amazon_account_id: accountId,
+        trigger_type: 'daily_report_pre_optimization_campaign_refresh',
+        _service_role: true,
+      });
+      const campaignSync = stateSyncResponse?.data || stateSyncResponse || {};
+      if (stateSyncResponse?.ok === false || campaignSync?.ok !== true || Number(campaignSync?.remote_total || 0) < 1) {
+        throw new Error(
+          campaignSync?.error || 'campaign_state_refresh_incomplete_or_empty',
+        );
+      }
+
+      // Executa uma única jornada supervisionada com os relatórios fechados:
+      // IA recomenda, guardrails determinísticos validam, fila canônica aplica
+      // e o reconciliador confirma na Amazon. O próprio Sales Mode tem limites
+      // de ações, idempotência por decisão e preflight de estoque.
+      const response = await db.functions.invoke('runSalesMode', {
+        amazon_account_id: accountId,
+        trigger_type: 'fresh_daily_ads_reports_sales_optimization',
+        report_date: reportDate,
+        campaign_state_sync: campaignSync,
+        lookback_days: 30,
+        waste_lookback_days: 7,
+        waste_min_age_days: 7,
+        max_actions: 180,
+        max_new_exact_today: 20,
+        dry_run: false,
+        _service_role: true,
       });
       const data = response?.data || response || {};
-      const ok = data?.ok !== false && data?.skipped !== true;
+      const execution = data?.stages?.execution || {};
+      const confirmation = Number(execution?.executed || 0) > 0
+        ? await db.functions.invoke('confirmExecutedDecisions', {
+          amazon_account_id: accountId,
+          _service_role: true,
+          trigger_type: 'daily_report_optimization_confirmation',
+        }).then((value: any) => value?.data || value || {})
+          .catch((error: any) => ({ ok: false, error: error?.message || String(error) }))
+        : { ok: true, skipped: true, reason: 'no_new_mutations_to_confirm' };
+      const failedActions = Number(execution?.failed || 0);
+      const ok = isDailyReportOptimizationSuccessful({
+        responseOk: response?.ok,
+        dataOk: data?.ok,
+        skipped: data?.skipped,
+        failedActions,
+        confirmationOk: confirmation?.ok,
+        confirmationDivergences: confirmation?.divergences,
+        confirmationRetries: confirmation?.retried,
+      });
       const completedAt = new Date().toISOString();
       await db.entities.SyncExecutionLog.update(log.id, {
         status: ok ? 'success' : 'warning', completed_at: completedAt,
-        duration_ms: Date.now() - new Date(startedAt).getTime(),
-        result_summary: JSON.stringify({ report_date: reportDate, analysis: data }).slice(0, 4000),
-        error_message: ok ? null : String(data?.reason || data?.error || 'analysis_skipped').slice(0, 500),
+        duration_ms: Date.now() - Date.parse(startedAt),
+        records_processed: Number(data?.metrics?.amazon_confirmations || 0),
+        result_summary: JSON.stringify({
+          engine: data?.engine || 'sales-mode-v1.3-safety',
+          report_date: reportDate,
+          report_types: processedReportTypes,
+          campaign_sync: {
+            remote_total: Number(campaignSync?.remote_total || 0),
+            enabled: Number(campaignSync?.enabled || 0),
+            paused: Number(campaignSync?.paused || 0),
+          },
+          snapshot_run_id: data?.snapshot_run_id || null,
+          metrics: data?.metrics || {},
+          stage_status: Object.fromEntries(Object.entries(data?.stages || {}).map(([name, stage]: [string, any]) => [
+            name, stage?.ok === false ? 'failed' : stage?.skipped ? 'skipped' : 'completed',
+          ])),
+          execution,
+          confirmation,
+          partial_failures: failedActions,
+        }).slice(0, 7000),
+        error_message: ok ? null : String(
+          data?.error || execution?.error || confirmation?.error ||
+            (Number(confirmation?.divergences || 0) ? `${confirmation.divergences} Amazon confirmation divergence(s)` : '') ||
+            (Number(confirmation?.retried || 0) ? `${confirmation.retried} decision(s) retried after divergence` : '') ||
+            (failedActions ? `${failedActions} Amazon action(s) failed` : 'daily_report_optimization_incomplete'),
+        ).slice(0, 700),
       }).catch(() => {});
       if (ok) await db.entities.AmazonAccount.update(accountId, { last_analysis_at: completedAt }).catch(() => {});
-      analyses.push({ amazon_account_id: accountId, report_date: reportDate, analyzed: ok });
+      analyses.push({
+        amazon_account_id: accountId, report_date: reportDate,
+        analyzed: true, executed: ok, failed_actions: failedActions,
+        action_count: Number(execution?.executed || 0),
+        confirmation, reason: ok ? undefined : 'optimization_completed_with_failures',
+      });
     } catch (error: any) {
-      await db.entities.SyncExecutionLog.update(log.id, {
+      if (log?.id) await db.entities.SyncExecutionLog.update(log.id, {
         status: 'error', completed_at: new Date().toISOString(),
         error_message: String(error?.message || error).slice(0, 500),
+        result_summary: JSON.stringify({ ...initialSummary, execution_state: 'failed', error: String(error?.message || error).slice(0, 500) }),
       }).catch(() => {});
       analyses.push({ amazon_account_id: accountId, report_date: reportDate, analyzed: false, error: error?.message });
+    } finally {
+      await db.functions.invoke('acquireAmazonSchedulerLock', {
+        amazon_account_id: accountId,
+        lock_key: `daily_ads_report_optimization:${reportDate}`,
+        owner_id: lockOwnerId,
+        action: 'release',
+        _service_role: true,
+      }).catch(() => {});
     }
   }
   return analyses;
@@ -364,7 +484,7 @@ Deno.serve(async (req) => {
     // Sempre retornar ok:true para o agendador não acumular falhas
     const dailyAnalysis = await analyzeFreshDailyReports(
       db,
-      eligibleJobs.map((job: any) => String(job.amazon_account_id || '')),
+      eligibleAccounts.map((account: any) => String(account.id || '')),
     );
 
     return Response.json({

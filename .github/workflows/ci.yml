@@ -82,7 +82,8 @@ jobs:
             base44/shared/skuCampaignScope.test.ts \
             base44/shared/campaignMetricsIntegrity.test.ts \
             base44/shared/optimizationDecisionIdempotency.test.ts \
-            base44/shared/economicBudgetBalancer.test.ts
+            base44/shared/economicBudgetBalancer.test.ts \
+            base44/shared/dailyAdsReportOptimizationPolicy.test.ts
       - name: Check SKU campaign distribution enforcement
         run: |
           deno check --node-modules-dir=auto \
@@ -102,6 +103,8 @@ jobs:
         run: deno check --node-modules-dir=auto base44/functions/arbitrateCanonicalDecisionConflicts/entry.ts
       - name: Check canonical decision cycle
         run: deno check --node-modules-dir=auto base44/functions/runCanonicalDecisionCycle/entry.ts
+      - name: Check daily Amazon Ads report-driven optimization
+        run: deno check --node-modules-dir=auto base44/shared/dailyAdsReportOptimizationPolicy.ts base44/functions/pollAmazonAdsReportJobs/entry.ts
       - name: Check daily motor watchdog and SKU E2E recovery
         run: deno check --node-modules-dir=auto base44/functions/runDailyMotorWatchdog/entry.ts server/src/scheduler.ts
       - name: Check automatic campaign repair queue guards
