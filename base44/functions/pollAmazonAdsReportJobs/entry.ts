@@ -11,8 +11,10 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import {
   assessDailyReportOptimization,
+  canonicalDailyReportTypesForDate,
   isDailyReportOptimizationSuccessful,
   isCanonicalDailyReportJob,
+  previousBrazilCalendarDate,
 } from '../../shared/dailyAdsReportOptimizationPolicy.ts';
 
 async function analyzeFreshDailyReports(db: any, accountIds: string[]) {
@@ -22,11 +24,9 @@ async function analyzeFreshDailyReports(db: any, accountIds: string[]) {
       { amazon_account_id: accountId, status: 'processed' }, '-processed_at', 500,
     ).catch(() => []);
     const dailyJobs = jobs.filter(isCanonicalDailyReportJob);
-    const reportDate = dailyJobs.map((job: any) => String(job.end_date || '')).filter(Boolean).sort().pop();
-    if (!reportDate) continue;
-    const processedReportTypes = [...new Set(dailyJobs
-      .filter((job: any) => job.end_date === reportDate)
-      .map((job: any) => String(job.report_type_id)))];
+    // Current-day partial reports must not mask the previous closed BRT day.
+    const reportDate = previousBrazilCalendarDate(new Date());
+    const processedReportTypes = canonicalDailyReportTypesForDate(dailyJobs, reportDate);
     const operation = `daily_ads_report_optimization_v1:${reportDate}`;
     const existing: any[] = await db.entities.SyncExecutionLog.filter(
       { amazon_account_id: accountId, operation }, '-started_at', 5,

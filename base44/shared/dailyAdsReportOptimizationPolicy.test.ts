@@ -1,5 +1,6 @@
 import {
   assessDailyReportOptimization,
+  canonicalDailyReportTypesForDate,
   isCanonicalDailyReportJob,
   isDailyReportOptimizationSuccessful,
   previousBrazilCalendarDate,
@@ -55,6 +56,21 @@ Deno.test('daily report optimization blocks partial or stale-day reports', () =>
   });
   if (stale.eligible || stale.reason !== 'latest_closed_day_report_not_ready') {
     throw new Error(`stale report was accepted: ${JSON.stringify(stale)}`);
+  }
+});
+
+Deno.test('partial current-day reports do not mask yesterday canonical reports', () => {
+  const jobs = [
+    ...completeReports.map((report_type_id) => ({
+      report_type_id,
+      end_date: '2026-10-13',
+      group_by: report_type_id === 'spCampaigns' ? ['campaign'] : report_type_id === 'spSearchTerm' ? ['searchTerm'] : ['advertiser'],
+    })),
+    { report_type_id: 'spCampaigns', end_date: '2026-10-14', group_by: ['campaign'] },
+  ];
+  const result = canonicalDailyReportTypesForDate(jobs, '2026-10-13');
+  if (result.length !== 3 || !completeReports.every((type) => result.includes(type))) {
+    throw new Error(`yesterday complete set was masked: ${JSON.stringify(result)}`);
   }
 });
 
