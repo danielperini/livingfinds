@@ -4,6 +4,8 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { proportionalActivationBid } from '../../shared/activationBidPolicy.ts';
+import { hasFreshAdsInventory, availableAdsStock } from '../../shared/stockAdsPolicy.ts';
+import { campaignCoverageEligible } from '../../shared/campaignCoverageEligibility.ts';
 
 const tokenCache = {};
 
@@ -112,7 +114,7 @@ function extractAdGroupId(result) {
   return null;
 }
 
-async function reconcileCampaign(token, profileId, campaignName, asin) {
+async function reconcileCampaign(token, profileId, campaignName) {
   try {
     let nextToken = undefined;
     for (let page = 0; page < 20; page++) {
@@ -134,12 +136,10 @@ async function reconcileCampaign(token, profileId, campaignName, asin) {
       if (!res.ok) return null;
       const data = await res.json();
       const campaigns = data?.campaigns || [];
-      const found = campaigns.find(c =>
-        String(c.state || '').toUpperCase() !== 'ARCHIVED' && (
-          c.name === campaignName ||
-          (c.name?.includes('AUTO') && c.name?.includes(asin))
-        )
-      );
+      // A name match must include the seller SKU; ASIN alone can identify
+      // multiple distinct seller offers and would reactivate the wrong one.
+      const found = campaigns.find(c => String(c.state || '').toUpperCase() !== 'ARCHIVED'
+        && String(c.name || '') === campaignName);
       if (found?.campaignId) return String(found.campaignId);
       nextToken = data?.nextToken;
       if (!nextToken) break;
@@ -163,6 +163,15 @@ Deno.serve(async (req) => {
 
     const account = await base44.asServiceRole.entities.AmazonAccount.get(amazon_account_id).catch(() => null);
     if (!account) return Response.json({ ok: false, error: 'AmazonAccount não encontrada' });
+
+    const productRows = await base44.asServiceRole.entities.Product.filter({
+      amazon_account_id, asin: String(asin).toUpperCase(), ...(sku ? { sku } : {}),
+    }, '-updated_date', 100).catch(() => []);
+    const productMatches = productRows.filter((product: any) => product.status !== 'archived' && product.catalog_sync_status !== 'duplicate');
+    const product = productMatches.length === 1 ? productMatches[0] : null;
+    if (!product || !hasFreshAdsInventory(product) || availableAdsStock(product) <= 0 || !campaignCoverageEligible(product)) {
+      return Response.json({ ok: false, blocked: true, error: 'AUTO exige um único SKU/ASIN, oferta elegível e saldo FBA vendável atualizado.' }, { status: 409 });
+    }
     
     const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
     if (!refreshToken) return Response.json({ ok: false, error: 'Sem refresh_token. Conecte o Amazon Ads primeiro.' });
@@ -173,28 +182,66 @@ Deno.serve(async (req) => {
     const [performanceRows, earlyAutopilotRows, economicRows, assessmentRows] = await Promise.all([
       base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id }, '-updated_at', 1).catch(() => []),
       base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id }, '-updated_at', 1).catch(() => []),
-      base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id, asin }, '-updated_at', 1).catch(() => []),
-      base44.asServiceRole.entities.DailyProductAdsAssessment.filter({ amazon_account_id, asin }, '-assessment_date', 1).catch(() => []),
+      base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id, asin, sku: product?.sku }, '-updated_at', 20).catch(() => []),
+      base44.asServiceRole.entities.DailyProductAdsAssessment.filter({ amazon_account_id, asin, sku: product?.sku }, '-assessment_date', 20).catch(() => []),
     ]);
     const goalSettings = { ...(earlyAutopilotRows[0] || {}), ...(performanceRows[0] || {}) };
+    const economics = economicRows.find((row: any) => String(row.sku || '').trim().toUpperCase() === String(product.sku).trim().toUpperCase()) || {};
+    const assessment = assessmentRows.find((row: any) => String(row.sku || '').trim().toUpperCase() === String(product.sku).trim().toUpperCase()) || {};
+    const costsConfirmed = product.cost_confirmed === true || economics.costs_confirmed_by_user === true;
+    const contribution = Number(economics.contribution_margin_amount ?? product.contribution_margin ?? product.available_profit_per_sale ?? 0);
+    const safeCpc = Number(assessment.safe_max_cpc || economics.safe_max_cpc || 0);
+    if (!costsConfirmed || contribution <= 0 || safeCpc <= 0) {
+      return Response.json({
+        ok: false, blocked: true, reason: 'verified_positive_economics_required',
+        error: 'Kick-off AUTO bloqueado: custo confirmado, margem positiva e CPC econômico precisam estar disponíveis.',
+        asin, sku: product.sku, costs_confirmed: costsConfirmed, contribution_margin: contribution,
+        safe_max_cpc: safeCpc,
+      }, { status: 409 });
+    }
+    if (safeCpc < 0.50) {
+      return Response.json({
+        ok: false, blocked: true, reason: 'economic_cpc_below_minimum_discovery_bid',
+        error: 'Kick-off AUTO bloqueado: o limite econômico seguro por clique é inferior ao lance mínimo de R$ 0,50.',
+        asin, sku: product.sku, safe_max_cpc: safeCpc, minimum_discovery_bid: 0.50,
+      }, { status: 409 });
+    }
+    const siblingProducts = await base44.asServiceRole.entities.Product.filter({ amazon_account_id, asin: String(asin).toUpperCase() }, '-updated_date', 100).catch(() => []);
+    const distinctAsinSkus = new Set(siblingProducts.filter((row: any) => row.status !== 'archived').map((row: any) => String(row.sku || '').trim().toUpperCase()).filter(Boolean));
     // AUTO e a camada de descoberta do funil. Ela sempre nasce no piso
     // configurado e so e elevada posteriormente pelo motor, quando houver
     // entrega e evidencia economica. Assim uma criacao/reconciliacao nunca
     // introduz um CPC alto por conta propria.
-    const configuredMinimumBid = Math.max(0.02, Number(goalSettings?.min_bid || 0.10));
+    const requestedDiscoveryBid = 0.50;
     const launchAtMinimum = body.launch_at_minimum !== false;
-    const initialBid = launchAtMinimum
-      ? Math.round(configuredMinimumBid * 100) / 100
-      : proportionalActivationBid(goalSettings, economicRows[0], assessmentRows[0]);
+    const initialBid = Math.round(Math.min(
+      safeCpc,
+      launchAtMinimum ? requestedDiscoveryBid : proportionalActivationBid(goalSettings, economics, assessment),
+    ) * 100) / 100;
 
     const existingCampaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id, asin });
+    const productAds = await base44.asServiceRole.entities.ProductAd.filter({ amazon_account_id }, '-synced_at', 5000).catch(() => []);
+    const productAdSkusByCampaign = new Map<string, Set<string>>();
+    for (const ad of productAds) {
+      const campaignId = String(ad.campaign_id || '');
+      const adSku = String(ad.sku || '').trim().toUpperCase();
+      if (!campaignId || !adSku) continue;
+      const values = productAdSkusByCampaign.get(campaignId) || new Set<string>();
+      values.add(adSku);
+      productAdSkusByCampaign.set(campaignId, values);
+    }
     const autoCampaign = existingCampaigns.find((c: any) => {
       const targeting = String(c.targeting_type || '').toUpperCase();
       const name = String(c.name || c.campaign_name || '').toUpperCase();
       const state = String(c.state || c.status || '').toUpperCase();
-      return c.archived !== true && state !== 'ARCHIVED'
-        && !name.includes('MANUAL')
-        && (name.includes('AUTO') || (targeting === 'AUTO' && !name.includes('EXACT')));
+      const campaignId = String(c.amazon_campaign_id || c.campaign_id || '');
+      const linkedSkus = productAdSkusByCampaign.get(campaignId) || new Set<string>();
+      const productSku = String(product.sku).trim().toUpperCase();
+      const identityMatches = linkedSkus.size === 1 && linkedSkus.has(productSku)
+        || linkedSkus.size === 0 && String(c.sku || '').trim().toUpperCase() === productSku
+        || linkedSkus.size === 0 && !c.sku && distinctAsinSkus.size === 1;
+      return identityMatches && c.archived !== true && state !== 'ARCHIVED'
+        && !name.includes('MANUAL') && (name.includes('AUTO') || (targeting === 'AUTO' && !name.includes('EXACT')));
     });
     if (autoCampaign) {
       // O estado confirmado pela sincronização atual tem precedência. Um
@@ -202,44 +249,31 @@ Deno.serve(async (req) => {
       const state = String(autoCampaign.state || autoCampaign.status || autoCampaign.amazon_status || '').toUpperCase();
       const effectiveCampaignId = autoCampaign.campaign_id || autoCampaign.amazon_campaign_id;
       if (!effectiveCampaignId) return Response.json({ ok: false, error: 'Campanha AUTO local sem ID Amazon' });
-      // Sempre reafirmar ENABLED na Amazon. Estado local nunca substitui a
-      // confirmacao remota e PUT ENABLED e idempotente.
-      const enabled = await adsRequestWithDetails(
-        'PUT', '/sp/campaigns',
-        { campaigns: [{ campaignId: String(effectiveCampaignId), state: 'ENABLED' }] },
-        refreshToken, String(profileId), 'application/vnd.spCampaign.v3+json'
-      );
-      const enabledError = extractCampaignError(enabled.data);
-      if (![200, 201, 207].includes(enabled.status) || enabledError) {
+      const paused = ['PAUSED', 'PAUSED_BY_ADVERTISER'].includes(state);
+      if (paused) {
+        // Stock recovery and an explicit one-shot manual kickoff are the only
+        // reactivation owners. Do not silently undo a manual/business pause.
         return Response.json({
-          ok: false, error: `Falha ao reativar AUTO ${effectiveCampaignId}`,
-          http_status: enabled.status, amazon_error: enabledError,
-          request_id: enabled.headers?.requestId || '',
+          ok: true, campaign_id: String(effectiveCampaignId), already_exists: true,
+          reactivated: false, action_label: 'existing_paused_preserved',
+          reason: 'awaiting_stock_guard_or_explicit_manual_kickoff_confirmation',
         });
       }
-      await base44.asServiceRole.entities.Campaign.update(autoCampaign.id, {
-        state: 'enabled', status: 'enabled', amazon_status: 'enabled',
-        is_operational: true, archived: false,
-        synced_at: new Date().toISOString(), last_sync_at: new Date().toISOString(),
-      });
       // Nao redefinir o lance de uma AUTO existente. O mesmo endpoint e
       // chamado a cada ciclo de cobertura; rebaixar o Ad Group ao piso aqui
       // apagaria a evolucao gradual feita por bid/dayparting e esconderia o
       // efeito das decisoes economicas anteriores.
-      const linkedProducts = await base44.asServiceRole.entities.Product.filter({ amazon_account_id, asin });
-      for (const product of linkedProducts) {
-        await base44.asServiceRole.entities.Product.update(product.id, {
-          has_campaign: true, campaign_status: 'active', linked_campaign_id: effectiveCampaignId,
-        }).catch(() => {});
-      }
+      await base44.asServiceRole.entities.Product.update(product.id, {
+        has_campaign: true, campaign_status: 'active', linked_campaign_id: effectiveCampaignId,
+      }).catch(() => {});
       return Response.json({
         ok: true,
         campaign_id: effectiveCampaignId,
         campaign_name: autoCampaign.name || autoCampaign.campaign_name,
         daily_budget: autoCampaign.daily_budget,
         already_exists: true,
-        reactivated: true,
-        action_label: 'reactivated',
+        reactivated: false,
+        action_label: 'existing_enabled',
         launch_bid_policy: launchAtMinimum ? 'configured_minimum' : 'proportional_override',
         proportional_bid: initialBid,
       });
@@ -249,33 +283,22 @@ Deno.serve(async (req) => {
     const autopilotConfigs = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id });
     const autopilotConfig = autopilotConfigs[0] || null;
 
-    const activeCampaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id });
-    const currentTotalBudget = activeCampaigns
-      .filter(c => c.state === 'enabled' && c.archived !== true)
-      .reduce((sum, c) => sum + (c.daily_budget || 0), 0);
-
-    // total_daily_budget: AutopilotConfig > BudgetRule > fallback generoso (500)
+    // The account-wide cap is enforced against actual spend by the spend
+    // controller. Per-campaign budgets are independent limits/references and
+    // must not be summed or divided across products here.
     const budgetRules = await base44.asServiceRole.entities.BudgetRule.filter({ amazon_account_id });
     const budgetRule = budgetRules[0] || {};
-    const totalDailyBudget =
-      autopilotConfig?.total_daily_budget ||
-      autopilotConfig?.daily_budget_limit ||
-      budgetRule.total_daily_budget ||
-      500;
     const maxPerCampaign = autopilotConfig?.maximum_campaign_budget || budgetRule.max_budget_per_campaign || 20;
+    const configuredInitialBudget = Number(autopilotConfig?.minimum_campaign_budget
+      || budgetRule.minimum_campaign_budget || 5);
+    const campaignBudget = Math.max(5, Math.min(Number(maxPerCampaign), configuredInitialBudget));
 
-    const availableBudget = totalDailyBudget - currentTotalBudget;
-    // Sempre criar com pelo menos R$ 5,00 — nunca bloquear por budget
-    const campaignBudget = Math.max(
-      Math.min(Math.max(availableBudget * 0.1, 5), maxPerCampaign),
-      5
-    );
-
-    const campaignName = `AUTO | ${asin} | ${new Date().toISOString().slice(0, 10)}`;
+    const skuToken = String(product.sku).trim().replace(/[^a-z0-9-]/gi, '').slice(0, 24);
+    const campaignName = `AUTO | ${asin} | ${skuToken} | ${new Date().toISOString().slice(0, 10)}`;
     const today = new Date().toISOString().slice(0, 10);
 
     const token = await getAdsToken(refreshToken);
-    const existingCampaignId = await reconcileCampaign(token, profileId, campaignName, asin);
+    const existingCampaignId = await reconcileCampaign(token, profileId, campaignName);
     
     let campaignResult;
     let campaignId = existingCampaignId;
@@ -324,7 +347,7 @@ Deno.serve(async (req) => {
       if (!campaignId && [200, 201, 207].includes(campaignResult.status)) {
         for (let attempt = 0; attempt < 4 && !campaignId; attempt++) {
           if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 750 * attempt));
-          campaignId = await reconcileCampaign(token, profileId, campaignName, asin);
+          campaignId = await reconcileCampaign(token, profileId, campaignName);
         }
       }
 
@@ -347,7 +370,7 @@ Deno.serve(async (req) => {
     try {
       const adGroupPayload = {
         adGroups: [{
-          name: `AdGroup | ${asin}`,
+          name: `AdGroup | ${asin} | ${skuToken}`,
           campaignId,
           defaultBid: initialBid,
           state: 'ENABLED',
@@ -393,14 +416,17 @@ Deno.serve(async (req) => {
       amazon_account_id,
       campaign_id: campaignId,
       asin,
+      sku: product.sku,
+      sku_identity_status: productAdId ? 'verified_product_ad' : 'unknown',
       name: campaignName,
       campaign_name: campaignName,
       campaign_type: 'SP',
       targeting_type: 'AUTO',
-      state: 'enabled',
-      status: 'enabled',
-      amazon_status: 'enabled',
-      is_operational: true,
+      state: productAdId ? 'enabled' : 'incomplete',
+      status: productAdId ? 'enabled' : 'incomplete',
+      amazon_status: productAdId ? 'enabled' : 'incomplete',
+      is_operational: Boolean(productAdId),
+      completion_status: productAdId ? 'complete' : 'product_ad_confirmation_pending',
       archived: false,
       daily_budget: campaignBudget,
       start_date: today,
@@ -423,8 +449,8 @@ Deno.serve(async (req) => {
         amazon_account_id,
         campaign_id: campaignId,
         ad_group_id: adGroupId,
-        ad_group_name: `AdGroup | ${asin}`,
-        name: `AdGroup | ${asin}`,
+        ad_group_name: `AdGroup | ${asin} | ${skuToken}`,
+        name: `AdGroup | ${asin} | ${skuToken}`,
         default_bid: initialBid,
         state: 'enabled',
         status: 'enabled',
@@ -446,7 +472,7 @@ Deno.serve(async (req) => {
       }).catch(() => {});
     }
 
-    const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id, asin });
+    const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id, asin, sku: product.sku }, '-updated_date', 10);
     if (products.length > 0) {
       await base44.asServiceRole.entities.Product.update(products[0].id, {
         has_campaign: true,

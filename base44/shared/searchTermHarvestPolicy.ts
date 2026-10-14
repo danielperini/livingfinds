@@ -63,6 +63,12 @@ export function normalizeSearchTerm(value: unknown): string {
     .replace(/\s+/g, ' ');
 }
 
+/** Preserve the literal customer query when an Exact keyword is created. */
+export function normalizeLiteralSearchTerm(value: unknown): string {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
 /** Detecta keywords montadas recortando palavras contíguas do título do produto.
  * Usada apenas em fontes de sugestão (IA/catálogo); termos realmente observados
  * em Search Term Reports são avaliados pela evidência de conversão abaixo. */
@@ -239,7 +245,9 @@ export function aggregateSearchTerms(rows: any[]): HarvestAggregate[] {
     if (!term || !normalizedTerm || !termFamilyKey || !asin) continue;
 
     const skuKey = String(row.advertised_sku || row.sku || '').trim().toUpperCase();
-    const key = `${asin}|${skuKey}|${termFamilyKey}`;
+    // Families are useful for reporting, but must not merge distinct customer
+    // queries into a synthetic Exact keyword. Keep each literal phrase isolated.
+    const key = `${asin}|${skuKey}|${normalizeLiteralSearchTerm(term)}`;
     const current = aggregates.get(key) || {
       asin,
       sku: String(row.advertised_sku || row.sku || '').trim(),
@@ -446,7 +454,7 @@ export function evaluateHarvestCandidate(input: {
   const hasValidAttribution = aggregate.attributionVerified || aggregate.attributionFallbackReason?.includes('single_advertised_sku_fallback');
   if (!hasValidAttribution) return { eligible: false, reason: 'same_sku_attribution_unavailable', sameSkuAcos };
   
-  if (aggregate.sameSkuOrders < 2 || aggregate.sameSkuSales <= 0) return { eligible: false, reason: 'requires_two_verified_same_sku_orders', sameSkuAcos };
+  if (aggregate.sameSkuOrders < 3 || aggregate.sameSkuSales <= 0) return { eligible: false, reason: 'requires_more_than_two_verified_same_sku_orders', sameSkuAcos };
   if (!input.inStock) return { eligible: false, reason: 'out_of_stock', sameSkuAcos };
   if (!input.economicsActionable || input.safeBid == null || input.breakEvenAcos == null || input.breakEvenAcos <= 0) return { eligible: false, reason: 'unsafe_or_missing_economics', sameSkuAcos };
   if (input.breakEvenAcos && sameSkuAcos != null && sameSkuAcos >= input.breakEvenAcos) return { eligible: false, reason: 'same_sku_acos_above_break_even', sameSkuAcos };

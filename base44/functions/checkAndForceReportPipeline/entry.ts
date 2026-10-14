@@ -211,7 +211,6 @@ Deno.serve(async (req) => {
       console.log('[watchdog] Disparando sincronização SP-API (catálogo, estoque, vendas)...');
       await Promise.allSettled([
         db.functions.invoke('syncProductCatalogV2', { amazon_account_id: aid, _service_role: true }).catch(() => {}),
-        db.functions.invoke('syncProductsFromInventory', { amazon_account_id: aid, _service_role: true }).catch(() => {}),
         db.functions.invoke('syncSalesDailyFromReports', { amazon_account_id: aid, _service_role: true }).catch(() => {}),
       ]);
 

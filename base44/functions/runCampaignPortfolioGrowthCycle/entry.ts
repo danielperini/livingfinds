@@ -1,6 +1,10 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
+import { inventoryDecisionPreflight } from '../../shared/inventorySyncPolicy.ts';
 
 const n = (value: any) => Number(value || 0);
+const brDate = () => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(new Date());
 const state = (row: any) => String(
   row?.amazon_status || row?.state || row?.status || row?.campaign_status || row?.serving_status || row?.original_state || ''
 ).toLowerCase();
@@ -29,6 +33,21 @@ Deno.serve(async (req) => {
     const aid = account.id;
     const fullExpansion = body.full_expansion === true;
     const dryRun = body.dry_run === true;
+    const inventory = await base44.asServiceRole.functions.invoke('checkInventoryChangesAndKickoff', {
+      _service_role: true, amazon_account_id: aid, dry_run: dryRun,
+      trigger_type: 'campaign_portfolio_growth_preflight',
+    }).then((r: any) => r?.data || r).catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
+    const inventoryPreflight = inventoryDecisionPreflight(inventory, dryRun);
+    if (!inventoryPreflight.allowed) {
+      await base44.asServiceRole.entities.SyncExecutionLog.create({
+        amazon_account_id: aid, operation: 'campaign_portfolio_growth_cycle',
+        trigger_type: fullExpansion ? 'weekly_automatic' : 'daily_automatic',
+        status: 'blocked', execution_date: brDate(), started_at: startedAt,
+        completed_at: new Date().toISOString(), records_processed: 0,
+        result_summary: JSON.stringify({ inventory_preflight: inventoryPreflight, inventory }),
+      }).catch(() => {});
+      return Response.json({ ok: false, blocked: true, inventory_preflight: inventoryPreflight, inventory }, { status: 409 });
+    }
     const today = new Date().toISOString().slice(0, 10);
     const since7 = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
 
@@ -122,6 +141,7 @@ Deno.serve(async (req) => {
     };
 
     const stages: any[] = [];
+    stages.push({ name: 'inventory_preflight', ok: true, data: { ...inventoryPreflight, inventory } });
     stages.push(await invoke('runDeterministicDecisionEngine', { force: true, dry_run: dryRun }));
     stages.push(await invoke('runManualZeroDeliveryBootstrap', { dry_run: dryRun }));
     stages.push(await invoke('runAutoCampaignLearning', { dry_run: dryRun }));

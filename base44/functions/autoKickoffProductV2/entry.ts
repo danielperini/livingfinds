@@ -65,11 +65,20 @@ Deno.serve(async (request) => {
         price, product_cost: productCost, extra_cost: extraCost, amazon_fees: amazonFees, available_profit_per_sale: availableProfit,
       }, { status: 409 });
     }
+    if (availableProfit < 0.50) {
+      return Response.json({
+        ok: false, blocked: true, reason: 'economic_cpc_below_minimum_discovery_bid',
+        error: 'Kick-off AUTO bloqueado: o limite econômico seguro por clique é inferior ao lance mínimo de R$ 0,50.',
+        asin, sku: product.sku, safe_max_cpc: availableProfit, minimum_discovery_bid: 0.50,
+      }, { status: 409 });
+    }
 
     const breakEvenAcos = Number(((availableProfit / price) * 100).toFixed(2));
     const maxAdSpendPerOrder = availableProfit;
     const budget = Math.max(1, Math.min(5, Number((availableProfit * 0.30).toFixed(2))));
-    const bid = Math.max(0.10, Math.min(0.50, Number((availableProfit * 0.10).toFixed(2))));
+    // Start at the requested R$0.50 discovery bid when unit economics allow;
+    // never exceed the confirmed contribution available per order.
+    const bid = Math.min(0.50, Number(availableProfit.toFixed(2)));
     await base44.asServiceRole.entities.Product.update(product.id, {
       contribution_margin: availableProfit,
       available_profit_per_sale: availableProfit,
@@ -81,7 +90,7 @@ Deno.serve(async (request) => {
 
     if (!body._window_execution && !inWindow()) {
       const response = await base44.functions.invoke('scheduleProductKickoff', {
-        amazon_account_id: accountId, asin, sku: product.sku, product_name: product.product_name || product.display_name || asin, mode: 'auto_plus_four',
+        amazon_account_id: accountId, asin, sku: product.sku, product_name: product.product_name || product.display_name || asin, mode: 'auto_only',
       });
       return Response.json({ ...(response?.data || response || {}), profitability_guard: { available_profit_per_sale: availableProfit, maximum_ad_spend_per_order: maxAdSpendPerOrder, break_even_acos_pct: breakEvenAcos, initial_budget: budget, initial_bid: bid } });
     }
@@ -97,7 +106,8 @@ Deno.serve(async (request) => {
 
     if (!autoAlreadyExisted) {
       const now = new Date().toISOString();
-      const name = `AUTO | ${asin} | ${now.slice(0, 10)}`;
+      const skuToken = String(product.sku || '').trim().replace(/[^a-z0-9-]/gi, '').slice(0, 24);
+      const name = `AUTO | ${asin} | ${skuToken} | ${now.slice(0, 10)}`;
       const response = await ads(base44, accountId, 'createAutoCampaign', 'POST', '/sp/campaigns', {
         campaigns: [{ name, targetingType: 'AUTO', state: 'ENABLED', budget: { budgetType: 'DAILY', budget }, startDate: now.slice(0, 10) }],
       }, 'application/vnd.spCampaign.v3+json');
@@ -106,7 +116,7 @@ Deno.serve(async (request) => {
 
       await wait(14000);
       const adGroupResponse = await ads(base44, accountId, 'createAutoAdGroup', 'POST', '/sp/adGroups', {
-        adGroups: [{ name: `AG | AUTO | ${asin}`, campaignId, defaultBid: bid, state: 'ENABLED' }],
+        adGroups: [{ name: `AG | AUTO | ${asin} | ${skuToken}`, campaignId, defaultBid: bid, state: 'ENABLED' }],
       }, 'application/vnd.spAdGroup.v3+json');
       const adGroupId = idFrom(adGroupResponse, 'adGroups', 'adGroupId');
       let productAdId = null;

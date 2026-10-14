@@ -65,7 +65,7 @@ Deno.serve(async (request) => {
     if (!user) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
 
     const body = await request.json().catch(() => ({}));
-    const mode = body.mode === 'manual_only' ? 'manual_only' : 'auto_plus_four';
+    const mode = body.mode === 'manual_only' ? 'manual_only' : 'auto_only';
 
     if (!body.amazon_account_id || !body.asin) {
       return Response.json({ ok: false, error: 'Conta e ASIN são obrigatórios' }, { status: 400 });
@@ -82,16 +82,20 @@ Deno.serve(async (request) => {
       if (eligibility.status !== 'ready') return Response.json({ok:false,error:eligibility.reasons.join(' ') || 'Produto já possui campanha ativa.'},{status:409});
     }
     const slot = nextSlot();
-    const existing = await base44.asServiceRole.entities.ProductKickoffQueue.filter(
+    const existingRows = await base44.asServiceRole.entities.ProductKickoffQueue.filter(
       {
         amazon_account_id: body.amazon_account_id,
         asin: body.asin,
-        mode,
         status: 'scheduled',
       },
       '-created_date',
-      1,
+      100,
     ).catch(() => []);
+    const existing = existingRows.filter((row: any) =>
+      String(row.sku || '').trim().toUpperCase() === String(body.sku || '').trim().toUpperCase()
+      && (mode === 'manual_only'
+        ? row.mode === 'manual_only' && String(row.keyword || '').trim().toLowerCase() === String(body.keyword || '').trim().toLowerCase()
+        : row.mode !== 'manual_only'));
 
     let queueItem = existing[0] || null;
     if (queueItem) {

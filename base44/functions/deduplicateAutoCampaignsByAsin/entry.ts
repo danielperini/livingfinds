@@ -1,6 +1,6 @@
 /**
- * deduplicateAutoCampaignsByAsin v2
- * Para cada ASIN com mais de 1 campanha AUTO não-arquivada:
+ * deduplicateAutoCampaignsByAsin v3
+ * Para cada SKU anunciado (ASIN somente quando houver um único SKU cadastrado):
  * - Mantém a de maior lucro, vendas, pedidos e histórico; gasto nunca decide sozinho
  * - Pausa as demais na Amazon (reversível; nunca exclui dados)
  * - Atualiza localmente somente após confirmação remota
@@ -52,28 +52,69 @@ Deno.serve(async (req) => {
     const allCampaigns = await base44.asServiceRole.entities.Campaign.filter(
       { amazon_account_id: accountId }, null, 3000
     ).catch(() => [] as any[]);
+    const [products, productAds] = await Promise.all([
+      base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, '-updated_date', 5000).catch(() => []),
+      base44.asServiceRole.entities.ProductAd.filter({ amazon_account_id: accountId }, '-synced_at', 5000).catch(() => []),
+    ]);
+    const skuCountByAsin = new Map<string, Set<string>>();
+    for (const product of products) {
+      const asin = String(product.asin || '').trim().toUpperCase();
+      const sku = String(product.sku || '').trim().toUpperCase();
+      if (!asin || !sku || product.status === 'archived') continue;
+      const skus = skuCountByAsin.get(asin) || new Set<string>();
+      skus.add(sku);
+      skuCountByAsin.set(asin, skus);
+    }
+    const skuByCampaign = new Map<string, Set<string>>();
+    for (const ad of productAds) {
+      const campaignId = String(ad.campaign_id || '').trim();
+      const sku = String(ad.sku || '').trim().toUpperCase();
+      if (!campaignId || !sku) continue;
+      const skus = skuByCampaign.get(campaignId) || new Set<string>();
+      skus.add(sku);
+      skuByCampaign.set(campaignId, skus);
+    }
 
     const activeCampaigns = allCampaigns.filter((c: any) => {
       const s = (c.state || c.status || '').toLowerCase();
       return s !== 'archived' && c.archived !== true && isAutoCampaign(c);
     });
 
-    // Agrupar por ASIN
-    const byAsin = new Map<string, any[]>();
+    // SKU is the deduplication identity. Never collapse sibling seller SKUs
+    // that happen to advertise the same ASIN. Ambiguous multi-SKU campaigns
+    // remain untouched until the product-ad mapping is reconciled.
+    const byIdentity = new Map<string, any[]>();
+    const ambiguousCampaigns: any[] = [];
     for (const c of activeCampaigns) {
       const asin = extractAsin(c);
       if (!asin) continue;
       if (requestedAsins.size > 0 && !requestedAsins.has(asin)) continue;
-      if (!byAsin.has(asin)) byAsin.set(asin, []);
-      byAsin.get(asin)!.push(c);
+      const campaignId = String(c.amazon_campaign_id || c.campaign_id || '');
+      const mappedSkus = skuByCampaign.get(campaignId) || new Set<string>();
+      const sku = mappedSkus.size === 1 ? [...mappedSkus][0]
+        : mappedSkus.size > 1 ? ''
+        : String(c.sku || '').trim().toUpperCase();
+      if (mappedSkus.size > 1) {
+        ambiguousCampaigns.push({ asin, campaign_id: campaignId, reason: 'campaign_contains_multiple_skus' });
+        continue;
+      }
+      const resolvedSku = sku || (skuCountByAsin.get(asin)?.size === 1 ? [...(skuCountByAsin.get(asin) || [])][0] : '');
+      if (!resolvedSku) {
+        ambiguousCampaigns.push({ asin, campaign_id: campaignId, reason: 'sku_identity_unresolved' });
+        continue;
+      }
+      const identity = `${asin}|${resolvedSku}`;
+      if (!byIdentity.has(identity)) byIdentity.set(identity, []);
+      byIdentity.get(identity)!.push({ ...c, __resolvedAsin: asin, __resolvedSku: resolvedSku });
     }
 
     const details: any[] = [];
     let totalArchived = 0;
     let totalFailed = 0;
 
-    for (const [asin, group] of byAsin) {
+    for (const [identity, group] of byIdentity) {
       if (group.length <= 1) continue;
+      const [asin, sku] = identity.split('|');
 
       // Proteger a campanha economicamente vencedora. Spend entra apenas no
       // cálculo de lucro, nunca como critério positivo isolado.
@@ -105,6 +146,7 @@ Deno.serve(async (req) => {
       for (const dup of duplicates) {
         const dupEntry: any = {
           asin,
+          sku,
           canonical_id: canonical.campaign_id,
           canonical_name: canonical.name || canonical.campaign_name,
           canonical_spend: Number(canonical.spend || 0),
@@ -193,13 +235,13 @@ Deno.serve(async (req) => {
       const now = new Date().toISOString();
       await base44.asServiceRole.entities.SyncExecutionLog.create({
         amazon_account_id: accountId,
-        operation: 'deduplicateAutoCampaignsByAsin_v2',
+        operation: 'deduplicateAutoCampaignsBySku_v3',
         status: totalFailed === 0 ? 'success' : 'warning',
         trigger_type: 'manual',
         started_at: now,
         completed_at: new Date().toISOString(),
         records_processed: totalArchived,
-        result_summary: JSON.stringify({ archived: totalArchived, failed: totalFailed, asins: byAsin.size }).slice(0, 2000),
+        result_summary: JSON.stringify({ archived: totalArchived, failed: totalFailed, sku_identities: byIdentity.size, ambiguous_campaigns: ambiguousCampaigns.length }).slice(0, 2000),
         error_message: totalFailed > 0 ? `${totalFailed} falha(s) ao arquivar na Amazon` : null,
       }).catch(() => {});
     }
@@ -210,7 +252,8 @@ Deno.serve(async (req) => {
       archived: dry_run ? 0 : totalArchived,
       candidates: dry_run ? totalArchived : undefined,
       failed: totalFailed,
-      asins_processed: [...byAsin.values()].filter(g => g.length > 1).length,
+      sku_identities_processed: [...byIdentity.values()].filter(g => g.length > 1).length,
+      ambiguous_campaigns,
       asin_scope_count: requestedAsins.size,
       details,
       duration_ms: Date.now() - t0,

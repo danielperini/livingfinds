@@ -15,17 +15,17 @@ Deno.test('distribution clamps legacy fan-out to one new manual campaign per SKU
   assertEquals(resolveManualExpansionLimits(0, 0), { perRun: 0, perSku: 0 });
 });
 
-Deno.test('manual exact promotion requires fresh available stock and two verified same-SKU orders', () => {
+Deno.test('manual exact promotion requires fresh available stock and more than two verified same-SKU orders', () => {
   const base = {
     availableFbaUnits: 59,
     sameSkuAttributionVerified: true,
-    sameSkuOrders: 2,
+    sameSkuOrders: 3,
     manualCampaignCount: 2,
     createdThisCycle: 0,
     alreadyExact: false,
   };
   assertEquals(evaluateManualExactExpansion(base).eligible, true);
-  assertEquals(evaluateManualExactExpansion({ ...base, sameSkuOrders: 1 }).reason, 'requires_two_verified_same_sku_orders');
+  assertEquals(evaluateManualExactExpansion({ ...base, sameSkuOrders: 2 }).reason, 'requires_more_than_two_verified_same_sku_orders');
   assertEquals(evaluateManualExactExpansion({ ...base, sameSkuAttributionVerified: false }).reason, 'same_sku_attribution_unverified');
   assertEquals(evaluateManualExactExpansion({ ...base, availableFbaUnits: 2 }).reason, 'insufficient_available_fba_for_manual_expansion');
   assertEquals(evaluateManualExactExpansion({ ...base, availableFbaUnits: 4 }).reason, 'insufficient_available_fba_for_manual_expansion');
@@ -50,7 +50,7 @@ Deno.test('campaign count is not treated as a target and over-concentrated SKUs 
     createdThisCycle: 0,
     alreadyExact: false,
   });
-  assertEquals(oneOrderWithLargeStock.reason, 'requires_two_verified_same_sku_orders');
+  assertEquals(oneOrderWithLargeStock.reason, 'requires_more_than_two_verified_same_sku_orders');
 });
 
 Deno.test('a SKU can receive at most one new exact campaign in a single cycle', () => {

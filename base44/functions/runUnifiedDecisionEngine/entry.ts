@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
+import { inventoryDecisionPreflight } from '../../shared/inventorySyncPolicy.ts';
 
 const invoke = async (base44: any, name: string, payload: Record<string, unknown>) => {
   try {
@@ -56,6 +57,24 @@ Deno.serve(async (request) => {
     };
 
     const inventoryKickoff = await invoke(base44, 'checkInventoryChangesAndKickoff', common);
+    const inventoryPreflight = inventoryDecisionPreflight(inventoryKickoff, dryRun);
+    if (!inventoryPreflight.allowed) {
+      return Response.json({
+        ok: false,
+        blocked: true,
+        engine: 'unified-marketplace-decision-governance',
+        engine_version: 'V6SIA',
+        correlation_id: correlationId,
+        failed_stages: [{
+          stage: 'inventory_preflight',
+          error: inventoryPreflight.reason,
+          blocked_accounts: inventoryPreflight.blockedAccounts,
+        }],
+        inventory_preflight: inventoryPreflight,
+        message: 'Decisões de Ads bloqueadas: atualização FBA e proteção de estoque não foram confirmadas para todas as contas deste ciclo.',
+        mutations_created: 0,
+      }, { status: 409 });
+    }
     const reportRequest = dailyClose && !body.skip_sync
       ? await invoke(base44, 'ensureDailyReportsCurrent', common)
       : { ok: true, skipped: true };
@@ -211,7 +230,7 @@ Deno.serve(async (request) => {
     const scopeAfter = await invoke(base44, 'reconcileManualBidCycleScope', { ...common, skip_sync: true });
 
     const stages = {
-      inventoryKickoff, dailyWinners,
+      inventoryKickoff, inventoryPreflight, dailyWinners,
       reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit,
       manualStructureAudit, economicCurveAdsGuard, deterministic, decisionV3Shadow,
       salesRecovery, asinDiversification, campaignLifecycle, economicBalancer,

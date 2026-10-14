@@ -16,20 +16,32 @@ export function isStockCampaignAlert(alert) {
     || (/campanha ativa/.test(message) && /estoque\s*=\s*0|sem estoque/.test(message));
 }
 
-export function belongsToStockCampaignAlert(alert, { asin, productId } = {}) {
+/** @param {any} alert @param {{asin?: unknown, sku?: unknown, productId?: unknown}} [options] */
+export function belongsToStockCampaignAlert(alert, { asin, sku, productId } = {}) {
   if (!isStockCampaignAlert(alert)) return false;
   const normalizedAsin = text(asin);
   const candidates = [alert?.asin, alert?.entity_id, alert?.product_id, alert?.title, alert?.message]
     .map(text)
     .filter(Boolean);
-  return Boolean(
-    (normalizedAsin && candidates.some(value => value.includes(normalizedAsin)))
-    || (productId && candidates.some(value => value === text(productId) || value.includes(text(productId))))
-  );
+  const normalizedSku = text(sku);
+  const normalizedProductId = text(productId);
+  // Prefer exact product identity where available; ASIN fallback is unsafe
+  // when seller SKUs represent distinct variants sharing one catalog ASIN.
+  if (normalizedSku) {
+    if (text(alert?.sku) === normalizedSku) return true;
+    if (normalizedProductId && [alert?.entity_id, alert?.product_id].map(text).includes(normalizedProductId)) return true;
+    return false;
+  }
+  return Boolean((normalizedAsin && candidates.some(value => value.includes(normalizedAsin)))
+    || (normalizedProductId && candidates.some(value => value === normalizedProductId || value.includes(normalizedProductId))));
 }
 
-export function planStockCampaignAlertReconciliation(alerts, { asin, productId, activeCampaignCount = 0 } = {}) {
-  const matches = (alerts || []).filter(alert => belongsToStockCampaignAlert(alert, { asin, productId }));
+/**
+ * @param {any[]} alerts
+ * @param {{asin?: unknown, sku?: unknown, productId?: unknown, activeCampaignCount?: number}} [options]
+ */
+export function planStockCampaignAlertReconciliation(alerts, { asin, sku, productId, activeCampaignCount = 0 } = {}) {
+  const matches = (alerts || []).filter(alert => belongsToStockCampaignAlert(alert, { asin, sku, productId }));
   if (activeCampaignCount <= 0) return { keep: null, resolve: matches };
 
   const sorted = [...matches].sort((left, right) => {

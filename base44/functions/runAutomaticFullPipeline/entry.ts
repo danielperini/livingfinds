@@ -98,14 +98,13 @@ Deno.serve(async (req) => {
     // Cada função tem retry interno.
     console.log('[pipeline] FASE 3: Sincronização SP-API (fire-and-forget)...');
     const spApiPromises = [
-      invokeWithRetry(db, 'syncProductsFromInventory', { amazon_account_id: aid, _service_role: true }).catch((e: any) => ({ ok: false, error: e.message })),
       invokeWithRetry(db, 'syncProductCatalog', { amazon_account_id: aid, _service_role: true }).catch((e: any) => ({ ok: false, error: e.message })),
       invokeWithRetry(db, 'syncSalesDailyFromReports', { amazon_account_id: aid, _service_role: true }).catch((e: any) => ({ ok: false, error: e.message })),
     ];
     // Fire-and-forget: não bloqueamos a resposta aguardando SP-API
-    Promise.all(spApiPromises).then(async ([invRes, catRes, salesRes]) => {
+    Promise.all(spApiPromises).then(async ([catRes, salesRes]) => {
       summary.phase3_spapi = {
-        inventory: { ok: invRes?.ok !== false },
+        inventory: { ok: catRes?.ok !== false, source: 'syncProductCatalogV2' },
         catalog: { ok: catRes?.ok !== false },
         sales: { ok: salesRes?.ok !== false },
       };
@@ -119,20 +118,15 @@ Deno.serve(async (req) => {
         ? (Date.now() - new Date(acc.last_sync_at).getTime()) / 3600000
         : 999;
 
-      if (dataAgeH <= 48) {
-        console.log(`[pipeline] FASE 4: Motor determinístico (dados com ${Math.round(dataAgeH)}h)...`);
-        const motorResult = await invokeWithRetry(db, 'runDeterministicDecisionEngine', {
+      if (dataAgeH <= 48 && catRes?.ok !== false) {
+        console.log(`[pipeline] FASE 4: Ciclo canônico V6SIA (dados com ${Math.round(dataAgeH)}h)...`);
+        const motorResult = await invokeWithRetry(db, 'runCanonicalDecisionCycle', {
           amazon_account_id: aid,
           _service_role: true,
+          dry_run: false,
+          daily_close: true,
+          trigger_type: 'automatic_full_pipeline_canonical_cycle',
         }).catch((e: any) => ({ ok: false, error: e.message }));
-
-        if (motorResult?.ok !== false && (motorResult?.decisions_saved || 0) > 0) {
-          // Executar decisões aprovadas imediatamente
-          await invokeWithRetry(db, 'executeApprovedDecisionQueue', {
-            amazon_account_id: aid,
-            _service_role: true,
-          }).catch(() => {});
-        }
 
         await db.entities.SyncExecutionLog.create({
           amazon_account_id: aid,
@@ -142,7 +136,7 @@ Deno.serve(async (req) => {
           started_at: startedAt,
           completed_at: new Date().toISOString(),
           duration_ms: Date.now() - t0,
-          result_summary: `Pipeline completa: fase1=${!phase1Result.error}, motor=${motorResult?.decisions_saved ?? 0} decisões`,
+          result_summary: `Pipeline completa: fase1=${!phase1Result.error}, ciclo V6SIA=${motorResult?.ok === true ? 'confirmado' : 'não confirmado'}`,
         }).catch(() => {});
       } else {
         console.log(`[pipeline] FASE 4 pulada — dados com ${Math.round(dataAgeH)}h (limite 48h)`);

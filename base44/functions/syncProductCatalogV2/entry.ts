@@ -1,5 +1,5 @@
 import { canonicalSkuRecord } from '../../shared/catalogRecoveryPolicy.ts';
-import { inventoryAvailable } from '../../shared/inventorySyncPolicy.ts';
+import { fbaInventorySnapshot, inventoryAvailable } from '../../shared/inventorySyncPolicy.ts';
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { normalizeSku } from '../../shared/repricingPolicy.ts';
 
@@ -98,9 +98,7 @@ Deno.serve(async (req) => {
       const asin = String(item.asin).trim().toUpperCase();
       const sku = item.sellerSku || null;
       const skuKey = normSku(sku);
-      const details = item.inventoryDetails || {};
       const available = inventoryAvailable(item);
-      const total = num(item.totalQuantity);
       const skuMatches = skuKey ? bySku.get(skuKey) || [] : [];
       const asinMatches = byAsin.get(asin) || [];
       const canonical = canonicalSkuRecord(skuMatches, asin);
@@ -136,11 +134,7 @@ Deno.serve(async (req) => {
         previous_inventory_status: existing?.inventory_status || null,
         previous_fba_inventory: num(existing?.fba_inventory),
         previous_available_quantity: existing?.available_quantity ?? null,
-        fba_inventory: available,
-        available_quantity: available,
-        total_quantity: total,
-        reserved_inventory: num(details?.reservedQuantity?.totalReservedQuantity),
-        inbound_inventory: num(details.inboundWorkingQuantity) + num(details.inboundShippedQuantity) + num(details.inboundReceivingQuantity),
+        ...fbaInventorySnapshot(item, marketplace, now),
         inventory_status: stockState(available),
         status: available > 0 ? 'active' : 'inactive',
         catalog_sync_status: 'success', synced_at: now, last_catalog_sync_at: now,

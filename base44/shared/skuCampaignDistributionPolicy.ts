@@ -8,7 +8,7 @@ export const SKU_CAMPAIGN_DISTRIBUTION = Object.freeze({
   minAvailableFbaForManualExpansion: 5,
   maxNewManualExactPerSkuPerCycle: 1,
   maxNewManualExactPerAccountPerCycle: 10,
-  minVerifiedSameSkuOrders: 2,
+  minVerifiedSameSkuOrders: 3,
   manualCampaignFloor: 0,
 });
 
@@ -45,7 +45,7 @@ export function evaluateManualExactExpansion(input: {
   if (finite(input.availableFbaUnits, -1) < SKU_CAMPAIGN_DISTRIBUTION.minAvailableFbaForManualExpansion) return { eligible: false, reason: 'insufficient_available_fba_for_manual_expansion' };
   if (input.sameSkuAttributionVerified !== true) return { eligible: false, reason: 'same_sku_attribution_unverified' };
   if (finite(input.sameSkuOrders) < SKU_CAMPAIGN_DISTRIBUTION.minVerifiedSameSkuOrders) {
-    return { eligible: false, reason: 'requires_two_verified_same_sku_orders' };
+    return { eligible: false, reason: 'requires_more_than_two_verified_same_sku_orders' };
   }
   if (finite(input.manualCampaignCount) >= SKU_CAMPAIGN_DISTRIBUTION.maxManualExactCampaignsPerSku) {
     return { eligible: false, reason: 'manual_campaign_cap_reached' };

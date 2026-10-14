@@ -41,6 +41,14 @@
       "payload": { "_service_role": true, "action": "auto", "trigger_type": "scheduler_intraday_startup" }
     },
     {
+      "name": "AUTO discovery bid learning - daily after inventory and metrics sync",
+      "function": "runAutoCampaignLearning",
+      "cron": "40 7 * * *",
+      "catch_up_daily": true,
+      "retry": { "max_attempts": 4, "base_delay_seconds": 120, "max_delay_seconds": 1800 },
+      "payload": { "_service_role": true, "dry_run": false, "trigger_type": "scheduler_daily_auto_campaign_learning" }
+    },
+    {
       "name": "Amazon campaign state reconciliation - every 15 minutes",
       "function": "syncAdsCampaignStatesV2",
       "cron": "1,16,31,46 * * * *",

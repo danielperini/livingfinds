@@ -103,14 +103,13 @@ Deno.serve(async (req) => {
 
     // ── FASE 2: Catálogo SP-API (em paralelo, não bloqueia fase 1) ──────────
     console.log('[pipeline] FASE 2: Sincronizando catálogo SP-API...');
-    const [catalogResult, inventoryResult, salesResult] = await Promise.allSettled([
+    const [catalogResult, salesResult] = await Promise.allSettled([
       invokeWithRetry(db, 'syncProductCatalogV2', { amazon_account_id: aid }, 'syncProductCatalogV2'),
-      invokeWithRetry(db, 'syncProductsFromInventory', { amazon_account_id: aid }, 'syncProductsFromInventory'),
       invokeWithRetry(db, 'syncSalesDailyFromReports', { amazon_account_id: aid }, 'syncSalesDailyFromReports'),
     ]);
 
     results.catalog = catalogResult.status === 'fulfilled' ? catalogResult.value : { error: (catalogResult as any).reason?.message };
-    results.inventory = inventoryResult.status === 'fulfilled' ? inventoryResult.value : { error: (inventoryResult as any).reason?.message };
+    results.inventory = results.catalog;
     results.sales = salesResult.status === 'fulfilled' ? salesResult.value : { error: (salesResult as any).reason?.message };
 
     // Log fim fase 2
@@ -124,25 +123,27 @@ Deno.serve(async (req) => {
       result_summary: `catalog:${results.catalog?.ok !== false ? 'ok' : 'err'} inventory:${results.inventory?.ok !== false ? 'ok' : 'err'} sales:${results.sales?.ok !== false ? 'ok' : 'err'}`,
     }).catch(() => {});
 
-    // ── FASE 3: Motor determinístico de decisão ────────────────────────────
+    // ── FASE 3: Motor canônico, somente com inventário e guarda confirmados ─
     // Aguarda 3 min para dar tempo ao pollAmazonAdsReportJobs processar pelo menos 1 relatório
     console.log('[pipeline] Aguardando 3min para os relatórios ADS iniciarem processamento...');
     await sleep(3 * 60 * 1000);
 
-    console.log('[pipeline] FASE 3: Executando motor determinístico...');
-    results.decision_engine = await invokeWithRetry(db, 'runDeterministicDecisionEngine', {
+    console.log('[pipeline] FASE 3: Executando ciclo canônico V6SIA...');
+    results.decision_engine = await invokeWithRetry(db, 'runCanonicalDecisionCycle', {
       amazon_account_id: aid,
-      auto_approve: true,
-      skip_approval: true,
-    }, 'runDeterministicDecisionEngine');
+      trigger_type: 'full_auto_pipeline',
+      daily_close: false,
+    }, 'runCanonicalDecisionCycle');
 
     // ── FASE 4: Executar decisões aprovadas sem intervenção ────────────────
     console.log('[pipeline] FASE 4: Executando fila de decisões aprovadas...');
-    results.execute_queue = await invokeWithRetry(db, 'executeApprovedDecisionQueue', {
-      amazon_account_id: aid,
-      auto_execute: true,
-      requires_approval: false,
-    }, 'executeApprovedDecisionQueue');
+    results.execute_queue = results.decision_engine?.ok === true
+      ? await invokeWithRetry(db, 'executeApprovedDecisionQueue', {
+          amazon_account_id: aid,
+          auto_execute: true,
+          requires_approval: false,
+        }, 'executeApprovedDecisionQueue')
+      : { ok: false, skipped: true, reason: 'canonical_cycle_not_confirmed' };
 
     // Log de conclusão
     const duration = Date.now() - t0;
@@ -150,7 +151,8 @@ Deno.serve(async (req) => {
       amazon_account_id: aid,
       operation: 'full_auto_pipeline_complete',
       trigger_type: body._service_role ? 'automatic' : 'manual',
-      status: 'success',
+      status: [results.ads_reports, results.catalog, results.sales, results.decision_engine, results.execute_queue]
+        .some((result: any) => result?.ok === false) ? 'warning' : 'success',
       started_at: startAt,
       completed_at: new Date().toISOString(),
       duration_ms: duration,

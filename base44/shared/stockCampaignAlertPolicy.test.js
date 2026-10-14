@@ -20,6 +20,19 @@ test('matches old product-id alerts and canonical ASIN alerts to the same produc
   assert.equal(belongsToStockCampaignAlert(canonical, { asin: 'B0F45JG27L' }), true);
 });
 
+test('scopes stock alerts to SKU when ASIN has multiple seller SKUs', () => {
+  const alerts = [
+    { alert_type: 'campaign_active_no_stock', asin: 'B0SHARED', sku: 'SKU-A', entity_id: 'SKU-A' },
+    { alert_type: 'campaign_active_no_stock', asin: 'B0SHARED', sku: 'SKU-B', entity_id: 'SKU-B' },
+  ];
+  assert.equal(belongsToStockCampaignAlert(alerts[0], { asin: 'B0SHARED', sku: 'SKU-B' }), false);
+  assert.equal(belongsToStockCampaignAlert(alerts[1], { asin: 'B0SHARED', sku: 'SKU-B' }), true);
+  assert.deepEqual(
+    planStockCampaignAlertReconciliation(alerts, { asin: 'B0SHARED', sku: 'SKU-A' }).resolve.map(row => row.sku),
+    ['SKU-A'],
+  );
+});
+
 test('resolves all matching alerts after successful pause and retains one actionable alert if campaigns remain', () => {
   const alerts = [
     { id: 'old', type: 'campaign_active_no_stock', entity_id: 'p1', message: 'B0F45JG27L sem estoque', created_at: '2026-10-01' },
