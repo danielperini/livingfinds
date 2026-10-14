@@ -32,6 +32,10 @@ const economics = [
   { asin: 'B0VARIANT1', sku: 'SKU-BLACK', updated_at: '2026-10-13T11:00:00Z', margin: 50 },
 ];
 assert.equal(resolveSkuScopedRow(products[0], economics)?.margin, 10);
+assert.equal(resolveSkuScopedRow(products[0], [
+  { asin: 'B0VARIANT1', sku: 'SKU-RED', assessment_date: '2026-10-12', margin: 10 },
+  { asin: 'B0VARIANT1', sku: 'SKU-RED', assessment_date: '2026-10-14', margin: 20 },
+])?.margin, 20);
 assert.equal(resolveSkuScopedRow(products[0], [{ asin: 'B0VARIANT1', margin: 999 }]), null);
 
 assert.equal(uniqueCampaignRows([

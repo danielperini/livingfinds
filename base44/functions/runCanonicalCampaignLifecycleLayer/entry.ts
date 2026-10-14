@@ -1,6 +1,7 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { CAMPAIGN_LIFECYCLE_VERSION, shouldRetireAutoCampaign } from '../../shared/campaignLifecyclePolicy.ts';
 import { productAdsEligibility } from '../../shared/productAdsEligibility.ts';
+import { aggregateLatestCampaignMetrics, brazilReportDate, brazilReportDateDaysAgo } from '../../shared/campaignMetricsIntegrity.ts';
 
 const invoke = async (base44: any, name: string, payload: Record<string, unknown>) => {
   try {
@@ -34,7 +35,7 @@ Deno.serve(async (request) => {
     }
 
     const accounts = body.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 50);
     const results: any[] = [];
 
@@ -51,7 +52,7 @@ Deno.serve(async (request) => {
       const [settingsRows, campaigns, products, metricsRows, priorDecisions] = await Promise.all([
         base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: accountId }, '-updated_at', 1).catch(() => []),
         base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, '-created_at', 10000).catch(() => []),
-        base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, null, 5000).catch(() => []),
+        base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, undefined, 5000).catch(() => []),
         base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: accountId }, '-date', 10000).catch(() => []),
         base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: accountId }, '-created_at', 30000).catch(() => []),
       ]);
@@ -170,16 +171,11 @@ Deno.serve(async (request) => {
         eligible_asins: eligibleAsins,
       });
 
-      const lastThreeDays = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
-      const metricsByCampaign = new Map<string, { orders: number; sales: number }>();
-      for (const row of metricsRows) {
-        if (String(row.date || '') < lastThreeDays) continue;
-        const id = String(row.campaign_id || '');
-        const agg = metricsByCampaign.get(id) || { orders: 0, sales: 0 };
-        agg.orders += finite(row.orders);
-        agg.sales += finite(row.sales);
-        metricsByCampaign.set(id, agg);
-      }
+      const lastThreeDays = brazilReportDateDaysAgo(3);
+      const metricsByCampaign = aggregateLatestCampaignMetrics(metricsRows, {
+        startDate: lastThreeDays,
+        endDate: brazilReportDate(),
+      });
 
       const retirementDecisions: any[] = [];
       for (const campaign of campaigns) {

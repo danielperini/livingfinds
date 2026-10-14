@@ -64,16 +64,20 @@ export function resolveSkuScopedRow<T extends Record<string, any>>(
   if (!product) return null;
   const sku = token(product.sku);
   const asin = token(product.asin);
+  const freshestFirst = (a: T, b: T) => new Date(String(
+    b.updated_at || b.updated_date || b.assessment_date || b.created_at || b.created_date || 0,
+  )).getTime() - new Date(String(
+    a.updated_at || a.updated_date || a.assessment_date || a.created_at || a.created_date || 0,
+  )).getTime();
   const fresh = (row: T) => !options.requireFresh || row[options.freshnessField || 'data_fresh'] === true;
   if (sku) {
     const exact = rows.filter((row) => token(row.sku) === sku && fresh(row))
-      .sort((a, b) => new Date(String(b.updated_at || b.created_at || 0)).getTime() -
-        new Date(String(a.updated_at || a.created_at || 0)).getTime());
+      .sort(freshestFirst);
     // An ASIN-level row cannot be attributed to a SKU when variants share the ASIN.
     // Do not borrow it for a SKU-scoped economics or performance decision.
     return exact[0] || null;
   }
-  const asinRows = rows.filter((row) => token(row.asin) === asin && fresh(row));
+  const asinRows = rows.filter((row) => token(row.asin) === asin && fresh(row)).sort(freshestFirst);
   const distinctSkus = new Set(asinRows.map((row) => token(row.sku)).filter(Boolean));
   if (asinRows.length === 1 && (!distinctSkus.size || distinctSkus.size === 1)) return asinRows[0];
   return null;

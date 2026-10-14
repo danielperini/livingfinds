@@ -8,6 +8,8 @@ import {
 import { productAdsEligibility } from '../../shared/productAdsEligibility.ts';
 import { economicsAreActionable, resolveOperatingAcos, resolveSafeMaxCpc } from '../../shared/profitGuardPolicy.ts';
 import { resolveConfiguredBidPolicy } from '../../shared/configuredBidPolicy.ts';
+import { aggregateLatestCampaignMetrics, brazilReportDate, brazilReportDateDaysAgo } from '../../shared/campaignMetricsIntegrity.ts';
+import { resolveProductScope, resolveSkuScopedRow } from '../../shared/skuCampaignScope.ts';
 
 const SOURCE = 'reconcileCampaignDeliveryHealth';
 const active = (v: unknown) => ['enabled', 'active'].includes(String(v || '').toLowerCase());
@@ -98,7 +100,7 @@ Deno.serve(async (request) => {
 
     const dryRun = body.dry_run === true;
     const deliveryLookbackDays = Math.max(1, Math.min(30, Math.floor(n(body.delivery_lookback_days) || 7)));
-    const deliveryCutoff = new Date(Date.now() - (deliveryLookbackDays - 1) * 86400000).toISOString().slice(0, 10);
+    const deliveryCutoff = brazilReportDateDaysAgo(deliveryLookbackDays - 1);
     const configuredLimit = (value: unknown, fallback: number, maximum: number) => {
       const parsed = Number(value);
       return Math.max(0, Math.min(maximum, Number.isFinite(parsed) ? Math.floor(parsed) : fallback));
@@ -135,12 +137,11 @@ Deno.serve(async (request) => {
       const increment = Math.max(0.01, n(settings.bid_increment || settings.allowed_increment || 0.1));
       const targetAcos = n(settings.target_acos || settings.acos_target || 15);
 
-      const productByAsin = new Map<string, any>(products.filter((p: any) => p.asin).map((p: any) => [upper(p.asin), p]));
-      const economicsByAsin = new Map<string, any>(economics.filter((e: any) => e.asin).map((e: any) => [upper(e.asin), e]));
-      const assessmentByAsin = new Map<string, any>();
-      for (const row of assessments) {
-        const asin = upper(row.asin);
-        if (asin && !assessmentByAsin.has(asin)) assessmentByAsin.set(asin, row);
+      const scopeByCampaign = new Map<string, ReturnType<typeof resolveProductScope>>();
+      for (const campaign of campaigns) {
+        const scope = resolveProductScope(campaign, productAds, products);
+        const id = idOf(campaign);
+        if (id) scopeByCampaign.set(id, scope);
       }
       const kwByCampaign = new Map<string, any[]>();
       const adGroupsByCampaign = new Map<string, any[]>();
@@ -161,33 +162,26 @@ Deno.serve(async (request) => {
         productAdsByCampaign.get(cid)!.push(row);
       }
 
-      const metricsByCampaign = new Map<string, any>();
-      for (const row of metrics) {
-        const metricDate = String(row.date || '').slice(0, 10);
-        if (metricDate && metricDate < deliveryCutoff) continue;
-        const cid = String(row.campaign_id || '');
-        const agg = metricsByCampaign.get(cid) || { impressions: 0, clicks: 0, orders: 0, sales: 0, spend: 0 };
-        agg.impressions += n(row.impressions);
-        agg.clicks += n(row.clicks);
-        agg.orders += n(row.orders);
-        agg.sales += n(row.sales);
-        agg.spend += n(row.spend);
-        metricsByCampaign.set(cid, agg);
-      }
-      const metricsByAsin = new Map<string, any>();
+      const metricsByCampaign = aggregateLatestCampaignMetrics(metrics, {
+        startDate: deliveryCutoff,
+        endDate: brazilReportDate(),
+      });
+      const metricsByProductScope = new Map<string, any>();
       for (const campaign of campaigns) {
-        const asin = asinOf(campaign);
+        const scope = scopeByCampaign.get(idOf(campaign));
+        if (scope?.status !== 'resolved' || !scope.product) continue;
+        const scopeKey = scope.sku ? `SKU:${upper(scope.sku)}` : `ASIN:${upper(scope.asin)}`;
         const metric = metricsByCampaign.get(idOf(campaign));
-        if (!asin || !metric) continue;
-        const aggregate = metricsByAsin.get(asin) || { impressions: 0, clicks: 0, orders: 0, sales: 0, spend: 0 };
+        if (!scopeKey || !metric) continue;
+        const aggregate = metricsByProductScope.get(scopeKey) || { impressions: 0, clicks: 0, orders: 0, sales: 0, spend: 0 };
         aggregate.impressions += n(metric.impressions);
         aggregate.clicks += n(metric.clicks);
         aggregate.orders += n(metric.orders);
         aggregate.sales += n(metric.sales);
         aggregate.spend += n(metric.spend);
-        metricsByAsin.set(asin, aggregate);
+        metricsByProductScope.set(scopeKey, aggregate);
       }
-      const today = new Date().toISOString().slice(0, 10);
+      const today = brazilReportDate();
       const currentSpendController = spendControllers.find((row: any) =>
         String(row.date || row.spend_date || row.controller_date || '').slice(0, 10) === today
       );
@@ -216,11 +210,18 @@ Deno.serve(async (request) => {
 
         const campaignId = idOf(campaign);
         if (!campaignId) continue;
-        const asin = asinOf(campaign);
-        const product = productByAsin.get(asin);
+        const scope = scopeByCampaign.get(campaignId);
+        if (scope?.status !== 'resolved' || !scope.product) {
+          actions.push({ campaign_id: campaignId, asin: asinOf(campaign) || null, sku: scope?.sku || null, action: 'VERIFY_PRODUCT_SCOPE', reason: scope?.status || 'missing_identity' });
+          continue;
+        }
+        const asin = scope.asin || asinOf(campaign);
+        const sku = scope.sku;
+        const scopeKey = sku ? `SKU:${upper(sku)}` : `ASIN:${upper(asin)}`;
+        const product = scope.product;
         const eligibility = productAdsEligibility(product);
-        const econ = economicsByAsin.get(asin);
-        const assessment = assessmentByAsin.get(asin);
+        const econ = resolveSkuScopedRow(product, economics);
+        const assessment = resolveSkuScopedRow(product, assessments);
         const campaignKeywords = kwByCampaign.get(campaignId) || [];
         const campaignAdGroups = adGroupsByCampaign.get(campaignId) || [];
         const campaignProductAds = productAdsByCampaign.get(campaignId) || [];
@@ -252,7 +253,7 @@ Deno.serve(async (request) => {
         const createdAt = new Date(campaign.created_at || campaign.created_date || Date.now()).getTime();
         const ageHours = Math.max(0, (Date.now() - createdAt) / 3600000);
         const m = metricsByCampaign.get(campaignId) || { impressions: 0, clicks: 0, orders: 0, sales: 0, spend: 0 };
-        const asinMetrics = metricsByAsin.get(asin) || { impressions: 0, clicks: 0, orders: 0, sales: 0, spend: 0 };
+        const productMetrics = metricsByProductScope.get(scopeKey) || { impressions: 0, clicks: 0, orders: 0, sales: 0, spend: 0 };
         const operatingAcos = resolveOperatingAcos(econ, targetAcos);
         const safeMaxCpc = n(assessment?.safe_max_cpc ?? econ?.safe_max_cpc) || n(resolveSafeMaxCpc({
           economics: econ,
@@ -268,9 +269,9 @@ Deno.serve(async (request) => {
           unitCost: econ?.unit_cost ?? assessment?.product_cost,
           costSource: econ?.cost_source,
           assessmentStatus: assessment?.economic_status,
-          asinSpend: asinMetrics.spend,
-          asinSales: asinMetrics.sales,
-          asinOrders: asinMetrics.orders,
+          asinSpend: productMetrics.spend,
+          asinSales: productMetrics.sales,
+          asinOrders: productMetrics.orders,
           inStock: eligibility.inStock,
           accountOutOfBudget,
           hardStop: accountHardStop,
@@ -334,7 +335,7 @@ Deno.serve(async (request) => {
         }
 
         if (action === 'INCREASE_BID') {
-          if (recoveryAsins.size >= maxBidRecoveriesPerRun || recoveryAsins.has(asin)) {
+          if (recoveryAsins.size >= maxBidRecoveriesPerRun || recoveryAsins.has(scopeKey)) {
             actions.push({ campaign_id: campaignId, asin, action: 'WAIT_BID_RECOVERY_CAP', maximum_per_run: maxBidRecoveriesPerRun });
             continue;
           }
@@ -376,7 +377,7 @@ Deno.serve(async (request) => {
                 execution_mode: 'STANDARD_QUEUE', confirmation_required: true, confirmation_status: 'pending', requires_approval: false,
                 approval_status: 'auto_approved', idempotency_key: key, conflict_group: `${accountId}|keyword|${keywordId}`,
                 source_function: SOURCE, model_version: 'campaign-delivery-health-v5.0-serving-profit-v19',
-                data_used: JSON.stringify({ age_hours: ageHours, impressions: m.impressions, clicks: m.clicks, prior_escalations: priorEscalations, cancelled_bid_attempts: cancelledBidAttempts, increment, min_bid: minBid, account_max_bid: bidPolicy.maxBid, configured_max_cpc: bidPolicy.maxCpc, configured_bid_ceiling: bidPolicy.ceiling, safe_max_cpc: economicCap, operating_acos: operatingAcos.target_acos, economics_source: bootstrap.economics_source, asin_spend: bootstrap.asin_spend, asin_spend_cap: bootstrap.spend_cap }),
+                data_used: JSON.stringify({ asin, sku: sku || null, product_scope: scopeKey, age_hours: ageHours, impressions: m.impressions, clicks: m.clicks, prior_escalations: priorEscalations, cancelled_bid_attempts: cancelledBidAttempts, increment, min_bid: minBid, account_max_bid: bidPolicy.maxBid, configured_max_cpc: bidPolicy.maxCpc, configured_bid_ceiling: bidPolicy.ceiling, safe_max_cpc: economicCap, operating_acos: operatingAcos.target_acos, economics_source: bootstrap.economics_source, sku_spend: bootstrap.asin_spend, sku_spend_cap: bootstrap.spend_cap }),
                 created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
               });
               if (reused) reusedDecisions++;
@@ -384,7 +385,7 @@ Deno.serve(async (request) => {
               if (decisionId && !['confirmed', 'executed', 'cancelled', 'rejected'].includes(String(decision?.status || '').toLowerCase())) queuedDecisionIds.add(decisionId);
             }
             actions.push({ campaign_id: campaignId, asin, action: 'INCREASE_BID', keyword_id: keywordId, current_bid: currentBid, target_bid: targetBid, configured_bid_ceiling: bidPolicy.ceiling, safe_max_cpc: economicCap, operating_acos: operatingAcos.target_acos });
-            recoveryAsins.add(asin);
+            recoveryAsins.add(scopeKey);
           }
           if (action !== 'PAUSE_AND_REPLACE') continue;
         }
@@ -463,16 +464,18 @@ Deno.serve(async (request) => {
       }
 
       const selectedRepairCandidates: any[] = [];
-      const selectedRepairAsins = new Set<string>();
+      const selectedRepairProductScopes = new Set<string>();
       const selectedRepairCampaigns = new Set<string>();
       for (const candidate of [...repairCandidates].sort((a, b) =>
         n(b.bootstrap?.remaining_spend_headroom) - n(a.bootstrap?.remaining_spend_headroom) || b.ageHours - a.ageHours
       )) {
         if (selectedRepairCandidates.length >= maxStructureRepairsPerRun) break;
-        if (!candidate.campaignId || selectedRepairCampaigns.has(candidate.campaignId) || selectedRepairAsins.has(candidate.asin)) continue;
+        const candidateScope = scopeByCampaign.get(candidate.campaignId);
+        const productScopeKey = candidateScope?.sku ? `SKU:${upper(candidateScope.sku)}` : `ASIN:${upper(candidate.asin)}`;
+        if (!candidate.campaignId || selectedRepairCampaigns.has(candidate.campaignId) || selectedRepairProductScopes.has(productScopeKey)) continue;
         selectedRepairCandidates.push(candidate);
         selectedRepairCampaigns.add(candidate.campaignId);
-        selectedRepairAsins.add(candidate.asin);
+        selectedRepairProductScopes.add(productScopeKey);
       }
 
       const repairBidCaps: Record<string, number> = {};

@@ -7,6 +7,7 @@ import {
 } from '../../shared/profitGuardPolicy.ts';
 import { productAdsEligibility } from '../../shared/productAdsEligibility.ts';
 import { canonicalAccountSalesByDate } from '../../shared/salesDailyIntegrity.ts';
+import { aggregateLatestCampaignMetrics, brazilReportDateDaysAgo } from '../../shared/campaignMetricsIntegrity.ts';
 import {
   calculateServingGrowthGoal,
   calculateEconomicPromotionCapacity,
@@ -34,7 +35,7 @@ const automatic = (row: any) => {
 };
 const manual = (row: any) => !automatic(row);
 const brtDate = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
-const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+const daysAgo = (days: number) => brazilReportDateDaysAgo(days);
 const ageHours = (row: any) => {
   const created = new Date(row?.created_at || row?.created_date || row?.start_date || 0).getTime();
   return Number.isFinite(created) && created > 0 ? Math.max(0, (Date.now() - created) / 3_600_000) : Infinity;
@@ -169,29 +170,9 @@ Deno.serve(async (request) => {
       const campaigns = canonicalCampaigns(campaignRows);
       const activeCampaigns = campaigns.filter(active);
       const latestIntraday = latestIntradayByCampaign(intradayRows);
-      const todayMetrics = new Map<string, Metrics>();
-      const deliveryMetrics = new Map<string, Metrics>();
-      const metrics30 = new Map<string, Metrics>();
-      for (const row of dailyRows) {
-        const id = campaignIdOf(row);
-        const date = String(row?.date || '').slice(0, 10);
-        if (!id || !date) continue;
-        if (date === today) {
-          const aggregate = todayMetrics.get(id) || emptyMetrics();
-          addMetrics(aggregate, row);
-          todayMetrics.set(id, aggregate);
-        }
-        if (date >= cutoffDelivery && date <= today) {
-          const aggregate = deliveryMetrics.get(id) || emptyMetrics();
-          addMetrics(aggregate, row);
-          deliveryMetrics.set(id, aggregate);
-        }
-        if (date >= cutoff30 && date <= today) {
-          const aggregate = metrics30.get(id) || emptyMetrics();
-          addMetrics(aggregate, row);
-          metrics30.set(id, aggregate);
-        }
-      }
+      const todayMetrics = aggregateLatestCampaignMetrics(dailyRows, { startDate: today, endDate: today }) as Map<string, Metrics>;
+      const deliveryMetrics = aggregateLatestCampaignMetrics(dailyRows, { startDate: cutoffDelivery, endDate: today }) as Map<string, Metrics>;
+      const metrics30 = aggregateLatestCampaignMetrics(dailyRows, { startDate: cutoff30, endDate: today }) as Map<string, Metrics>;
 
       const metricsTodayFor = (campaign: any): Metrics => {
         const id = campaignIdOf(campaign);

@@ -23,6 +23,7 @@ import {
   upsertDailyController,
   writePacingAudit,
 } from './portfolioBudgetActions.ts';
+import { latestCampaignMetricsByDay } from './campaignMetricsIntegrity.ts';
 
 const MAX_PAUSES = 6;
 const MAX_HARD_CAP_PAUSES = 25;
@@ -79,7 +80,7 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
   const accountId = String(account?.id || '');
   if (!accountId) return { ok: false, error: 'AmazonAccount inválida' };
 
-  const [performanceRows, configRows, controllerRows, campaigns, products, economics, patterns, snapshots, closedMetrics] = await Promise.all([
+  const [performanceRows, configRows, controllerRows, campaigns, products, economics, patterns, snapshots, metricRows] = await Promise.all([
     base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: accountId }, '-updated_at', 1).catch(() => []),
     base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: accountId }, '-updated_at', 1).catch(() => []),
     base44.asServiceRole.entities.AccountDailySpendController.filter(
@@ -96,6 +97,8 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
       { amazon_account_id: accountId }, '-date', 10000,
     ).catch(() => []),
   ]);
+
+  const closedMetrics = latestCampaignMetricsByDay(metricRows);
 
   const performance = performanceRows[0] || {};
   const config = configRows[0] || {};
