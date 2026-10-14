@@ -81,6 +81,7 @@ jobs:
             base44/shared/manualKickoffReactivationPolicy.test.ts \
             base44/shared/skuCampaignScope.test.ts \
             base44/shared/campaignMetricsIntegrity.test.ts \
+            base44/shared/optimizationDecisionIdempotency.test.ts \
             base44/shared/economicBudgetBalancer.test.ts
       - name: Check SKU campaign distribution enforcement
         run: |
@@ -127,6 +128,7 @@ jobs:
             base44/functions/runEconomicBudgetBalancer/entry.ts \
             base44/functions/reconcileCampaignDeliveryHealth/entry.ts \
             base44/functions/runCanonicalCampaignLifecycleLayer/entry.ts \
+            base44/shared/optimizationDecisionIdempotency.ts \
             base44/functions/runEconomicCurveAdsGuard/entry.ts \
             base44/functions/runAsinPeakProfileLearning/entry.ts \
             base44/functions/promoteWinningSearchTerms/entry.ts \
