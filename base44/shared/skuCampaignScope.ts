@@ -152,3 +152,4 @@ export function selectCampaignHourEvidence(params: {
   if (pattern) return { row: pattern, source: 'sku_pattern' as const };
   if (profileRow) return { row: profileRow, source: 'sku_profile' as const };
   return { row: null, source: 'no_campaign_or_sku_history' as const };
+}
