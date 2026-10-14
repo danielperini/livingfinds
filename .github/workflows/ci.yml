@@ -166,6 +166,7 @@ jobs:
             base44/functions/smartBidFromCpc/entry.ts \
             base44/functions/runSalesModeWasteRotation/entry.ts \
             base44/functions/runSalesMode/entry.ts
+          deno test --node-modules-dir=auto base44/shared/searchTermWastePolicy.test.ts
       - name: Test scheduler and Hostinger OpenAI routing
         run: deno test --allow-read=base44/schedules/amazon-automation-schedule.json --node-modules-dir=auto server/src/scheduler.test.ts server/src/sdk/integrations.test.ts
       - name: Type-check Hostinger scheduler and health route
