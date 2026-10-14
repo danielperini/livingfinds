@@ -252,10 +252,23 @@ Deno.serve(async (req) => {
             activeManual === 0 ? 'manual_only_after_verified_winner' : 'coverage_present',
         }];
       });
+      const manualCounts = skuRows.map((row: any) => row.active_manual_campaigns).sort((a: number, b: number) => a - b);
+      const middle = Math.floor(manualCounts.length / 2);
+      const manualMedian = manualCounts.length === 0 ? 0 : manualCounts.length % 2
+        ? manualCounts[middle] : (manualCounts[middle - 1] + manualCounts[middle]) / 2;
+      const balancedSkuRows = skuRows.map((row: any) => ({
+        ...row, portfolio_active_manual_median: manualMedian,
+        manual_campaign_gap_to_median: manualMedian - row.active_manual_campaigns,
+        manual_campaign_balance: row.active_manual_campaigns < manualMedian ? 'below_portfolio_median' :
+          row.active_manual_campaigns > manualMedian ? 'above_portfolio_median' : 'at_portfolio_median',
+        recommendation: row.active_auto_campaigns === 0 ? 'review_automatic_coverage' :
+          row.active_manual_campaigns < manualMedian ? 'manual_expansion_only_after_verified_winner' :
+            'coverage_present',
+      }));
       skuCampaignAnalysis = {
         date: new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10),
         amazon_account_id: amazonAccountId, source: 'amazon_sp_productAds_list_plus_campaigns',
-        product_ads_received: adsList.length, distinct_skus: skuRows.length, sku_rows: skuRows,
+        product_ads_received: adsList.length, distinct_skus: balancedSkuRows.length, sku_rows: balancedSkuRows,
         ambiguous_product_ads: ambiguousProductAds, unlinked_product_ads: unlinkedProductAds,
         counts_are_distinct_campaign_ids: true, campaign_budgets_are_independent_references: true,
       };

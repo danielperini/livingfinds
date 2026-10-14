@@ -134,7 +134,7 @@ Deno.serve(async (req) => {
     } else skipped.push('sync_campaign_states');
 
     // A sincronização percorre todas as páginas de Product Ads e grava a análise por SKU.
-    if (!productAdsDone || force) add('syncProductAds', 'sku_campaign_daily_analysis', { trigger_type: 'scheduled_daily' }, true);
+    if (!productAdsDone || force) add('syncProductAds', 'sku_campaign_daily_analysis', { trigger_type: 'scheduled_daily' });
     else skipped.push('sku_campaign_daily_analysis');
 
     // 1x/dia: inventário
