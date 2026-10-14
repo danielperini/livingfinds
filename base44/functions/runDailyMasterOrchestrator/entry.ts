@@ -77,13 +77,14 @@ Deno.serve(async (req) => {
     // ── Verificar estado de cada etapa em paralelo ────────────────────────
     const [
       catalogDone, salesDone, allJobsExist,
-      campStateDone, invDone, manualTermsDone,
+      campStateDone, productAdsDone, invDone, manualTermsDone,
       eval72hDone, backupDone, acosCheckerDone,
     ] = await Promise.all([
       wasRunTodaySuccessfully(base44, aid, 'sync_catalog'),
       wasRunTodaySuccessfully(base44, aid, 'sync_sales'),
       hasValidReportJobsToday(base44, aid),
       wasRunTodaySuccessfully(base44, aid, 'sync_campaign_states'),
+      wasRunTodaySuccessfully(base44, aid, 'sku_campaign_daily_analysis'),
       wasRunTodaySuccessfully(base44, aid, 'inventory_kickoff'),
       wasRunTodaySuccessfully(base44, aid, 'manual_campaign_terms'),
       wasRunTodaySuccessfully(base44, aid, 'evaluate_new_campaigns_72h'),
@@ -131,6 +132,10 @@ Deno.serve(async (req) => {
       add('syncAdsCampaignStatesV2', 'sync_campaign_states', {}, true);
       add('syncAdGroupsAndKeywords', 'sync_ad_groups_keywords');
     } else skipped.push('sync_campaign_states');
+
+    // A sincronização percorre todas as páginas de Product Ads e grava a análise por SKU.
+    if (!productAdsDone || force) add('syncProductAds', 'sku_campaign_daily_analysis', { trigger_type: 'scheduled_daily' }, true);
+    else skipped.push('sku_campaign_daily_analysis');
 
     // 1x/dia: inventário
     if (!invDone || force) add('checkInventoryChangesAndKickoff', 'inventory_kickoff', {}, true);
