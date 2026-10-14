@@ -52,7 +52,7 @@ function decisionWindow(minutes: number): string {
   return new Date(Math.floor(Date.now() / width) * width).toISOString();
 }
 
-async function list(entity: any, filters: Record<string, unknown>, sort = '-updated_at', limit = 10000) {
+async function list(entity: any, filters: Record<string, unknown>, sort = '-updated_at', limit = 10000): Promise<any[]> {
   return entity.filter(filters, sort, limit).catch(() => []);
 }
 
@@ -287,7 +287,7 @@ Deno.serve(async (request) => {
       const latestIntraday = latestIntradayByCampaign(intradayRows);
       const latestTodayMetrics = latestMetricsByCampaign(historyRows, today);
       const accountSpend = readConfirmedTodaySpend({ snapshots: intradayRows, dailyMetrics: historyRows, spendDate: today });
-      const campaignRows = uniqueCampaignRows(campaigns.filter((row) => upper(row.campaign_type || 'SP') === 'SP'));
+      const campaignRows = uniqueCampaignRows(campaigns.filter((row: any) => upper(row.campaign_type || 'SP') === 'SP'));
       const campaignById = new Map<string, any>(campaignRows.map((row: any) => [campaignIdOf(row), row]));
       const promotedFromAuto = new Set(promotions.filter((promotion: any) =>
         ['manual_active', 'completed', 'keyword_created'].includes(lower(promotion.promotion_status)) &&
@@ -369,7 +369,7 @@ Deno.serve(async (request) => {
       const blocked: any[] = [];
       const now = Date.now();
       const oneHourAgo = now - 3600000;
-      let changesThisHour = priorDecisions.filter((decision) =>
+      let changesThisHour = priorDecisions.filter((decision: any) =>
         decision.source_function === SOURCE && new Date(String(decision.created_at || decision.evaluated_at || 0)).getTime() >= oneHourAgo &&
         !['failed', 'cancelled', 'rejected', 'skipped'].includes(String(decision.status || ''))).length;
 
@@ -452,14 +452,14 @@ Deno.serve(async (request) => {
 
         let canonicalBid: ReturnType<typeof buildCanonicalBidDecision> | null = null;
         if (['increase_bid', 'reduce_bid'].includes(adjustment.action) && bidEntity) {
-          const bidCooldownActive = priorDecisions.some((decision) => {
+          const bidCooldownActive = priorDecisions.some((decision: any) => {
             const isSameEntity = String(decision.entity_id || '') === String(bidEntity.entityId);
             const isBidAction = /bid/i.test(String(decision.canonical_action_type || decision.action || decision.decision_type || ''));
             const changedAt = new Date(String(decision.executed_at || decision.approved_at || decision.created_at || 0)).getTime();
             return isSameEntity && isBidAction && Number.isFinite(changedAt) && changedAt >= now - 48 * 3600000 &&
               !['failed', 'cancelled', 'rejected', 'skipped', 'blocked'].includes(String(decision.status || ''));
           });
-          const priorReductionCount = priorDecisions.filter((decision) =>
+          const priorReductionCount = priorDecisions.filter((decision: any) =>
             String(decision.entity_id || '') === String(bidEntity.entityId) &&
             Number(decision.value_after) < Number(decision.value_before) &&
             !['failed', 'cancelled', 'rejected', 'skipped', 'blocked'].includes(String(decision.status || ''))
@@ -531,22 +531,23 @@ Deno.serve(async (request) => {
           blocked.push({ campaign_id: row.campaignId, classification: row.classification, reason: 'BID_ENTITY_NOT_CONFIRMED' });
           continue;
         }
-        const entityType = isBudget ? 'campaign' : bidEntity.entityType;
-        const entityId = isBudget ? row.campaignId : bidEntity.entityId;
+        const targetBidEntity = bidEntity as NonNullable<typeof bidEntity>;
+        const entityType = isBudget ? 'campaign' : targetBidEntity.entityType;
+        const entityId = isBudget ? row.campaignId : targetBidEntity.entityId;
         const action = adjustment.action;
         const window = decisionWindow(config.decisionWindowMinutes);
         const marketplaceId = String(account.marketplace_id || account.marketplace || 'unknown_marketplace');
         const key = canonicalDecisionIdempotencyKey({
           accountId, profileId, marketplaceId, entityType, entityId, actionType: action, decisionWindow: window,
         });
-        const prior = priorDecisions.find((decision) => decision.idempotency_key === key);
+        const prior = priorDecisions.find((decision: any) => decision.idempotency_key === key);
         if (prior) {
           blocked.push({ campaign_id: row.campaignId, entity_id: entityId, classification: row.classification, reason: 'IDEMPOTENT_WINDOW' });
           continue;
         }
 
         const cooldownHours = row.classification === 'LOW_VOLUME_GUARDED' ? config.lowVolumeCooldownHours : config.cooldownHours;
-        const recentForEntity = priorDecisions.find((decision) => {
+        const recentForEntity = priorDecisions.find((decision: any) => {
           if (decision.source_function !== SOURCE || String(decision.entity_id || '') !== entityId) return false;
           const created = new Date(String(decision.created_at || decision.evaluated_at || 0)).getTime();
           return created >= now - cooldownHours * 3600000 && !['failed', 'cancelled', 'rejected', 'skipped'].includes(String(decision.status || ''));
@@ -561,7 +562,7 @@ Deno.serve(async (request) => {
           continue;
         }
 
-        const valueBefore = isBudget ? currentBudget : bidEntity.currentBid;
+        const valueBefore = isBudget ? currentBudget : targetBidEntity.currentBid;
         const reviewHours = isBudget ? adjustment.nextReviewHours : 72;
         const evaluationDueAt = new Date(Date.now() + reviewHours * 3600000).toISOString();
         const evidence = {
@@ -572,7 +573,7 @@ Deno.serve(async (request) => {
           account_committed_spend: accountCommittedSpend,
           account_hard_cap_blocks_growth: accountHardCapBlocksGrowth,
         account_spend_source: accountSpend.source,
-        account_spend_updated_at: accountSpend.capturedAt || accountSpend.observedAt || null,
+        account_spend_updated_at: accountSpend.capturedAt || ('observedAt' in accountSpend ? accountSpend.observedAt : null) || null,
           remaining_account_budget: remainingBudget,
           hours_remaining_today: Math.max(0, 24 - Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false }).format(new Date()))),
           
@@ -610,10 +611,10 @@ Deno.serve(async (request) => {
           idempotency_key: key,
           campaign_id: row.campaignId,
           campaign_name: row.campaign.name || row.campaign.campaign_name,
-          ad_group_id: isBudget ? null : bidEntity.adGroupId,
+          ad_group_id: isBudget ? null : targetBidEntity.adGroupId,
           entity_type: entityType,
           entity_id: entityId,
-          entity_name: isBudget ? row.campaign.name || row.campaign.campaign_name : bidEntity.entityName,
+          entity_name: isBudget ? row.campaign.name || row.campaign.campaign_name : targetBidEntity.entityName,
           asin: row.productScope.asin || null,
           sku: row.productScope.sku || null,
           classification: row.classification,
@@ -827,7 +828,7 @@ Deno.serve(async (request) => {
         account_committed_spend: accountCommittedSpend,
         account_hard_cap_blocks_growth: accountHardCapBlocksGrowth,
         account_spend_source: accountSpend.source,
-        account_spend_updated_at: accountSpend.capturedAt || accountSpend.observedAt || null,
+        account_spend_updated_at: accountSpend.capturedAt || ('observedAt' in accountSpend ? accountSpend.observedAt : null) || null,
         remaining_account_budget: remainingBudget,
         classifications: classificationCounts,
         campaigns_analyzed: campaignSummary.length,
@@ -861,7 +862,7 @@ Deno.serve(async (request) => {
           feature_enabled: featureEnabled,
           account_daily_spend: result.account_daily_spend,
           account_committed_spend: result.account_committed_spend,
-          account_out_of_budget: result.account_out_of_budget,
+          account_out_of_budget: result.account_hard_cap_blocks_growth,
           remaining_account_budget: result.remaining_account_budget,
           classifications: classificationCounts,
           proposed: result.changes_proposed,
