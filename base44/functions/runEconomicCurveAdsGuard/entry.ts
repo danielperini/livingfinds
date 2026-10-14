@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
+import { resolveProductScope, resolveSkuScopedRow } from '../../shared/skuCampaignScope.ts';
 
 const MIN_BID = 0.25;
 const MAX_ACTIONS = 20;
@@ -101,8 +102,8 @@ Deno.serve(async (request) => {
     if (!authenticated && !body._service_role) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
 
     const accounts = body.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
-      : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, null, 100);
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
+      : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, undefined, 100);
 
     const results: any[] = [];
     for (const account of accounts) {
@@ -183,6 +184,7 @@ Deno.serve(async (request) => {
       const activeKeys = new Set(decisions
         .filter((d: any) => !['failed', 'failed_final', 'cancelled', 'expired', 'superseded', 'rolled_back'].includes(low(d.status)))
         .map((d: any) => s(d.idempotency_key)));
+      const campaignById = new Map(campaigns.map((campaign: any) => [s(campaign.campaign_id || campaign.amazon_campaign_id || campaign.id), campaign]));
       const activeKeywords = keywords.filter(enabled);
       const candidates: any[] = [];
 
