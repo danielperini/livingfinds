@@ -79,6 +79,7 @@ jobs:
             base44/shared/autoCampaignRepairPolicy.test.ts \
             base44/shared/skuCampaignDistributionPolicy.test.ts \
             base44/shared/skuCampaignScope.test.ts \
+            base44/shared/campaignMetricsIntegrity.test.ts \
             base44/shared/economicBudgetBalancer.test.ts
       - name: Check SKU campaign distribution enforcement
         run: |
@@ -121,7 +122,10 @@ jobs:
         run: |
           deno check --node-modules-dir=auto \
             base44/shared/skuCampaignScope.ts \
+            base44/shared/campaignMetricsIntegrity.ts \
             base44/functions/runEconomicBudgetBalancer/entry.ts \
+            base44/functions/reconcileCampaignDeliveryHealth/entry.ts \
+            base44/functions/runCanonicalCampaignLifecycleLayer/entry.ts \
             base44/functions/runEconomicCurveAdsGuard/entry.ts \
             base44/functions/runAsinPeakProfileLearning/entry.ts \
             base44/functions/promoteWinningSearchTerms/entry.ts \
@@ -143,6 +147,7 @@ jobs:
             base44/shared/portfolioBudgetMath.ts \
             base44/shared/portfolioBudgetActions.ts \
             base44/shared/portfolioBudgetPacing.ts \
+            base44/shared/campaignMetricsIntegrity.ts \
             base44/shared/amazonBidCeiling.ts \
             base44/shared/configuredBidPolicy.ts \
             base44/shared/winnerBidPolicy.ts \
