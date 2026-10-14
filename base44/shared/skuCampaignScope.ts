@@ -23,16 +23,16 @@ export function uniqueCampaignRows(rows: any[]) {
 /** Resolve by SKU first. ASIN fallback is allowed only when it identifies one SKU. */
 export function resolveProductScope(campaign: any, productAds: any[], products: any[]): ProductScope {
   const id = campaignId(campaign);
-  const linkedAds = productAds.filter((row) => String(row?.campaign_id || '') === id);
+  const linkedAds = productAds.filter((row) => String(row?.amazon_campaign_id || row?.campaign_id || '') === id);
   const linkedSkus = new Set(linkedAds.map((row) => token(row?.sku)).filter(Boolean));
   const explicitSku = token(campaign?.sku || (linkedSkus.size === 1 ? [...linkedSkus][0] : ''));
   const linkedAsins = new Set(linkedAds.map((row) => token(row?.asin)).filter(Boolean));
   const explicitAsin = token(campaign?.asin || (linkedAsins.size === 1 ? [...linkedAsins][0] : ''));
 
-  if (!campaign?.sku && linkedSkus.size > 1) {
+  if (linkedSkus.size > 1 || (token(campaign?.sku) && linkedSkus.size === 1 && !linkedSkus.has(token(campaign.sku)))) {
     return { product: null, sku: '', asin: explicitAsin, status: 'ambiguous', identitySource: 'none' };
   }
-  if (!campaign?.asin && linkedAsins.size > 1) {
+  if (linkedAsins.size > 1 || (token(campaign?.asin) && linkedAsins.size === 1 && !linkedAsins.has(token(campaign.asin)))) {
     return { product: null, sku: explicitSku, asin: '', status: 'ambiguous', identitySource: 'none' };
   }
 
@@ -102,6 +102,15 @@ export function resolveAccountHardCap(cap: number, confirmedSpend: number, pendi
   };
 }
 
+function safeHours(value: unknown): number[] {
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    return Array.isArray(parsed) ? parsed.map(Number).filter((hour) => Number.isInteger(hour) && hour >= 0 && hour < 24) : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Learned hourly evidence is isolated to the exact campaign or its exact SKU. */
 export function selectCampaignHourEvidence(params: {
   decisions: any[];
@@ -123,14 +132,23 @@ export function selectCampaignHourEvidence(params: {
   const exactPatterns = patterns.filter((row) =>
     token(row.sku) === token(sku) && token(sku) !== '' &&
     Number(row.day_of_week) === dayOfWeek && Number(row.hour) === hour &&
-    !(Number(row.hour) === 0 && Number(row.occurrences || 0) > 24 && !row.sku));
+    row.slot_label !== 'SKU_PROFILE_ANCHOR' && !row.asin_data_maturity);
   const pattern = exactPatterns.sort((a, b) =>
     new Date(String(b.updated_at || b.created_at || 0)).getTime() -
     new Date(String(a.updated_at || a.created_at || 0)).getTime())[0] || null;
-  if (learnedDecision && (!pattern || new Date(String(learnedDecision.updated_at || learnedDecision.created_at || 0)).getTime() >=
-    new Date(String(pattern.updated_at || pattern.created_at || 0)).getTime())) {
+  const profile = patterns.filter((row) =>
+    token(row.sku) === token(sku) && token(sku) !== '' &&
+    (row.slot_label === 'SKU_PROFILE_ANCHOR' || Boolean(row.asin_data_maturity)))
+    .sort((a, b) => new Date(String(b.asin_profile_updated_at || b.updated_at || b.created_at || 0)).getTime() -
+      new Date(String(a.asin_profile_updated_at || a.updated_at || a.created_at || 0)).getTime())[0] || null;
+  const profileRow = profile && String(profile.asin_data_maturity) === 'sufficient'
+    ? { ...profile, classification: safeHours(profile.asin_peak_hours_json).includes(hour) ? 'PEAK_STRONG' : safeHours(profile.asin_low_hours_json).includes(hour) ? 'WEAK' : 'NORMAL' }
+    : null;
+  const skuPattern = pattern || profileRow;
+  if (learnedDecision && (!skuPattern || new Date(String(learnedDecision.updated_at || learnedDecision.created_at || 0)).getTime() >=
+    new Date(String(skuPattern.updated_at || skuPattern.asin_profile_updated_at || skuPattern.created_at || 0)).getTime())) {
     return { row: learnedDecision, source: 'campaign_decision' as const };
   }
   if (pattern) return { row: pattern, source: 'sku_pattern' as const };
+  if (profileRow) return { row: profileRow, source: 'sku_profile' as const };
   return { row: null, source: 'no_campaign_or_sku_history' as const };
-}
