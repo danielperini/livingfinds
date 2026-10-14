@@ -85,9 +85,18 @@
       "type": "number",
       "default": 0.5
     },
-    "initial_budget": { "type": "number", "default": 0 },
-    "winner_score": { "type": "number", "default": 0 },
-    "amazon_confirmation_status": { "type": "string", "default": "pending" },
+    "initial_budget": {
+      "type": "number",
+      "default": 0
+    },
+    "winner_score": {
+      "type": "number",
+      "default": 0
+    },
+    "amazon_confirmation_status": {
+      "type": "string",
+      "default": "pending"
+    },
     "destination_campaign_id": {
       "type": "string"
     },
@@ -164,6 +173,78 @@
     "next_retry_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "source_sku": {
+      "type": "string"
+    },
+    "destination_sku": {
+      "type": "string"
+    },
+    "source_asin": {
+      "type": "string"
+    },
+    "source_account_profile_id": {
+      "type": "string"
+    },
+    "destination_account_profile_id": {
+      "type": "string"
+    },
+    "source_marketplace": {
+      "type": "string"
+    },
+    "destination_marketplace": {
+      "type": "string"
+    },
+    "relevance_reason": {
+      "type": "string"
+    },
+    "review_block_reason": {
+      "type": "string"
+    },
+    "source_orders": {
+      "type": "number"
+    },
+    "source_acos": {
+      "type": "number"
+    },
+    "source_roas": {
+      "type": "number"
+    },
+    "source_cpc": {
+      "type": "number"
+    },
+    "heuristic_relevance_score": {
+      "type": "number"
+    },
+    "ai_relevance_score": {
+      "type": "number"
+    },
+    "destination_safe_max_cpc": {
+      "type": "number"
+    },
+    "source_attribution_verified": {
+      "type": "boolean",
+      "default": false
+    },
+    "destination_economics_verified": {
+      "type": "boolean",
+      "default": false
+    },
+    "destination_stock_verified": {
+      "type": "boolean",
+      "default": false
+    },
+    "destination_listing_buyable": {
+      "type": "boolean",
+      "default": false
+    },
+    "destination_ads_authorized": {
+      "type": "boolean",
+      "default": false
+    },
+    "ai_relevance_validated": {
+      "type": "boolean",
+      "default": false
     }
   },
   "required": [
