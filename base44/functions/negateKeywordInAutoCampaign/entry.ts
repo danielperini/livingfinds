@@ -9,12 +9,12 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const tokenCache = {};
+const tokenCache: Record<string, { access_token: string; expires_at: number }> = {};
 
-async function getAdsToken(refreshToken) {
+async function getAdsToken(refreshToken: string | null | undefined): Promise<string> {
   const cached = tokenCache['neg'];
   if (cached && cached.expires_at > Date.now()) return cached.access_token;
-  const params = new URLSearchParams({
+  const clientId = Deno.env.get('ADS_CLIENT_ID') || '';\n  const clientSecret = Deno.env.get('ADS_CLIENT_SECRET') || '';\n  const token = refreshToken || Deno.env.get('ADS_REFRESH_TOKEN') || '';\n  if (!clientId || !clientSecret || !token) throw new Error('Credenciais Amazon Ads incompletas');\n  const params = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: refreshToken || Deno.env.get('ADS_REFRESH_TOKEN'),
     client_id: Deno.env.get('ADS_CLIENT_ID'),
@@ -29,21 +29,21 @@ async function getAdsToken(refreshToken) {
   return data.access_token;
 }
 
-function getAdsBaseUrl(account) {
+function getAdsBaseUrl(account: any): string {
   const r = (account?.region || Deno.env.get('ADS_REGION') || 'NA').toUpperCase();
   if (r.includes('EU')) return 'https://advertising-api-eu.amazon.com';
   if (r.includes('FE')) return 'https://advertising-api-fe.amazon.com';
   return 'https://advertising-api.amazon.com';
 }
 
-async function adsCall(account, method, path, body) {
+async function adsCall(account: any, method: string, path: string, body: unknown) {
   const token = await getAdsToken(account?.ads_refresh_token);
   const profileId = account?.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
   const res = await fetch(`${getAdsBaseUrl(account)}${path}`, {
     method,
     headers: {
       'Authorization': `Bearer ${token}`,
-      'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
+      'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
       'Amazon-Advertising-API-Scope': String(profileId),
       'Content-Type': 'application/json',
     },
@@ -134,7 +134,7 @@ Deno.serve(async (req) => {
       keyword_text: kwText,
       decision_type: 'negative_keyword',
       status: 'executed',
-    }, null, 1);
+    }, undefined, 1);
 
     if (existingDecisions.length > 0) {
       return Response.json({
