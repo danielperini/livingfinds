@@ -746,7 +746,7 @@ Deno.serve(async (request) => {
                 await base44.asServiceRole.entities.AdGroup.update(group.id, { ...state, default_bid: targetBid }).catch(() => {});
               }
 
-              await logBid(base44, { amazon_account_id: aid, campaign_id: cid, asin, sku, ad_group_id: gid, entity_type: entity.entityType, entity_id: entity.entityId, keyword_id: entity.keyword?.keyword_id || null, keyword_text: entity.keyword?.keyword_text || entity.target?.target_value || null, target_id: entity.target?.target_id || null, asin, bid_before: currentBid, bid_after: targetBid, base_bid: baseBid, reason, classification: slot.classification, now: clock.iso });
+              await logBid(base44, { amazon_account_id: aid, campaign_id: cid, asin, sku, ad_group_id: gid, entity_type: entity.entityType, entity_id: entity.entityId, keyword_id: entity.keyword?.keyword_id || null, keyword_text: entity.keyword?.keyword_text || entity.target?.target_value || null, target_id: entity.target?.target_id || null, bid_before: currentBid, bid_after: targetBid, base_bid: baseBid, reason, classification: slot.classification, now: clock.iso });
               executed++;
               if (restoring) restored++;
             } else failed++;
@@ -808,7 +808,7 @@ Deno.serve(async (request) => {
       native_rules_reactivated: nativeRulesReactivated,
       account_hard_cap_reached: accountHardCapReached,
       account_spend_source: todaySpend.source,
-      account_spend_updated_at: todaySpend.capturedAt || todaySpend.observedAt || null,
+      account_spend_updated_at: todaySpend.capturedAt || ('observedAt' in todaySpend ? todaySpend.observedAt : null) || null,
       confirmed_spend_today: r2(confirmedSpend),
       daily_cap: dailyCap,
       budget_scope: 'global_cap_only_campaign_budgets_are_references',
