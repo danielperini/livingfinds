@@ -1,6 +1,7 @@
 import { assertEquals } from 'jsr:@std/assert@1';
 import {
   dailyCatchUpSlot,
+  failedJobStages,
   isDailyCycleExecutionConfirmedResponse,
   isStaleFinalAttempt,
   isSuccessfulJobResponse,
@@ -147,16 +148,31 @@ Deno.test('persistent scheduler states retry only after due time and stop termin
   assertEquals(isStaleFinalAttempt(finalStaleRun, now, 6), true);
 });
 
-Deno.test('exhausted daily catch-up receives one bounded recovery after cooldown', () => {
+Deno.test('exhausted daily catch-up receives bounded recoveries after cooldown', () => {
   const job = { name: 'daily motor', function: 'runCanonicalDecisionCycle', cron: '25 1 * * *', catch_up_daily: true };
   const now = Date.parse('2026-10-13T12:00:00Z');
   const exhausted = { status: 'exhausted', attempt_count: 6, recovery_count: 0, finished_at: '2026-10-13T10:59:00Z' };
   assertEquals(shouldRecoverDailyCatchUpRun(job, exhausted, now), true);
   assertEquals(shouldDispatchScheduledRun(job, exhausted, now, 6), true);
   assertEquals(shouldRecoverDailyCatchUpRun(job, { ...exhausted, finished_at: '2026-10-13T11:01:00Z' }, now), false);
-  assertEquals(shouldRecoverDailyCatchUpRun(job, { ...exhausted, recovery_count: 1 }, now), false);
+  assertEquals(shouldRecoverDailyCatchUpRun(job, { ...exhausted, recovery_count: 1 }, now), true);
+  assertEquals(shouldRecoverDailyCatchUpRun(job, { ...exhausted, recovery_count: 2 }, now), true);
+  assertEquals(shouldRecoverDailyCatchUpRun(job, { ...exhausted, recovery_count: 3 }, now), false);
   assertEquals(shouldRecoverDailyCatchUpRun({ ...job, catch_up_daily: false }, exhausted, now), false);
   assertEquals(shouldDispatchRun(exhausted, now, 6), false);
+});
+
+Deno.test('canonical cycle failures identify the actual failed stage', () => {
+  assertEquals(failedJobStages({ ok: true, status: 200, data: {
+    ok: false,
+    economic_evidence: { ok: true },
+    unified_engine: { ok: false, error: 'metrics query timed out' },
+    pre_execution_reconciliation: { ok: false, reason: 'partial' },
+    pre_execution_arbitration: { ok: true },
+  } }), [
+    { name: 'unified_engine', detail: 'metrics query timed out' },
+    { name: 'reconciliation', detail: 'partial' },
+  ]);
 });
 
 Deno.test('watchdog reconciles a confirmed Ads cycle despite unrelated audit failure', () => {
