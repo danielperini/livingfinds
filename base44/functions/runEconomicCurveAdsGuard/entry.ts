@@ -27,15 +27,15 @@ function resolveTargetMer(settings: any, body: any) {
   return clamp(raw > 1 ? raw / 100 : raw, 0.005, 0.50);
 }
 
-function abc(rows: Array<{ asin: string; value: number }>) {
-  const sorted = rows.filter(row => row.asin && row.value > 0).sort((a, b) => b.value - a.value);
+function abc(rows: Array<{ key: string; value: number }>) {
+  const sorted = rows.filter(row => row.key && row.value > 0).sort((a, b) => b.value - a.value);
   const total = sorted.reduce((sum, row) => sum + row.value, 0);
   const out = new Map<string, string>();
   if (!total) return out;
   let cumulative = 0;
   for (const row of sorted) {
     const before = cumulative / total;
-    out.set(row.asin, before < 0.80 ? 'A' : before < 0.95 ? 'B' : 'C');
+    out.set(row.key, before < 0.80 ? 'A' : before < 0.95 ? 'B' : 'C');
     cumulative += row.value;
   }
   return out;
@@ -109,7 +109,7 @@ Deno.serve(async (request) => {
       const accountId = account.id;
       const today = todayBrt();
       const cutoff30 = daysAgo(30);
-      const [settingsRows, products, economics, salesRows, intraday, terms, keywords, campaigns, decisions] = await Promise.all([
+      const [settingsRows, products, economics, salesRows, intraday, terms, keywords, campaigns, decisions, productAds] = await Promise.all([
         base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: accountId }, '-updated_at', 1).catch(() => []),
         base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, '-updated_at', 5000).catch(() => []),
         base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: accountId }, '-updated_at', 5000).catch(() => []),
@@ -119,37 +119,52 @@ Deno.serve(async (request) => {
         base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: accountId }, '-updated_at', 20000).catch(() => []),
         base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, '-updated_at', 5000).catch(() => []),
         base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: accountId }, '-created_at', 5000).catch(() => []),
+        base44.asServiceRole.entities.ProductAd.filter({ amazon_account_id: accountId }, '-updated_at', 10000).catch(() => []),
       ]);
 
       const settings = settingsRows[0] || {};
       const accountTargetAcos = Math.max(1, n(settings.target_acos ?? settings.acos_target, DEFAULT_TARGET_ACOS));
       const merTarget = resolveTargetMer(settings, body);
-      const productByAsin = new Map<string, any>(products.filter((p: any) => s(p.asin)).map((p: any) => [s(p.asin).toUpperCase(), p] as [string, any]));
-      const econByAsin = new Map<string, any>(economics.filter((e: any) => s(e.asin)).map((e: any) => [s(e.asin).toUpperCase(), e] as [string, any]));
-      const campaignById = new Map<string, any>(campaigns.map((c: any) => [s(c.campaign_id || c.amazon_campaign_id || c.id), c] as [string, any]));
-
-      const revenue30 = new Map<string, number>();
+      const productBySku = new Map<string, any>();
+      const productCountBySku = new Map<string, number>();
+      const skuByAsin = new Map<string, Set<string>>();
+      for (const product of products) {
+        const sku = s(product.sku).toUpperCase();
+        const asin = s(product.asin).toUpperCase();
+        if (!sku) continue;
+        productCountBySku.set(sku, (productCountBySku.get(sku) || 0) + 1);
+        productBySku.set(sku, product);
+        if (asin) {
+          if (!skuByAsin.has(asin)) skuByAsin.set(asin, new Set());
+          skuByAsin.get(asin)!.add(sku);
+        }
+      }
+      const uniqueProductBySku = new Map([...productBySku].filter(([sku]) => productCountBySku.get(sku) === 1));
+      const revenue30BySku = new Map<string, number>();
       const revenueToday = new Map<string, number>();
       for (const row of salesRows) {
         const asin = s(row.asin).toUpperCase();
         const date = s(row.date || row.sale_date).slice(0, 10);
-        if (!asin || !date) continue;
+        if (!date) continue;
         const revenue = n(row.ordered_product_sales ?? row.revenue ?? row.sales ?? row.total_sales);
-        if (date >= cutoff30 && date <= today) revenue30.set(asin, (revenue30.get(asin) || 0) + revenue);
-        if (date === today) revenueToday.set(asin, (revenueToday.get(asin) || 0) + revenue);
+        const explicitSku = s(row.sku || row.seller_sku || row.msku).toUpperCase();
+        const scopedSku = explicitSku || (skuByAsin.get(asin)?.size === 1 ? [...skuByAsin.get(asin)!][0] : '');
+        if (date >= cutoff30 && date <= today && scopedSku) {
+          revenue30BySku.set(scopedSku, (revenue30BySku.get(scopedSku) || 0) + revenue);
+        }
+        // Account MER is an account-wide guard only; it does not feed SKU bid decisions.
+        if (date === today && asin) revenueToday.set(asin, (revenueToday.get(asin) || 0) + revenue);
       }
 
-      const revenueRows30: Array<{ asin: string; value: number }> = [];
-      const profitRows: Array<{ asin: string; value: number }> = [];
-      for (const product of products) {
-        const asin = s(product.asin).toUpperCase();
-        if (!asin) continue;
-        const econ = econByAsin.get(asin);
-        revenueRows30.push({ asin, value: Math.max(0, revenue30.get(asin) || n(product.total_sales_30d)) });
+      const revenueRows30: Array<{ key: string; value: number }> = [];
+      const profitRows: Array<{ key: string; value: number }> = [];
+      for (const [sku, product] of uniqueProductBySku) {
+        const econ = resolveSkuScopedRow(product, economics);
+        revenueRows30.push({ key: sku, value: Math.max(0, revenue30BySku.get(sku) ?? n(product.total_sales_30d)) });
         const windowProfit = n(econ?.profit_after_ads_14d, NaN);
         const unitProfit = n(econ?.profit_after_ads ?? product.profit_after_ads, 0);
         const profit = Number.isFinite(windowProfit) && windowProfit !== 0 ? windowProfit : unitProfit * Math.max(0, n(product.total_units_30d));
-        profitRows.push({ asin, value: Math.max(0, profit) });
+        profitRows.push({ key: sku, value: Math.max(0, profit) });
       }
       const salesCurve = abc(revenueRows30);
       const profitCurve = abc(profitRows);
@@ -179,9 +194,13 @@ Deno.serve(async (request) => {
         const campaignId = s(term.campaign_id || term.amazon_campaign_id);
         const campaign = campaignById.get(campaignId);
         if (!campaign || !enabled(campaign)) continue;
-        const asin = s(term.advertised_asin || term.asin || campaign.asin).toUpperCase();
-        const product = productByAsin.get(asin);
-        const econ = econByAsin.get(asin);
+        const scope = resolveProductScope(campaign, productAds, products);
+        if (scope.status !== 'resolved') continue;
+        const asin = s(term.advertised_asin || term.asin || scope.asin).toUpperCase();
+        const termSku = s(term.advertised_sku || term.sku || scope.sku).toUpperCase();
+        if (!termSku || termSku !== scope.sku || (asin && scope.asin && asin !== scope.asin)) continue;
+        const product = uniqueProductBySku.get(termSku);
+        const econ = product ? resolveSkuScopedRow(product, economics) : null;
         if (!asin || !product) continue;
         const stock = n(product.fba_inventory ?? product.available_quantity ?? product.fulfillable_quantity, 0);
         if (stock <= 0 || product.listing_buyable === false || product.listing_suppressed === true) continue;
@@ -204,8 +223,8 @@ Deno.serve(async (request) => {
         const currentBid = n(keyword.current_bid ?? keyword.bid ?? term.bid);
         if (currentBid <= MIN_BID) continue;
 
-        const salesClass = salesCurve.get(asin) || 'C';
-        const profitClass = profitCurve.get(asin) || 'UNAVAILABLE';
+        const salesClass = salesCurve.get(termSku) || 'C';
+        const profitClass = profitCurve.get(termSku) || 'UNAVAILABLE';
         const curveState = profitClass === 'UNAVAILABLE' ? 'TEST' : matrixState(salesClass, profitClass);
         const breakEvenAcos = Math.max(0, n(econ?.break_even_acos ?? product.break_even_acos_pct));
         const productTargetAcos = Math.max(1, n(econ?.target_acos, accountTargetAcos));
@@ -265,7 +284,7 @@ Deno.serve(async (request) => {
 
         candidates.push({
           score: statePriority(curveState) * 100 + Math.min(99, lossRatio * 10) + (merOver ? 20 : 0),
-          campaign, keyword, term, campaignId, asin, entityId, currentBid, proposedBid, pct, spend, adsSales,
+          campaign, keyword, term, campaignId, asin, sku: termSku, entityId, currentBid, proposedBid, pct, spend, adsSales,
           orders, clicks, cpc, sameSkuVerified, salesClass, profitClass, curveState, safeAcos, breakEvenAcos,
           margin, maxProfitableSpend, lossBudget, loss, projectedNextClickLoss, post, probabilityBelowSustainable,
           safeCpc, currentAcos, reasonCode, idempotencyKey,
@@ -288,7 +307,7 @@ Deno.serve(async (request) => {
           campaign_name: s(item.campaign.name || item.campaign.campaign_name),
           ad_group_id: s(item.keyword.ad_group_id || item.term.ad_group_id),
           asin: item.asin,
-          sku: s(item.keyword.sku || item.term.advertised_sku || item.term.sku || productByAsin.get(item.asin)?.sku),
+          sku: item.sku,
           action: 'reduce_bid',
           decision_type: 'economic_curve_ads_guard',
           rationale,
