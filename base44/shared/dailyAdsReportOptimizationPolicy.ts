@@ -44,6 +44,15 @@ const REQUIRED_GROUP_BY: Record<string, string> = {
   spAdvertisedProduct: 'advertiser',
 };
 
+export function canonicalDailyReportTypesForDate(
+  jobs: Array<{ report_type_id?: unknown; group_by?: unknown; end_date?: unknown }>,
+  reportDate: string,
+): string[] {
+  return [...new Set(jobs
+    .filter((job) => String(job.end_date || '') === reportDate && isCanonicalDailyReportJob(job))
+    .map((job) => String(job.report_type_id)))].sort();
+}
+
 export function isCanonicalDailyReportJob(job: {
   report_type_id?: unknown;
   group_by?: unknown;
