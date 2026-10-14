@@ -49,7 +49,7 @@ type SchedulerHealth = {
   running_jobs: number;
 };
 
-const DAILY_CATCH_UP_MAX_RECOVERIES = 3;
+const DAILY_CATCH_UP_MAX_RECOVERIES = 4;
 
 const schedulerHealth: SchedulerHealth = {
   enabled: true,

@@ -84,7 +84,7 @@ export function shouldRecoverDailyCatchUpRun(
   run: SchedulerRun | null | undefined,
   nowMs: number,
   cooldownMs = 60 * 60_000,
-  maxRecoveries = 3,
+  maxRecoveries = 4,
 ): boolean {
   if (job.catch_up_daily !== true || run?.status !== 'exhausted') return false;
   if (Number(run.recovery_count || 0) >= maxRecoveries) return false;
