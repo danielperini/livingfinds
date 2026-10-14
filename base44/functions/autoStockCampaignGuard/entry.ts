@@ -12,7 +12,8 @@ import {
   productOfferEligibility,
 } from '../../shared/productCampaignPauseGuard.ts';
 import { availableAdsStock, stockAdsDecision, hasFreshAdsInventory } from '../../shared/stockAdsPolicy.ts';
-import { deduplicateActiveAlerts, getAlertAsin, planOperationalAlertCleanup } from '../../shared/operationalAlertCleanup.js';
+import { manualKickoffCanComplete, shouldReactivateForManualKickoff } from '../../shared/manualKickoffReactivationPolicy.ts';
+import { deduplicateActiveAlerts, getAlertAsin, getAlertSku, planOperationalAlertCleanup } from '../../shared/operationalAlertCleanup.js';
 
 function adsBase(region) {
   const r = String(region || 'NA').toUpperCase();
@@ -124,7 +125,26 @@ Deno.serve(async (req) => {
       console.log(`[guard] account=${account.id} amazon campaigns found=${amazonStates.size}`);
 
       // 2. Atualizar state local de todas as campanhas conforme Amazon
-      const localCampaigns = await db.entities.Campaign.filter({ amazon_account_id: account.id }, null, 2000).catch(() => []);
+      const [localCampaignRows, productAds] = await Promise.all([
+        db.entities.Campaign.filter({ amazon_account_id: account.id }, null, 2000).catch(() => []),
+        db.entities.ProductAd.filter({ amazon_account_id: account.id }, '-synced_at', 5000).catch(() => []),
+      ]);
+      const productAdSkusByCampaign = new Map<string, Set<string>>();
+      for (const ad of productAds) {
+        const campaignId = String(ad.campaign_id || '').trim();
+        const sku = String(ad.sku || '').trim().toUpperCase();
+        if (!campaignId || !sku) continue;
+        const skus = productAdSkusByCampaign.get(campaignId) || new Set<string>();
+        skus.add(sku);
+        productAdSkusByCampaign.set(campaignId, skus);
+      }
+      const localCampaigns = localCampaignRows.map((campaign: any) => {
+        const id = String(campaign.amazon_campaign_id || campaign.campaign_id || '');
+        const adSkus = productAdSkusByCampaign.get(id) || new Set<string>();
+        if (adSkus.size > 1) return { ...campaign, sku: null, sku_identity_status: 'ambiguous' };
+        if (adSkus.size === 1) return { ...campaign, sku: [...adSkus][0], sku_identity_status: 'verified_product_ad' };
+        return campaign;
+      });
       const syncUpdates = [];
       for (const c of localCampaigns) {
         const amazonId = c.amazon_campaign_id || c.campaign_id;
@@ -182,7 +202,7 @@ Deno.serve(async (req) => {
                 synced_at: now,
               });
             } catch (e) {
-              accountLog.errors.push({ asin: product.asin, campaign_id: aid, step: 'enforce_manual_pause', error: e.message });
+              accountLog.errors.push({ asin: product.asin, sku: product.sku, campaign_id: aid, step: 'enforce_manual_pause', error: e.message });
             }
           }
           await db.entities.Product.update(product.id, {
@@ -216,7 +236,7 @@ Deno.serve(async (req) => {
                 last_pause_reason: offer.reason, synced_at: now,
               });
             } catch (e) {
-              accountLog.errors.push({ asin: product.asin, campaign_id: aid, step: 'enforce_offer_availability', error: e.message });
+              accountLog.errors.push({ asin: product.asin, sku: product.sku, campaign_id: aid, step: 'enforce_offer_availability', error: e.message });
             }
           }
           await db.entities.Product.update(product.id, {
@@ -273,28 +293,56 @@ Deno.serve(async (req) => {
             if (isOneUnit) accountLog.paused_one_unit++;
             console.log(`[guard] PAUSED asin=${product.asin} fba=${fba}`);
           } catch (e) {
-            accountLog.errors.push({ asin: product.asin, step: 'pause', error: e.message });
+            accountLog.errors.push({ asin: product.asin, sku: product.sku, step: 'pause', error: e.message });
           }
         }
 
         // CASO B: tem estoque, pause_reason=stock, mas campanha pausada → reativar
-        if (offer.eligible && !isOutOfStock && fba > 0 && hasFreshAdsInventory(product) && linkedCampaigns.some(c => isStockCampaignPause(c) || (product.pause_reason === 'offer_recovered' && ['USER_MANUAL_PRODUCT_LOCK', 'OFFER_INACTIVE', 'LISTING_NOT_BUYABLE'].includes(c.last_pause_reason)))) {
+        const manualKickoffRequested = product.manual_kickoff_status === 'pending';
+        if (offer.eligible && !isOutOfStock && fba > 0 && hasFreshAdsInventory(product) && (
+          manualKickoffRequested || linkedCampaigns.some(c => isStockCampaignPause(c) || (product.pause_reason === 'offer_recovered' && ['USER_MANUAL_PRODUCT_LOCK', 'OFFER_INACTIVE', 'LISTING_NOT_BUYABLE'].includes(c.last_pause_reason)))
+        )) {
           try {
             let resumed = 0;
             for (const lc of linkedCampaigns) {
               const aid = lc.amazon_campaign_id || lc.campaign_id;
-              if (!(isStockCampaignPause(lc) || (product.pause_reason === 'offer_recovered' && ['USER_MANUAL_PRODUCT_LOCK', 'OFFER_INACTIVE', 'LISTING_NOT_BUYABLE'].includes(lc.last_pause_reason))) || !aid || amazonStates.get(String(aid)) !== 'paused') continue;
+              const remoteState = aid ? amazonStates.get(String(aid)) : undefined;
+              const manualKickoffResume = manualKickoffRequested && shouldReactivateForManualKickoff(product, lc, remoteState);
+              const stockResume = isStockCampaignPause(lc) || (product.pause_reason === 'offer_recovered' && ['USER_MANUAL_PRODUCT_LOCK', 'OFFER_INACTIVE', 'LISTING_NOT_BUYABLE'].includes(lc.last_pause_reason));
+              if (!(manualKickoffResume || (!manualKickoffRequested && stockResume && aid && remoteState === 'paused')) || !aid) continue;
               const change = await sendCampaignStateChange(token, profileId, region, aid, 'ENABLED');
               if (!change.ok) throw new Error(`Amazon did not confirm campaign ${aid}`);
+              amazonStates.set(String(aid), 'enabled');
               await db.entities.Campaign.update(lc.id, { state: 'enabled', status: 'enabled', amazon_status: 'enabled', is_operational: true, last_pause_reason: null });
               resumed++;
             }
-            if (!resumed) continue;
-            await db.entities.Product.update(product.id, { campaign_status: 'active', pause_reason: null });
-            accountLog.activated++;
-            console.log(`[guard] ACTIVATED asin=${product.asin} fba=${fba}`);
+            const kickoffComplete = manualKickoffRequested && manualKickoffCanComplete(product, linkedCampaigns, amazonStates);
+            if (manualKickoffRequested && kickoffComplete) {
+              await db.entities.Product.update(product.id, {
+                manual_kickoff_status: 'completed',
+                manual_kickoff_completed_at: new Date().toISOString(),
+                manual_kickoff_last_error: null,
+                campaign_status: 'active', pause_reason: null,
+              });
+            } else if (resumed > 0) {
+              await db.entities.Product.update(product.id, { campaign_status: 'active', pause_reason: null });
+            } else if (!manualKickoffRequested) {
+              continue;
+            }
+            accountLog.activated += resumed;
+            if (resumed || kickoffComplete) console.log(`[guard] ACTIVATED asin=${product.asin} fba=${fba} campaigns=${resumed} manual_kickoff=${manualKickoffRequested}`);
+            if (manualKickoffRequested && !kickoffComplete) {
+              // Pending work is not a failed stock guard. Keep the request on
+              // the product for the next run; only an actual API exception
+              // above should block account-level decisions.
+              await db.entities.Product.update(product.id, {
+                manual_kickoff_status: 'pending',
+                manual_kickoff_last_error: null,
+                manual_kickoff_last_checked_at: new Date().toISOString(),
+              }).catch(() => {});
+            }
           } catch (e) {
-            accountLog.errors.push({ asin: product.asin, step: 'activate', error: e.message });
+            accountLog.errors.push({ asin: product.asin, sku: product.sku, step: 'activate', error: e.message });
           }
         }
 
@@ -305,7 +353,7 @@ Deno.serve(async (req) => {
             accountLog.unlocked++;
             console.log(`[guard] UNLOCKED (already active) asin=${product.asin} fba=${fba}`);
           } catch (e) {
-            accountLog.errors.push({ asin: product.asin, step: 'unlock', error: e.message });
+            accountLog.errors.push({ asin: product.asin, sku: product.sku, step: 'unlock', error: e.message });
           }
         }
       }
@@ -314,14 +362,18 @@ Deno.serve(async (req) => {
       // incidents; stock alerts are resolved only with fresh FBA data and a
       // confirmed Amazon pause (or confirmed replenishment). Failed/unknown
       // remote states remain visible for retry and diagnosis.
-      const latestProductByAsin = new Map<string, any>();
+      const latestProductBySku = new Map<string, any>();
+      const productsByAsinForAlerts = new Map<string, any[]>();
       for (const product of products) {
         const asin = String(product.asin || '').trim().toUpperCase();
+        const sku = String(product.sku || '').trim().toUpperCase();
         if (!asin) continue;
-        const current = latestProductByAsin.get(asin);
+        productsByAsinForAlerts.set(asin, [...(productsByAsinForAlerts.get(asin) || []), product]);
+        if (!sku) continue;
+        const current = latestProductBySku.get(sku);
         const updated = Date.parse(product.last_catalog_sync_at || product.updated_at || product.updated_date || 0) || 0;
         const currentUpdated = Date.parse(current?.last_catalog_sync_at || current?.updated_at || current?.updated_date || 0) || 0;
-        if (!current || updated > currentUpdated) latestProductByAsin.set(asin, product);
+        if (!current || updated > currentUpdated) latestProductBySku.set(sku, product);
       }
       const activeAlerts: any[] = [];
       for (const status of ['active', 'acknowledged']) {
@@ -340,7 +392,11 @@ Deno.serve(async (req) => {
         }
 
         const asin = getAlertAsin(alert);
-        const product = latestProductByAsin.get(asin);
+        const sku = getAlertSku(alert);
+        const asinProducts = productsByAsinForAlerts.get(asin) || [];
+        const product = sku
+          ? latestProductBySku.get(sku)
+          : asinProducts.length === 1 ? asinProducts[0] : null;
         const alertCampaignId = String(alert.campaign_id || alert.entity_id || '');
         const isCampaignPauseNotice = String(alert.alert_type || alert.type || '').toLowerCase() === 'campaign_paused';
         const linkedCampaigns = isCampaignPauseNotice

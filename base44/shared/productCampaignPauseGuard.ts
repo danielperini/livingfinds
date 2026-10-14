@@ -60,13 +60,13 @@ export function campaignMatchesProduct(campaign: any, product: any): boolean {
   // is stale or differs in formatting. Without that linkage, a conflicting
   // SKU must still block ASIN-only matching to protect sibling SKUs.
   if (campaignIds.some(id => ids(product).has(id))) return true;
-  if (campaign.sku && product.sku) return norm(campaign.sku) === norm(product.sku);
-  const campaignAsin = norm(campaign.asin || campaign.advertised_asin);
   const campaignSku = norm(campaign.sku);
-  return Boolean(
-    (campaignAsin && campaignAsin === norm(product.asin)) ||
-    (campaignSku && campaignSku === norm(product.sku))
-  );
+  const productSku = norm(product.sku);
+  if (campaignSku && productSku) return campaignSku === productSku;
+  // ASIN-only association can merge distinct seller SKUs. It is allowed only
+  // after sync marks the campaign as a verified single-SKU fallback.
+  if (campaign.sku_identity_status !== 'single_sku_fallback') return false;
+  return Boolean(productSku && norm(campaign.asin || campaign.advertised_asin) === norm(product.asin));
 }
 
 export function findPauseLockedProduct(products: any[], campaign: any): any | null {

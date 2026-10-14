@@ -15,6 +15,7 @@
  * - Todas as ações passam por AmazonActionQueue.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { inventoryDecisionPreflight } from '../../shared/inventorySyncPolicy.ts';
 
 function safe(v: unknown): number {
   const n = Number(v);
@@ -38,6 +39,27 @@ Deno.serve(async (req) => {
       const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-created_date', 1);
       if (!accs.length) return Response.json({ ok: false, error: 'Nenhuma conta conectada' });
       amazonAccountId = accs[0].id;
+    }
+
+    // This legacy report-triggered pipeline still has queued Ads mutations.
+    // Enforce the same canonical FBA refresh and confirmed zero-stock guard
+    // before any economy/review/decision stage can enqueue work.
+    const inventoryResult = await base44.asServiceRole.functions.invoke('checkInventoryChangesAndKickoff', {
+      amazon_account_id: amazonAccountId,
+      _service_role: true,
+      trigger_type: 'full_account_optimization_inventory_preflight',
+    }).then((response: any) => response?.data || response || { ok: false })
+      .catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
+    const inventoryPreflight = inventoryDecisionPreflight(inventoryResult, false);
+    if (!inventoryPreflight.allowed) {
+      return Response.json({
+        ok: false,
+        blocked: true,
+        error: 'FBA inventory refresh or stock guard was not confirmed; optimization was not started.',
+        inventory_preflight: inventoryPreflight,
+        inventory_result: inventoryResult,
+        mutations_created: 0,
+      }, { status: 409 });
     }
 
     const trigger = body.trigger || 'manual';

@@ -3,17 +3,20 @@
  *
  * Implementa a jornada completa:
  *   1. Detecta campanhas AUTO novas (bid inicial R$0,50)
- *   2. Primeira análise após 48h confirmadas
+ *   2. Primeira análise após 24h confirmadas
  *   3. Ajuste de bid sem gasto: +R$0,10 / +R$0,05 progressivo
  *   4. Campanha gastando: redução gradual R$0,05/dia baseada em CPC real
  *   5. Perda de entrega após redução: recuperação +R$0,10
- *   6. Identificação de termos vencedores (>= 2 conversões)
- *   7. Pontuação e promoção para campanha manual EXACT
- *   8. Negativação na campanha AUTO após confirmação da manual
+ *   6. Deixa promoção e negativação para o fluxo canônico, que exige pelo
+ *      menos três pedidos same-SKU, consulta literal e margem positiva.
  *
- * REGRA FINANCEIRA: sem IA para cálculos. IA somente para relevância semântica.
+ * REGRA FINANCEIRA: sem IA para cálculos. Nenhuma keyword é criada por este
+ * fluxo; os termos reais passam pelo harvest same-SKU canônico.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { inventoryDecisionPreflight } from '../../shared/inventorySyncPolicy.ts';
+import { availableAdsStock, hasFreshAdsInventory } from '../../shared/stockAdsPolicy.ts';
+import { campaignCoverageEligible } from '../../shared/campaignCoverageEligibility.ts';
 
 const INITIAL_BID = 0.50;
 const INCREASE_NO_SPEND_1 = 0.10;
@@ -32,62 +35,6 @@ function hoursFromNow(h: number): string {
   return new Date(Date.now() + h * 3600000).toISOString();
 }
 
-function normalizeTerm(t: string): string {
-  return t.toLowerCase().trim().replace(/\s+/g, ' ');
-}
-
-function classifyTail(term: string): 'short' | 'medium' | 'long' {
-  const words = term.trim().split(/\s+/).length;
-  if (words >= 5) return 'long';
-  if (words >= 3) return 'medium';
-  return 'short';
-}
-
-function calcPromotionScore(st: any, targetAcos: number): number {
-  let score = 0;
-  const orders = st.orders_14d || st.orders || 0;
-  const acos = st.acos_14d || st.acos || 0;
-  const roas = st.roas_14d || st.roas || 0;
-  const cpc = st.cpc || 0;
-  const term = normalizeTerm(st.search_term || st.keyword_text || '');
-  const tail = classifyTail(term);
-
-  // Conversões: peso principal
-  if (orders >= 2) score += 4;
-  else if (orders >= 1) score += 2;
-
-  // Cauda
-  if (tail === 'long') score += 3;
-  else if (tail === 'medium') score += 2;
-
-  // ACoS dentro da meta
-  if (acos > 0 && acos <= targetAcos) score += 3;
-  else if (acos > 0 && acos <= targetAcos * 1.2) score += 1;
-
-  // ROAS
-  if (roas >= 4) score += 3;
-  else if (roas >= 2) score += 1;
-
-  // CPC baixo
-  if (cpc > 0 && cpc < 1.0) score += 2;
-  else if (cpc > 0 && cpc < 2.0) score += 1;
-
-  return score;
-}
-
-function calcBidForPromotion(st: any, minBid: number, maxBid: number): number {
-  const avgCpc = st.cpc || st.avg_cpc || 0;
-  const clicks = st.clicks || 0;
-  const orders = st.orders_14d || st.orders || 0;
-
-  // Regra: CPC médio real + 10%, nunca acima do máximo
-  if (avgCpc > 0 && clicks >= 5) {
-    return Math.min(Math.max(avgCpc * 1.10, minBid, 0.30), maxBid);
-  }
-  // Sem dados suficientes: R$0,50
-  return Math.max(minBid, INITIAL_BID);
-}
-
 async function loadPage(entity: any, filter: object, sort: string, limit: number, offset: number): Promise<any[]> {
   return entity.filter(filter, sort, limit, offset);
 }
@@ -96,7 +43,7 @@ Deno.serve(async (req) => {
   const startTime = Date.now();
   const base44 = createClientFromRequest(req);
   const now = new Date().toISOString();
-  const today = now.slice(0, 10);
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 
   try {
     const body = await req.json().catch(() => ({}));
@@ -115,15 +62,21 @@ Deno.serve(async (req) => {
     const amazonAccountId = account.id;
     const sym = account.currency_symbol || 'R$';
 
+    const inventory = await base44.asServiceRole.functions.invoke('checkInventoryChangesAndKickoff', {
+      _service_role: true, amazon_account_id: amazonAccountId,
+      dry_run: body.dry_run === true, trigger_type: 'auto_campaign_learning_inventory_preflight',
+    }).then((r: any) => r?.data || r).catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
+    const inventoryPreflight = inventoryDecisionPreflight(inventory, body.dry_run === true);
+    if (!inventoryPreflight.allowed) {
+      return Response.json({ ok: false, blocked: true, inventory_preflight: inventoryPreflight, inventory }, { status: 409 });
+    }
+
     // Carregar configuração
     const configs = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: amazonAccountId });
     const cfg = configs[0] || {};
-    const TARGET_ACOS = cfg.target_acos || 25;
+    const TARGET_ACOS = Number(cfg.target_acos ?? 25);
     const MAX_BID_CFG = cfg.max_bid || DEFAULT_BID_CEILING;
     const MIN_BID_CFG = cfg.min_bid || MIN_BID;
-    const MIN_ORDERS_FOR_EXACT = 2;
-    const MIN_SCORE_FOR_PROMOTION = 6;
-    const MIN_CONFIDENCE_FOR_PROMOTION = 0.80;
 
     const stats = {
       campaigns_analyzed: 0,
@@ -131,10 +84,9 @@ Deno.serve(async (req) => {
       bid_reductions: 0,
       bid_recoveries: 0,
       new_learning_records: 0,
-      terms_scored: 0,
-      promotions_created: 0,
-      negatives_created: 0,
       blocked: 0,
+      blocked_stale_metrics: 0,
+      blocked_product_identity: 0,
     };
 
     // ── 1. Carregar campanhas AUTO ativas ──────────────────────────────────
@@ -175,32 +127,39 @@ Deno.serve(async (req) => {
     const learningMap = new Map<string, any>(learningRecords.map((r: any) => [r.campaign_id, r]));
 
     // Carregar produtos para verificação de estoque
-    const products: any[] = await base44.asServiceRole.entities.Product.filter(
-      { amazon_account_id: amazonAccountId }, null, 300
-    );
-    const productMap = new Map<string, any>(products.map((p: any) => [p.asin, p]));
-
-    // Carregar search terms recentes
-    const searchTerms: any[] = await base44.asServiceRole.entities.SearchTerm.filter(
-      { amazon_account_id: amazonAccountId }, '-orders_14d', 1000
-    );
-    const stByCampaign = new Map<string, any[]>();
-    for (const st of searchTerms) {
-      const cid = st.campaign_id;
-      if (!cid) continue;
-      if (!stByCampaign.has(cid)) stByCampaign.set(cid, []);
-      stByCampaign.get(cid)!.push(st);
+    const products: any[] = [];
+    let productOffset = 0;
+    while (true) {
+      const page = await loadPage(base44.asServiceRole.entities.Product,
+        { amazon_account_id: amazonAccountId }, '-updated_date', 300, productOffset);
+      products.push(...page);
+      if (page.length < 300) break;
+      productOffset += 300;
+    }
+    const productsByAsin = new Map<string, any[]>();
+    const productsBySku = new Map<string, any[]>();
+    for (const product of products) {
+      if (product.status === 'archived') continue;
+      const asinKey = String(product.asin || '').trim().toUpperCase();
+      const skuKey = String(product.sku || '').trim().toUpperCase();
+      if (asinKey) productsByAsin.set(asinKey, [...(productsByAsin.get(asinKey) || []), product]);
+      if (skuKey) productsBySku.set(skuKey, [...(productsBySku.get(skuKey) || []), product]);
     }
 
-    // Carregar promoções existentes para deduplicação
-    const existingPromotions: any[] = await base44.asServiceRole.entities.SearchTermPromotion.filter(
-      { amazon_account_id: amazonAccountId }, null, 500
-    );
-    const promotedTerms = new Set<string>(
-      existingPromotions
-        .filter((p: any) => ['promoted', 'creating_campaign', 'validating'].includes(p.status))
-        .map((p: any) => `${p.asin}|${normalizeTerm(p.search_term)}`)
-    );
+    // ProductAd is the authoritative campaign-to-SKU link when an imported
+    // Campaign row predates SKU persistence. Multiple linked SKUs are blocked.
+    const productAds: any[] = await base44.asServiceRole.entities.ProductAd.filter(
+      { amazon_account_id: amazonAccountId }, '-synced_at', 5000
+    ).catch(() => []);
+    const skusByCampaign = new Map<string, Set<string>>();
+    for (const ad of productAds) {
+      const campaignId = String(ad.amazon_campaign_id || ad.campaign_id || '').trim();
+      const linkedSku = String(ad.sku || '').trim().toUpperCase();
+      if (!campaignId || !linkedSku) continue;
+      const linked = skusByCampaign.get(campaignId) || new Set<string>();
+      linked.add(linkedSku);
+      skusByCampaign.set(campaignId, linked);
+    }
 
     // Carregar histórico de bids do dia para idempotência
     const todayBidHistory: any[] = await base44.asServiceRole.entities.CampaignBidHistory.filter(
@@ -219,8 +178,30 @@ Deno.serve(async (req) => {
     for (const camp of autoCampaigns) {
       stats.campaigns_analyzed++;
       const campId = camp.campaign_id;
-      const asin = camp.asin;
-      const product = asin ? productMap.get(asin) : null;
+      const asin = String(camp.asin || '').trim().toUpperCase();
+      const linkedSkus = skusByCampaign.get(String(camp.amazon_campaign_id || campId)) || new Set<string>();
+      const storedSku = String(camp.sku || camp.advertised_sku || camp.product_ad_sku || '').trim().toUpperCase();
+      if (linkedSkus.size > 1 || (storedSku && linkedSkus.size === 1 && !linkedSkus.has(storedSku))) {
+        stats.blocked++;
+        stats.blocked_product_identity++;
+        continue;
+      }
+      const sku = storedSku || (linkedSkus.size === 1 ? [...linkedSkus][0] : '');
+      const skuMatches = sku ? (productsBySku.get(sku) || []) : [];
+      const asinMatches = asin ? (productsByAsin.get(asin) || []) : [];
+      const product = skuMatches.length === 1 ? skuMatches[0]
+        : skuMatches.length > 1 ? null
+        : !sku && asinMatches.length === 1 ? asinMatches[0] : null;
+      if (!product) {
+        stats.blocked++;
+        stats.blocked_product_identity++;
+        continue;
+      }
+      if (!hasFreshAdsInventory(product) || availableAdsStock(product) <= 0 || !campaignCoverageEligible(product)) {
+        stats.blocked++;
+        continue;
+      }
+      const canonicalAsin = String(product.asin || asin).trim().toUpperCase();
       const campState = (camp.state || camp.status || '').toLowerCase();
 
       // Proteções: nunca ajustar bid quando campanha está fora do ar
@@ -232,14 +213,15 @@ Deno.serve(async (req) => {
       // ── 2a. Criar learning record se não existir ─────────────────────
       if (!lr) {
         const confirmedAt = camp.last_api_sync_at || camp.created_at || camp.synced_at || now;
-        const firstAnalysisDue = new Date(new Date(confirmedAt).getTime() + 48 * 3600000).toISOString();
+        const firstAnalysisDue = new Date(new Date(confirmedAt).getTime() + 24 * 3600000).toISOString();
         lr = await base44.asServiceRole.entities.AutoCampaignLearning.create({
           amazon_account_id: amazonAccountId,
           campaign_id: campId,
           ad_group_id: camp.ad_group_id || '',
-          asin: asin || '',
+          asin: canonicalAsin,
+          sku: product.sku,
           campaign_name: camp.name || camp.campaign_name || campId,
-          learning_state: 'learning_48h',
+          learning_state: 'learning_24h',
           current_bid: INITIAL_BID,
           bid_floor_operational: INITIAL_BID,
           bid_ceiling: MAX_BID_CFG,
@@ -256,7 +238,8 @@ Deno.serve(async (req) => {
           amazon_account_id: amazonAccountId,
           campaign_id: campId,
           ad_group_id: camp.ad_group_id || '',
-          asin: asin || '',
+          asin: canonicalAsin,
+          sku: product.sku,
           previous_bid: 0,
           new_bid: INITIAL_BID,
           change_type: 'initial_bid',
@@ -276,13 +259,6 @@ Deno.serve(async (req) => {
       // ── 2b. Verificar se chegou a hora da análise ────────────────────
       const reviewDue = lr.next_review_at || lr.first_analysis_due_at;
       if (reviewDue && new Date(reviewDue).getTime() > Date.now()) {
-        // Ainda não é hora — só verificar promoções pendentes
-        await checkAndPromoteTerms(
-          base44, amazonAccountId, camp, lr, stByCampaign.get(campId) || [],
-          promotedTerms, TARGET_ACOS, MIN_BID_CFG, MAX_BID_CFG,
-          MIN_ORDERS_FOR_EXACT, MIN_SCORE_FOR_PROMOTION, MIN_CONFIDENCE_FOR_PROMOTION,
-          product, now, today, sym, cfg, stats
-        );
         continue;
       }
 
@@ -328,17 +304,43 @@ Deno.serve(async (req) => {
         '-date', 7
       );
 
-      const totalSpend = metrics.reduce((s, m) => s + (m.spend || 0), 0);
-      const totalClicks = metrics.reduce((s, m) => s + (m.clicks || 0), 0);
-      const totalImpressions = metrics.reduce((s, m) => s + (m.impressions || 0), 0);
-      const totalOrders = metrics.reduce((s, m) => s + (m.orders || 0), 0);
-      const totalSales = metrics.reduce((s, m) => s + (m.sales || 0), 0);
+      const latestMetricDate = metrics.map((row: any) => String(row.date || '').slice(0, 10)).filter(Boolean).sort().at(-1) || '';
+      const freshnessCutoff = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10);
+      if (!latestMetricDate || latestMetricDate < freshnessCutoff || latestMetricDate > today) {
+        stats.blocked++;
+        stats.blocked_stale_metrics++;
+        await base44.asServiceRole.entities.AutoCampaignLearning.update(lr.id, {
+          last_analysis_at: now, next_review_at: hoursFromNow(6), block_reason: 'STALE_OR_MISSING_CAMPAIGN_METRICS',
+        });
+        continue;
+      }
+
+      // Daily reports may be revised as attribution matures. If duplicate
+      // rows exist for one campaign/date, retain the newest stored revision.
+      const metricByDate = new Map<string, any>();
+      for (const row of metrics) {
+        const date = String(row.date || '').slice(0, 10);
+        const previous = metricByDate.get(date);
+        const rowAt = Date.parse(row.updated_at || row.synced_at || row.created_at || '') || 0;
+        const previousAt = Date.parse(previous?.updated_at || previous?.synced_at || previous?.created_at || '') || 0;
+        if (date && (!previous || rowAt >= previousAt)) metricByDate.set(date, row);
+      }
+      const metricCutoff = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10);
+      const recentMetrics = [...metricByDate.entries()]
+        .filter(([date]) => date >= metricCutoff && date <= today)
+        .map(([, row]) => row);
+
+      const totalSpend = recentMetrics.reduce((s, m) => s + (m.spend || 0), 0);
+      const totalClicks = recentMetrics.reduce((s, m) => s + (m.clicks || 0), 0);
+      const totalImpressions = recentMetrics.reduce((s, m) => s + (m.impressions || 0), 0);
+      const totalOrders = recentMetrics.reduce((s, m) => s + (m.orders || 0), 0);
+      const totalSales = recentMetrics.reduce((s, m) => s + (m.sales || 0), 0);
       const avgCpc = totalClicks > 0 ? totalSpend / totalClicks : 0;
       const avgAcos = totalSales > 0 ? (totalSpend / totalSales) * 100 : 0;
 
       const currentBid = lr.current_bid || INITIAL_BID;
       const bidCeiling = lr.bid_ceiling || MAX_BID_CFG;
-      const currentState = lr.learning_state || 'learning_48h';
+      const currentState = lr.learning_state || 'learning_24h';
       let newState = currentState;
       let newBid = currentBid;
       let changeType: string | null = null;
@@ -352,21 +354,21 @@ Deno.serve(async (req) => {
       const hasImpressions = totalImpressions > 5;
       const hasDelivery = hasSpend || hasImpressions;
 
-      // CENÁRIO A: campanha sem gasto após 48h
-      if (!hasDelivery && ['learning_48h', 'no_spend', 'bid_increase_10', 'observing_24h', 'observing_48h', 'bid_increase_05'].includes(currentState)) {
+      // CENÁRIO A: campanha sem entrega após um ciclo diário confirmado.
+      if (!hasDelivery && ['learning_24h', 'learning_48h', 'no_spend', 'bid_increase_10', 'observing_24h', 'observing_48h', 'bid_increase_05'].includes(currentState)) {
         const hoursSinceLastChange = hoursAgo(lr.last_bid_change_at || lr.confirmed_at || now);
         const increaseCount = lr.bid_increase_count || 0;
 
-        if (currentState === 'learning_48h' || currentState === 'no_spend') {
+        if (['learning_24h', 'learning_48h', 'no_spend'].includes(currentState)) {
           // Primeiro aumento: +R$0,10
-          if (hoursSinceLastChange >= 48) {
+          if (hoursSinceLastChange >= 24) {
             newBid = Math.min(currentBid + INCREASE_NO_SPEND_1, bidCeiling);
             changeType = 'increase_no_spend_10';
             changeReason = `Campanha sem gasto após ${Math.round(hoursSinceLastChange)}h. Aumento de ${sym}0,10 para tentar obter impressões.`;
             newState = 'bid_increase_10';
           }
         } else if (currentState === 'bid_increase_10' || currentState === 'observing_24h') {
-          // Segunda análise: se ainda sem gasto após 24-48h, +R$0,05
+          // Segunda análise: se segue sem entrega após mais um ciclo diário, +R$0,05.
           if (hoursSinceLastChange >= 24) {
             newBid = Math.min(currentBid + INCREASE_NO_SPEND_2, bidCeiling);
             changeType = 'increase_no_spend_05';
@@ -385,7 +387,7 @@ Deno.serve(async (req) => {
 
       // CENÁRIO B: campanha gastando — parar aumentos e analisar para redução
       } else if (hasDelivery) {
-        if (['learning_48h', 'no_spend', 'bid_increase_10', 'observing_24h', 'observing_48h', 'bid_increase_05'].includes(currentState)) {
+        if (['learning_24h', 'learning_48h', 'no_spend', 'bid_increase_10', 'observing_24h', 'observing_48h', 'bid_increase_05'].includes(currentState)) {
           newState = 'spending';
           // Primeira vez que detectamos gasto — só registrar
         } else if (currentState === 'spending' || currentState === 'stable') {
@@ -483,7 +485,8 @@ Deno.serve(async (req) => {
           amazon_account_id: amazonAccountId,
           campaign_id: campId,
           ad_group_id: camp.ad_group_id || lr.ad_group_id || '',
-          asin: asin || '',
+          asin: canonicalAsin,
+          sku: product.sku,
           previous_bid: currentBid,
           new_bid: newBid,
           change_type: changeType,
@@ -542,23 +545,14 @@ Deno.serve(async (req) => {
         });
       }
 
-      // ── 2e. Analisar termos para promoção ─────────────────────────────
-      await checkAndPromoteTerms(
-        base44, amazonAccountId, camp, lr, stByCampaign.get(campId) || [],
-        promotedTerms, TARGET_ACOS, MIN_BID_CFG, MAX_BID_CFG,
-        MIN_ORDERS_FOR_EXACT, MIN_SCORE_FOR_PROMOTION, MIN_CONFIDENCE_FOR_PROMOTION,
-        product, now, today, sym, cfg, stats
-      );
     }
-
-    // ── 3. Processar confirmações de campanhas manuais criadas ──────────────
-    await confirmManualCampaignsAndNegate(base44, amazonAccountId, now, stats);
 
     return Response.json({
       ok: true,
       duration_ms: Date.now() - startTime,
       stats,
       auto_campaigns_found: autoCampaigns.length,
+      inventory_preflight: inventoryPreflight,
     });
 
   } catch (error) {
@@ -566,140 +560,3 @@ Deno.serve(async (req) => {
     return Response.json({ ok: false, error: error?.message || 'Erro no motor de aprendizado' }, { status: 500 });
   }
 });
-
-// ════════════════════════════════════════════════════════════════════════════
-// Verificar e promover termos vencedores para campanhas manuais EXACT
-// ════════════════════════════════════════════════════════════════════════════
-async function checkAndPromoteTerms(
-  base44: any, amazonAccountId: string, camp: any, lr: any, terms: any[],
-  promotedTerms: Set<string>, targetAcos: number, minBid: number, maxBid: number,
-  minOrders: number, minScore: number, minConfidence: number,
-  product: any | null, now: string, today: string, sym: string, cfg: any, stats: any
-): Promise<void> {
-  const campId = camp.campaign_id;
-  const asin = camp.asin || lr.asin;
-
-  for (const st of terms) {
-    const orders = st.orders_14d || st.orders || 0;
-    if (orders < minOrders) continue;
-
-    const term = normalizeTerm(st.search_term || st.keyword_text || '');
-    if (!term || term.length < 3) continue;
-
-    const promoKey = `${asin}|${term}`;
-    if (promotedTerms.has(promoKey)) continue;
-
-    stats.terms_scored++;
-
-    const score = calcPromotionScore(st, targetAcos);
-    const tail = classifyTail(term);
-    const wordCount = term.split(/\s+/).length;
-
-    // Calcular confiança: termos com mais conversões têm maior confiança
-    const baseConf = 0.70 + (orders * 0.05) + (tail === 'long' ? 0.10 : tail === 'medium' ? 0.05 : 0);
-    const confidence = Math.min(0.97, baseConf);
-
-    if (score < minScore || confidence < minConfidence) continue;
-
-    // Verificar bloqueios
-    if (product?.inventory_status === 'out_of_stock') continue;
-
-    const targetBid = calcBidForPromotion(st, minBid, maxBid);
-
-    // Criar registro de promoção
-    try {
-      await base44.asServiceRole.entities.SearchTermPromotion.create({
-        amazon_account_id: amazonAccountId,
-        source_campaign_id: campId,
-        source_ad_group_id: st.ad_group_id || camp.ad_group_id || '',
-        asin: asin || '',
-        search_term: st.search_term || st.keyword_text || '',
-        normalized_term: term,
-        tail_type: tail,
-        word_count: wordCount,
-        conversions: orders,
-        clicks: st.clicks || 0,
-        spend: st.spend || 0,
-        sales: st.sales_14d || st.sales || 0,
-        avg_cpc: st.cpc || 0,
-        acos: st.acos_14d || st.acos || 0,
-        roas: st.roas_14d || st.roas || 0,
-        promotion_score: score,
-        confidence,
-        status: 'validating',
-        target_bid: targetBid,
-        created_at: now,
-      });
-
-      promotedTerms.add(promoKey);
-      stats.promotions_created++;
-
-      // Atualizar learning record com contador
-      await base44.asServiceRole.entities.AutoCampaignLearning.update(lr.id, {
-        learning_state: 'term_promotion_pending',
-        terms_pending_promotion: (lr.terms_pending_promotion || 0) + 1,
-      });
-    } catch (e) {
-      console.warn('[checkAndPromoteTerms] Error creating promotion:', e?.message);
-    }
-  }
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// Confirmar campanhas manuais criadas e negativar na AUTO
-// ════════════════════════════════════════════════════════════════════════════
-async function confirmManualCampaignsAndNegate(
-  base44: any, amazonAccountId: string, now: string, stats: any
-): Promise<void> {
-  // Buscar promoções que estão em 'promoted' mas ainda não têm negativa criada
-  const pendingNegations: any[] = await base44.asServiceRole.entities.SearchTermPromotion.filter({
-    amazon_account_id: amazonAccountId,
-    status: 'promoted',
-    negative_created: false,
-  }, null, 50);
-
-  for (const promo of pendingNegations) {
-    // Verificar se a campanha manual já foi confirmada pela Amazon
-    if (!promo.manual_campaign_id || !promo.manual_keyword_id) continue;
-
-    const manualCamps = await base44.asServiceRole.entities.Campaign.filter({
-      amazon_account_id: amazonAccountId,
-      campaign_id: promo.manual_campaign_id,
-    }, null, 1);
-
-    const manualCamp = manualCamps[0];
-    if (!manualCamp) continue;
-    if (manualCamp.state !== 'enabled' && manualCamp.status !== 'enabled') continue;
-
-    // Campanha confirmada → enfileirar negativa EXACT na campanha AUTO
-    try {
-      await base44.asServiceRole.entities.AmazonActionQueue.create({
-        amazon_account_id: amazonAccountId,
-        operation: 'create_negative_keyword',
-        entity_type: 'campaign',
-        entity_id: promo.source_campaign_id,
-        payload: {
-          campaign_id: promo.source_campaign_id,
-          keyword_text: promo.normalized_term,
-          match_type: 'negativeExact',
-          asin: promo.asin,
-          promotion_id: promo.id,
-        },
-        idempotency_key: `neg_${promo.source_campaign_id}_${promo.normalized_term.replace(/\s/g, '_').slice(0, 40)}`,
-        priority: 'normal',
-        status: 'pending',
-        scheduled_at: now,
-        source: 'runAutoCampaignLearning_negation',
-      });
-
-      await base44.asServiceRole.entities.SearchTermPromotion.update(promo.id, {
-        negative_created: true,
-        negative_confirmed_at: now,
-      });
-
-      stats.negatives_created++;
-    } catch (e) {
-      console.warn('[confirmManualCampaignsAndNegate] Error:', e?.message);
-    }
-  }
-}

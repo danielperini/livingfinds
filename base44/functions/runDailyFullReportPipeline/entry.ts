@@ -24,13 +24,6 @@ function getAdsBase(region: string) {
   return 'https://advertising-api.amazon.com';
 }
 
-function getSPBase(region: string) {
-  const r = (region || 'NA').toUpperCase();
-  if (r.includes('EU')) return 'https://sellingpartnerapi-eu.amazon.com';
-  if (r.includes('FE')) return 'https://sellingpartnerapi-fe.amazon.com';
-  return 'https://sellingpartnerapi-na.amazon.com';
-}
-
 function fmtDate(d: Date) { return d.toISOString().slice(0, 10); }
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 const BATCH = 100;
@@ -59,21 +52,6 @@ async function getAdsToken(account: any) {
   });
   const d = await res.json();
   if (!res.ok) throw new Error(`ADS token: ${d.error_description || res.status}`);
-  return d.access_token as string;
-}
-
-async function getSPToken() {
-  const params = new URLSearchParams({
-    grant_type: 'refresh_token',
-    refresh_token: Deno.env.get('AMAZON_SP_REFRESH_TOKEN') || Deno.env.get('SP_REFRESH_TOKEN') || '',
-    client_id: Deno.env.get('AMAZON_LWA_CLIENT_ID') || Deno.env.get('SP_CLIENT_ID') || '',
-    client_secret: Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || Deno.env.get('SP_CLIENT_SECRET') || '',
-  });
-  const res = await fetch('https://api.amazon.com/auth/o2/token', {
-    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString(),
-  });
-  const d = await res.json();
-  if (!res.ok) throw new Error(`SP-API token: ${d.error_description || res.status}`);
   return d.access_token as string;
 }
 
@@ -161,9 +139,7 @@ Deno.serve(async (req) => {
     const aid = account.id;
     const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID') || '';
     const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
-    const marketplaceId = account.marketplace_id || Deno.env.get('AMAZON_MARKETPLACE_ID') || 'A2Q3Y263D00KWC';
     const adsBase = getAdsBase(account.region || Deno.env.get('ADS_REGION') || 'NA');
-    const spBase = getSPBase(account.region || '');
 
     // Guard TTL 23h
     if (!forceSync && account.last_sync_at) {
@@ -296,35 +272,22 @@ Deno.serve(async (req) => {
       summary.phases.budget_usage = { error: e.message };
     }
 
-    // ── FASE 3: Inventory FBA via SP-API ─────────────────────────────────────
+    // ── FASE 3: Inventory FBA via the canonical paginated SP-API sync ────────
     try {
-      const spToken = await getSPToken();
-      const invRes = await fetch(
-        `${spBase}/fba/inventory/v1/summaries?granularityType=Marketplace&granularityId=${marketplaceId}&marketplaceIds=${marketplaceId}`,
-        { headers: { 'Authorization': `Bearer ${spToken}`, 'x-amz-access-token': spToken } }
-      );
-      if (invRes.ok) {
-        const invData = await invRes.json();
-        const summaries: any[] = invData?.payload?.inventorySummaries || [];
-        const existProds = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 2000).catch(() => []);
-        const prodByAsin = new Map((existProds as any[]).map(p => [p.asin, p]));
-        const invCreates: any[] = [];
-        const invUpdates: any[] = [];
-        for (const s of summaries) {
-          const qty = s.inventoryDetails?.fulfillableQuantity ?? s.totalQuantity ?? 0;
-          const inventoryStatus = qty === 0 ? 'out_of_stock' : qty < 5 ? 'low_stock' : 'in_stock';
-          const record: any = {
-            fba_inventory: qty, inventory_status: inventoryStatus, last_sync_at: now,
-            reserved_inventory: s.inventoryDetails?.reservedQuantity?.totalReservedQuantity || 0,
-            inbound_inventory: (s.inventoryDetails?.inboundWorkingQuantity || 0) + (s.inventoryDetails?.inboundShippedQuantity || 0),
-          };
-          const existing = prodByAsin.get(s.asin);
-          if (existing) invUpdates.push({ id: existing.id, ...record });
-          else if (s.asin) invCreates.push({ amazon_account_id: aid, asin: s.asin, sku: s.sellerSku || '', product_name: s.productName || s.asin, status: 'active', ...record });
-        }
-        await bulkUpsert(base44.asServiceRole.entities.Product, invCreates, invUpdates);
-        summary.phases.inventory = { created: invCreates.length, updated: invUpdates.length };
-      }
+      const inventoryResult = await base44.asServiceRole.functions.invoke('syncProductCatalogV2', {
+        amazon_account_id: aid,
+        _service_role: true,
+        trigger_type: 'daily_report_pipeline_inventory',
+      });
+      const inventoryData = inventoryResult?.data || inventoryResult || {};
+      if (inventoryData.ok !== true) throw new Error(inventoryData.error || 'SP-API inventory sync was not confirmed');
+      summary.phases.inventory = {
+        ok: true,
+        source: 'syncProductCatalogV2',
+        records: inventoryData.inventory_asins || 0,
+        pages: inventoryData.pages || 0,
+        observed_at: inventoryData.completed_at || new Date().toISOString(),
+      };
     } catch (e: any) { console.warn('[Pipeline] Inventário FBA (não crítico):', e.message); }
 
     // ── FASE 3b: Relatório HOURLY por ASIN para HourlySalesPattern ───────────
@@ -364,17 +327,14 @@ Deno.serve(async (req) => {
       duration_ms: Date.now() - startTime,
     }).catch(() => {});
 
-    // ── FASE 5: Disparar motor de decisão ─────────────────────────────────────
-    console.log('[Pipeline] Fase 5: disparando motor de decisão...');
-    try {
-      await base44.asServiceRole.functions.invoke('runFullAccountOptimizationWithNewLogic', {
-        amazon_account_id: aid, trigger: 'after_report_sync', _service_role: true,
-      });
-      summary.phases.decision_engine = { triggered: true };
-    } catch (e: any) {
-      console.warn('[Pipeline] Motor de decisão (não crítico):', e.message);
-      summary.phases.decision_engine = { triggered: false, error: e.message };
-    }
+    // Reports are asynchronous and are not ready when this request pipeline
+    // returns. Decision-making starts only from the report processor, which
+    // now enforces the canonical inventory/stock preflight itself.
+    summary.phases.decision_engine = {
+      deferred: true,
+      reason: 'wait_for_processed_reports_then_run_inventory_guarded_optimization',
+      owner: 'downloadAndProcessAmazonAdsReportJob',
+    };
 
     // ── FASE 6: Sincronizar keywords via SP Keywords API (Campaign Management) ──
     // No marketplace BR, spTargeting/spKeywords reports não retornam dados por keyword
@@ -448,13 +408,10 @@ Deno.serve(async (req) => {
       summary.phases.keywords_sync = { error: e.message };
     }
 
-    // ── FASE 7: Bids de estoque pendentes ─────────────────────────────────────
-    try {
-      const bidRes = await base44.asServiceRole.functions.invoke('executeStockBidRules', { amazon_account_id: aid });
-      summary.phases.stock_bid_execution = { executed: bidRes?.executed || 0, failed: bidRes?.failed || 0 };
-    } catch (e: any) {
-      summary.phases.stock_bid_execution = { triggered: false, error: e.message };
-    }
+    // Legacy stock-bid executor is deliberately not called here. Stock pauses
+    // and reactivation have a single owner (autoStockCampaignGuard), while all
+    // other Ads changes flow through the canonical decision queue.
+    summary.phases.stock_bid_execution = { skipped: true, owner: 'autoStockCampaignGuard_and_canonical_decision_queue' };
 
     summary.duration_s = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log('[Pipeline] ✅ Concluído em', summary.duration_s, 's | relatórios em polling assíncrono');

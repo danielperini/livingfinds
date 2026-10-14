@@ -1,6 +1,7 @@
 import { availableAdsStock, hasFreshAdsInventory } from '../../shared/stockAdsPolicy.ts';
 import { campaignCoverageEligible } from '../../shared/campaignCoverageEligibility.ts';
 import { belongsToStockCampaignAlert, planStockCampaignAlertReconciliation } from '../../shared/stockCampaignAlertPolicy.js';
+import { resolveProductScope } from '../../shared/skuCampaignScope.ts';
 /** Synchronize sellable stock, enforce stock pauses and process due kickoff jobs immediately. */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -16,6 +17,9 @@ function getBrtHour(): number {
 
 Deno.serve(async (req) => {
   const base44 = createClientFromRequest(req);
+  let inventorySyncConfirmed: boolean | null = null;
+  let stockGuardConfirmed: boolean | null = null;
+  let inventorySyncReused = false;
 
   try {
     // Auth — aceita automação (service role) ou usuário autenticado
@@ -32,6 +36,7 @@ Deno.serve(async (req) => {
 
     if (!forceAccountId) {
       const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' });
+      if (!accounts.length) return Response.json({ ok: false, error: 'Nenhuma conta Amazon conectada.', inventory_sync_confirmed: false, stock_guard_confirmed: false }, { status: 409 });
       const results = [];
       for (const account of accounts) {
         const result = await base44.asServiceRole.functions.invoke('checkInventoryChangesAndKickoff', {
@@ -43,20 +48,30 @@ Deno.serve(async (req) => {
     }
     const rows = await base44.asServiceRole.entities.AmazonAccount.filter({ id: forceAccountId }, null, 1);
     const account = rows[0];
-    if (!account) return Response.json({ ok: false, error: 'Conta Amazon não encontrada.' }, { status: 404 });
+    if (!account) return Response.json({ ok: false, error: 'Conta Amazon não encontrada.', inventory_sync_confirmed: false, stock_guard_confirmed: false }, { status: 404 });
     const aid = account.id;
 
     // ── 1. Sincronizar catálogo (inventário atualizado antes de qualquer decisão) ──
     if (!dryRun) {
-      const sync = await base44.asServiceRole.functions.invoke('syncProductCatalogV2', {
-        amazon_account_id: aid, trigger_type: 'inventory_check', _service_role: true,
-      });
-      if (sync?.data?.ok !== true) return Response.json({ ok: false, error: 'Inventário não confirmado; kickoff bloqueado.' }, { status: 409 });
+      const lastInventorySyncAt = Date.parse(String(account.sp_data_last_sync_at || ''));
+      const inventoryAgeMs = Date.now() - lastInventorySyncAt;
+      const recentlyConfirmed = Number.isFinite(lastInventorySyncAt) && inventoryAgeMs >= 0 && inventoryAgeMs < 10 * 60_000;
+      if (recentlyConfirmed) {
+        inventorySyncConfirmed = true;
+        inventorySyncReused = true;
+      } else {
+        const sync = await base44.asServiceRole.functions.invoke('syncProductCatalogV2', {
+          amazon_account_id: aid, trigger_type: 'inventory_check', _service_role: true,
+        });
+        inventorySyncConfirmed = sync?.data?.ok === true;
+      }
+      if (!inventorySyncConfirmed) return Response.json({ ok: false, error: 'Inventário não confirmado; kickoff bloqueado.', inventory_sync_confirmed: false, stock_guard_confirmed: false }, { status: 409 });
       const guard = await base44.asServiceRole.functions.invoke('autoStockCampaignGuard', {
         amazon_account_id: aid, _service_role: true,
       });
       const guardData = guard?.data || guard;
       if (guardData?.ok !== true) {
+        stockGuardConfirmed = false;
         const pauseErrors = (guardData?.accounts || []).flatMap((row: any) => row.errors || [])
           .filter((row: any) => row.step === 'pause' && row.asin);
         for (const failure of pauseErrors) {
@@ -66,51 +81,72 @@ Deno.serve(async (req) => {
             alert_family: 'campaign',
             severity: 'high',
             entity_type: 'product',
-            entity_id: String(failure.asin).toUpperCase(),
+            entity_id: String(failure.sku || failure.asin).toUpperCase(),
             asin: String(failure.asin).toUpperCase(),
+            sku: failure.sku ? String(failure.sku).toUpperCase() : undefined,
             title: `Pausa automática pendente: ${String(failure.asin).toUpperCase()}`,
             message: `O estoque FBA foi confirmado como zero, mas a pausa das campanhas não foi confirmada pela Amazon. Erro: ${String(failure.error || 'falha sem detalhe').slice(0, 300)}`,
             data_freshness: 'fresh',
             source_function: 'checkInventoryChangesAndKickoff',
           }).catch((error: any) => console.error('[checkInventoryChangesAndKickoff] failed to persist stock pause alert:', error?.message));
         }
-        return Response.json({ ok: false, error: 'Pausas de estoque não confirmadas; kickoff bloqueado.', guard: guardData }, { status: 409 });
+        return Response.json({ ok: false, error: 'Pausas de estoque não confirmadas; kickoff bloqueado.', guard: guardData, inventory_sync_confirmed: true, stock_guard_confirmed: false }, { status: 409 });
       }
+      stockGuardConfirmed = true;
     }
 
     // ── 2. Carregar todos os produtos da conta ────────────────────────────
-    const [allProducts, campaigns, kickoffQueue] = await Promise.all([
+    const [allProducts, campaigns, kickoffQueue, productAds] = await Promise.all([
       base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, '-updated_date', 500),
-      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 300),
+      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 2000),
       base44.asServiceRole.entities.ProductKickoffQueue.filter(
         { amazon_account_id: aid }, '-created_date', 100
       ).catch(() => []),
+      base44.asServiceRole.entities.ProductAd.filter({ amazon_account_id: aid }, '-synced_at', 5000).catch(() => []),
     ]);
 
     // ── Índices auxiliares ────────────────────────────────────────────────
-    // Campanhas ativas por ASIN
-    const activeCampaignsByAsin = new Map<string, any[]>();
-    const pausedCampaignsByAsin = new Map<string, any[]>();
-    for (const c of campaigns) {
-      const asin = String(c.asin || '').toUpperCase();
-      if (!asin) continue;
+    // Campanhas vinculadas por SKU. ASIN sozinho não pode misturar variantes.
+    const activeCampaignsBySku = new Map<string, any[]>();
+    const pausedCampaignsBySku = new Map<string, any[]>();
+    const productsBySku = new Map<string, any[]>();
+    for (const product of allProducts) {
+      const sku = String(product.sku || '').trim().toUpperCase();
+      if (sku) productsBySku.set(sku, [...(productsBySku.get(sku) || []), product]);
+    }
+    const scopedCampaigns = campaigns.map((campaign: any) => ({
+      campaign,
+      scope: resolveProductScope(campaign, productAds, allProducts),
+    }));
+    const ambiguousCampaignAsins = new Set<string>();
+    for (const { campaign: c, scope } of scopedCampaigns) {
+      const sku = scope.status === 'resolved' ? String(scope.sku || '').toUpperCase() : '';
+      if (!sku && scope.asin) ambiguousCampaignAsins.add(String(scope.asin).toUpperCase());
+      if (!sku) continue;
       const state = (c.state || c.status || '').toLowerCase();
       if (state === 'archived') continue;
       if (state === 'enabled') {
-        if (!activeCampaignsByAsin.has(asin)) activeCampaignsByAsin.set(asin, []);
-        activeCampaignsByAsin.get(asin)!.push(c);
+        if (!activeCampaignsBySku.has(sku)) activeCampaignsBySku.set(sku, []);
+        activeCampaignsBySku.get(sku)!.push(c);
       } else if (state === 'paused') {
-        if (!pausedCampaignsByAsin.has(asin)) pausedCampaignsByAsin.set(asin, []);
-        pausedCampaignsByAsin.get(asin)!.push(c);
+        if (!pausedCampaignsBySku.has(sku)) pausedCampaignsBySku.set(sku, []);
+        pausedCampaignsBySku.get(sku)!.push(c);
       }
     }
 
-    // ASINs já na fila de kick-off (pendente/processing)
-    const inQueueAsins = new Set(
-      kickoffQueue
-        .filter((q: any) => ['scheduled', 'processing'].includes(q.status))
-        .map((q: any) => q.asin)
-    );
+    // SKUs já na fila de kick-off (pendente/processing)
+    const inQueueSkus = new Set<string>();
+    for (const queueItem of kickoffQueue.filter((q: any) => ['scheduled', 'processing'].includes(q.status))) {
+      const queueSku = String(queueItem.sku || '').trim().toUpperCase();
+      if (queueSku) {
+        inQueueSkus.add(queueSku);
+        continue;
+      }
+      const matchingSkus = new Set(allProducts.filter((product: any) =>
+        String(product.asin || '').trim().toUpperCase() === String(queueItem.asin || '').trim().toUpperCase()
+      ).map((product: any) => String(product.sku || '').trim().toUpperCase()).filter(Boolean));
+      if (matchingSkus.size === 1) inQueueSkus.add([...matchingSkus][0]);
+    }
 
     const inWindow = true; // Fresh inventory launches without a time-of-day wait.
     const scheduledFor = nowIso();
@@ -123,6 +159,7 @@ Deno.serve(async (req) => {
       kickoffs_queued: 0,
       campaigns_reactivated: 0,
       alerts_created: 0,
+      campaign_identity_ambiguous: 0,
       skipped: 0,
       errors: [] as string[],
     };
@@ -130,6 +167,7 @@ Deno.serve(async (req) => {
     for (const product of allProducts) {
       const asin = product.asin;
       if (!asin || !product.sku) { stats.skipped++; continue; }
+      const skuKey = String(product.sku).trim().toUpperCase();
       if (product.status === 'archived') { stats.skipped++; continue; }
 
       if (!hasFreshAdsInventory(product) || !campaignCoverageEligible(product)) { stats.skipped++; continue; }
@@ -141,9 +179,15 @@ Deno.serve(async (req) => {
       const justRestocked = prevStatus === 'out_of_stock' && qty >= RESTOCK_MIN_QTY;
       const stockChangedSignificantly = prevQty > 0 && Math.abs(qty - prevQty) / prevQty >= STOCK_CHANGE_THRESHOLD;
 
-      const hasActiveCampaign = activeCampaignsByAsin.has(asin);
-      const hasPausedCampaign = pausedCampaignsByAsin.has(asin);
-      const alreadyQueued = inQueueAsins.has(asin);
+      const hasActiveCampaign = activeCampaignsBySku.has(skuKey);
+      const hasPausedCampaign = pausedCampaignsBySku.has(skuKey);
+      const alreadyQueued = inQueueSkus.has(skuKey);
+
+      if (ambiguousCampaignAsins.has(String(asin).toUpperCase())) {
+        stats.campaign_identity_ambiguous++;
+        stats.skipped++;
+        continue;
+      }
 
       // ── CASO 1: Produto novo com estoque, sem campanha ─────────────────
       if (qty > 0 && product.cost_confirmed === true && product.ads_scope_status === 'authorized' && !hasActiveCampaign && !hasPausedCampaign && !alreadyQueued) {
@@ -154,7 +198,7 @@ Deno.serve(async (req) => {
             asin,
             sku: product.sku,
             product_name: (product.product_name || product.display_name || asin).slice(0, 200),
-            mode: 'auto_plus_four',
+            mode: 'auto_only',
             status: 'scheduled',
             queue_hour: inWindow ? getBrtHour() : parseInt(scheduledFor.slice(11, 13)),
             queue_window: inWindow ? 'now' : 'next',
@@ -162,7 +206,7 @@ Deno.serve(async (req) => {
             attempt_count: 0,
             max_attempts: 5,
           });
-          inQueueAsins.add(asin);
+          inQueueSkus.add(skuKey);
           stats.kickoffs_queued++;
         }
         continue;
@@ -233,18 +277,11 @@ Deno.serve(async (req) => {
     const activeAlerts = await base44.asServiceRole.entities.Alert.filter(
       { amazon_account_id: aid, status: 'active' }, '-created_at', 1000
     ).catch(() => []);
-    const accountProducts = new Map<string, any>();
-    for (const product of allProducts) {
-      if (!product.asin) continue;
-      const asin = String(product.asin).toUpperCase();
-      const existing = accountProducts.get(asin);
-      const freshness = Date.parse(product.last_catalog_sync_at || product.updated_at || product.updated_date || 0) || 0;
-      const existingFreshness = Date.parse(existing?.last_catalog_sync_at || existing?.updated_at || existing?.updated_date || 0) || 0;
-      if (!existing || freshness > existingFreshness) accountProducts.set(asin, product);
-    }
-    for (const [asin, camps] of activeCampaignsByAsin.entries()) {
-      const product = accountProducts.get(String(asin).toUpperCase());
+    for (const [sku, camps] of activeCampaignsBySku.entries()) {
+      const skuProducts = productsBySku.get(sku) || [];
+      const product = skuProducts.length === 1 ? skuProducts[0] : null;
       if (!product) continue;
+      const asin = String(product.asin || '');
       const qty = availableAdsStock(product);
       if (qty === 0 && camps.length > 0) {
         oosCampaignsActive++;
@@ -255,9 +292,9 @@ Deno.serve(async (req) => {
             alert_family: 'campaign',
             severity: 'high',
             entity_type: 'product',
-            entity_id: String(asin).toUpperCase(),
+            entity_id: sku,
             asin: String(asin).toUpperCase(),
-            sku: product.sku,
+            sku,
             title: `Pausa automática pendente: ${String(asin).toUpperCase()}`,
             message: `${product.product_name || asin} ainda tem ${camps.length} campanha(s) ativa(s) após a verificação automática. A pausa precisa ser reconciliada com a Amazon.`,
             details: { active_campaign_ids: camps.map((campaign: any) => campaign.amazon_campaign_id || campaign.campaign_id).filter(Boolean) },
@@ -272,12 +309,14 @@ Deno.serve(async (req) => {
     if (!dryRun) {
       for (const product of allProducts) {
         const asin = String(product.asin || '').toUpperCase();
-        if (!asin) continue;
+        const sku = String(product.sku || '').trim().toUpperCase();
+        if (!asin || !sku) continue;
         const quantity = availableAdsStock(product);
         if (quantity < 0) continue; // dado ausente/inválido não autoriza limpar alerta
-        const activeCount = quantity === 0 ? (activeCampaignsByAsin.get(asin) || []).length : 0;
+        const activeCount = quantity === 0 ? (activeCampaignsBySku.get(sku) || []).length : 0;
         const reconciliation = planStockCampaignAlertReconciliation(activeAlerts, {
           asin,
+          sku,
           productId: product.id,
           activeCampaignCount: activeCount,
         });
@@ -295,7 +334,9 @@ Deno.serve(async (req) => {
             amazon_account_id: aid,
             alert_type: 'campaign_active_no_stock',
             entity_type: 'product',
-            entity_id: asin,
+            entity_id: sku,
+            asin,
+            sku,
             title: '-',
             message: '-',
             resolved: true,
@@ -313,6 +354,9 @@ Deno.serve(async (req) => {
 
     return Response.json({
       ok: kickoffExecution?.ok === true && !(kickoffExecution?.results || []).some((r: any) => r.ok === false),
+      inventory_sync_confirmed: dryRun ? null : inventorySyncConfirmed,
+      inventory_sync_reused: inventorySyncReused,
+      stock_guard_confirmed: dryRun ? null : stockGuardConfirmed,
       kickoff_execution: kickoffExecution,
       dry_run: dryRun,
       in_amazon_window: inWindow,
@@ -322,6 +366,6 @@ Deno.serve(async (req) => {
 
   } catch (error: any) {
     console.error('[checkInventoryChangesAndKickoff]', error.message);
-    return Response.json({ ok: false, error: error.message }, { status: 500 });
+    return Response.json({ ok: false, error: error.message, inventory_sync_confirmed: inventorySyncConfirmed === true, stock_guard_confirmed: stockGuardConfirmed === true }, { status: 500 });
   }
 });

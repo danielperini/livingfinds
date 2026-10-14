@@ -11,17 +11,25 @@ export function getAlertAsin(alert) {
   return upper(text.match(/\b[A-Z0-9]{10}\b/i)?.[0]);
 }
 
+export function getAlertSku(alert) {
+  return upper(alert?.sku || alert?.seller_sku || alert?.m_sku);
+}
+
 export function operationalAlertIdentity(alert) {
   const rawType = value(alert?.alert_type || alert?.type).toLowerCase();
   const type = STOCK_TYPES.has(rawType) ? 'stock_unavailable'
     : STOCK_CAMPAIGN_TYPES.has(rawType) ? 'campaign_active_no_stock'
       : rawType;
   const asin = getAlertAsin(alert);
+  const sku = getAlertSku(alert);
   const campaign = value(alert?.campaign_id || alert?.entity_id);
-  const entity = type === 'campaign_paused' ? campaign || asin : asin || campaign || value(alert?.entity_type);
+  const entity = type === 'campaign_paused' ? campaign || asin : sku || asin || campaign || value(alert?.entity_type);
   return [value(alert?.amazon_account_id), type, entity].join('::').toLowerCase();
 }
 
+/** @param {any} alert
+ *  @param {{ product?: any, availableFbaQuantity?: number, linkedCampaignStates?: string[] }} [options]
+ */
 export function planOperationalAlertCleanup(alert, { product, availableFbaQuantity, linkedCampaignStates = [] } = {}) {
   const type = value(alert?.alert_type || alert?.type).toLowerCase();
   const states = linkedCampaignStates.map(state => value(state).toLowerCase());

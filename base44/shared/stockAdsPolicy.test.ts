@@ -1,7 +1,7 @@
 import { assertEquals } from 'jsr:@std/assert';
 import { stockAdsDecision, availableAdsStock } from './stockAdsPolicy.ts';
 import { hasFreshAdsInventory } from './stockAdsPolicy.ts';
-import { inventoryAvailable, campaignStateConfirmed, isStockCampaignPause } from './inventorySyncPolicy.ts';
+import { inventoryAvailable, fbaInventorySnapshot, inventoryDecisionPreflight, campaignStateConfirmed, isStockCampaignPause } from './inventorySyncPolicy.ts';
 
 Deno.test('missing, ambiguous and invalid inventory never becomes sellable or zero', () => {
   for (const quantity of [undefined, null, '', true, -1, 1.5, 'bad']) {
@@ -58,6 +58,40 @@ Deno.test('FBA balance takes precedence according to the selected stock policy',
   assertEquals(stockAdsDecision({ available_quantity: 0, fba_inventory: 20 }), 'activate');
   assertEquals(stockAdsDecision({ available_quantity: 20, fba_inventory: 0 }), 'pause');
   assertEquals(stockAdsDecision({ fba_inventory: 1 }), 'activate');
+});
+
+Deno.test('SP-API FBA snapshot retains sellable, total, reserved, inbound and unfulfillable quantities', () => {
+  assertEquals(fbaInventorySnapshot({
+    totalQuantity: 19,
+    inventoryDetails: {
+      fulfillableQuantity: 13,
+      reservedQuantity: { totalReservedQuantity: 1 },
+      inboundWorkingQuantity: 2,
+      inboundShippedQuantity: 2,
+      inboundReceivingQuantity: 1,
+      unfulfillableQuantity: { totalUnfulfillableQuantity: 2 },
+    },
+  }, 'A2Q3Y263D00KWC', '2026-10-14T14:00:00.000Z'), {
+    fba_inventory: 13,
+    available_quantity: 13,
+    total_quantity: 19,
+    reserved_inventory: 1,
+    inbound_inventory: 5,
+    unfulfillable_inventory: 2,
+    inventory_snapshot_at: '2026-10-14T14:00:00.000Z',
+    inventory_marketplace_id: 'A2Q3Y263D00KWC',
+    inventory_source: 'sp_api_getInventorySummaries',
+  });
+});
+
+Deno.test('inventory preflight blocks live Ads decisions unless each account confirms sync and stock guard', () => {
+  assertEquals(inventoryDecisionPreflight({ inventory_sync_confirmed: true, stock_guard_confirmed: true }).allowed, true);
+  assertEquals(inventoryDecisionPreflight({ inventory_sync_confirmed: false, stock_guard_confirmed: true }).allowed, false);
+  assertEquals(inventoryDecisionPreflight({ accounts: [
+    { account_id: 'a', inventory_sync_confirmed: true, stock_guard_confirmed: true },
+    { account_id: 'b', inventory_sync_confirmed: true, stock_guard_confirmed: false },
+  ] }).blockedAccounts, ['b']);
+  assertEquals(inventoryDecisionPreflight({ inventory_sync_confirmed: false }, true).allowed, true);
 });
 
 Deno.test('seller confirmation permits temporary FBA override without changing Amazon quantity', async () => {

@@ -21,6 +21,14 @@
     "asin": {
       "type": "string"
     },
+    "sku": {
+      "type": "string",
+      "description": "Seller SKU anunciado pela campanha, usado para isolar estoque e métricas do produto."
+    },
+    "sku_identity_status": {
+      "type": "string",
+      "enum": ["verified_product_ad", "single_sku_fallback", "ambiguous", "unknown"]
+    },
     "name": {
       "type": "string"
     },

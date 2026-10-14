@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
+import { inventoryDecisionPreflight } from '../../shared/inventorySyncPolicy.ts';
 
 const invoke = async (base44: any, name: string, payload: Record<string, unknown>) => {
   try {
@@ -54,6 +55,23 @@ Deno.serve(async (request) => {
       decision_engine_correlation_id: correlationId,
       dry_run: dryRun,
     };
+
+    // Sales Mode can change bids, budgets and terms; it must use a recently
+    // confirmed SP-API inventory snapshot and a confirmed zero-stock guard.
+    const inventoryKickoff = await invoke(base44, 'checkInventoryChangesAndKickoff', common);
+    const inventoryPreflight = inventoryDecisionPreflight(inventoryKickoff, dryRun);
+    if (!inventoryPreflight.allowed) {
+      return Response.json({
+        ok: false,
+        blocked: true,
+        engine: 'sales-mode-v1.3-safety',
+        correlation_id: correlationId,
+        failed_stages: [{ stage: 'inventory_preflight', error: inventoryPreflight.reason }],
+        inventory_preflight: inventoryPreflight,
+        message: 'Ações de Ads bloqueadas porque o estoque FBA atual e a proteção de estoque não foram confirmados.',
+        mutations_created: 0,
+      }, { status: 409 });
+    }
 
     const promotionFilter: any = accountId ? { amazon_account_id: accountId } : {};
     const todayPromotions = await base44.asServiceRole.entities.SearchTermPromotion
@@ -180,7 +198,7 @@ Deno.serve(async (request) => {
           remaining: executionPasses.length ? Number(executionPasses[executionPasses.length - 1]?.remaining || 0) : 0,
         };
 
-    const stages = { snapshots, aiStrategy, harvest, bidRecovery, bidEconomics, waste, economicGuard, budget, execution };
+    const stages = { inventoryKickoff, inventoryPreflight, snapshots, aiStrategy, harvest, bidRecovery, bidEconomics, waste, economicGuard, budget, execution };
     const wasteRows = Array.isArray(waste?.results) ? waste.results : [];
     const metrics = {
       terms_harvested: numberFrom(harvest, 'aggregates', 'terms_harvested', 'candidates'),

@@ -4,7 +4,8 @@
  *
  * Uma venda total/halo nunca é tratada como venda do ASIN anunciado. A criação
  * exige colunas promovidas/same-SKU, ASIN resolvido sem ambiguidade, estoque e
- * CPC econômico seguro. Todas as chaves são ASIN + termo normalizado.
+ * CPC econômico seguro. As chaves operacionais incluem SKU e consulta literal
+ * completa; ASIN é identidade de catálogo e não substitui o SKU do vendedor.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { hasFreshAdsInventory } from '../../shared/stockAdsPolicy.ts';
@@ -59,9 +60,10 @@ function sourceCampaignType(row: any, campaignById: Map<string, any>): 'AUTO' | 
   return '';
 }
 
-function campaignName(asin: string, term: string): string {
-  const clean = term.replace(/[^a-z0-9\sáéíóúâêôãõç-]/gi, '').trim().slice(0, 48);
-  return `SP | MANUAL | EXACT | ${asin} | ${clean}`.slice(0, 128);
+function campaignName(asin: string, sku: string, term: string): string {
+  const cleanSku = String(sku || '').replace(/[^a-z0-9-]/gi, '').slice(0, 18);
+  const clean = term.replace(/[^a-z0-9\sáéíóúâêôãõç-]/gi, '').trim().slice(0, 36);
+  return `SP | MANUAL | EXACT | ${asin} | ${cleanSku} | ${clean}`.slice(0, 128);
 }
 
 function unwrap(response: any): any {
@@ -124,7 +126,7 @@ function sourceNeedsNegative(source: any): boolean {
   const match = normalizeSearchTerm(source.matchType).replace(/_/g, '-');
   const campaignType = String(source.campaignType || '').toUpperCase();
   return Boolean(source.campaignId && source.adGroupId) &&
-    !(campaignType === 'MANUAL' && match === 'exact');
+    campaignType === 'AUTO' && match !== 'exact';
 }
 
 Deno.serve(async (request) => {
@@ -152,7 +154,7 @@ Deno.serve(async (request) => {
     for (const account of accounts) {
       const aid = account.id;
       const now = new Date().toISOString();
-      const [searchTerms, campaigns, products, economics, assessments, settingsRows, keywords, promotions, termBank, keywordBank] = await Promise.all([
+      const [searchTerms, campaigns, products, economics, assessments, settingsRows, keywords, promotions, termBank, keywordBank, productAds] = await Promise.all([
         loadPaged(base44.asServiceRole.entities.SearchTerm, { amazon_account_id: aid }, '-date', 20000),
         base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, '-updated_at', 5000).catch(() => []),
         base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, '-updated_at', 3000).catch(() => []),
@@ -163,6 +165,7 @@ Deno.serve(async (request) => {
         base44.asServiceRole.entities.SearchTermPromotion.filter({ amazon_account_id: aid }, '-updated_at', 10000).catch(() => []),
         base44.asServiceRole.entities.TermBank.filter({ amazon_account_id: aid }, '-updated_at', 10000).catch(() => []),
         base44.asServiceRole.entities.KeywordBank.filter({ amazon_account_id: aid }, '-last_updated_at', 10000).catch(() => []),
+        base44.asServiceRole.entities.ProductAd.filter({ amazon_account_id: aid }, '-synced_at', 10000).catch(() => []),
       ]);
 
       const campaignById = new Map<string, any>();
@@ -171,8 +174,35 @@ Deno.serve(async (request) => {
           campaignById.set(String(id), campaign);
         }
       }
-      // Count manual campaigns once; paused ones still consume capacity.
-      const manualCampaignCountByAsin = new Map<string, number>();
+      const productAdSkusByCampaign = new Map<string, Set<string>>();
+      for (const ad of productAds) {
+        const campaignId = String(ad.campaign_id || '').trim();
+        const sku = String(ad.sku || '').trim().toUpperCase();
+        if (!campaignId || !sku) continue;
+        const values = productAdSkusByCampaign.get(campaignId) || new Set<string>();
+        values.add(sku);
+        productAdSkusByCampaign.set(campaignId, values);
+      }
+      const resolvedCampaignSku = (campaign: any) => {
+        const id = campaignIdOf(campaign);
+        const adSkus = productAdSkusByCampaign.get(id) || new Set<string>();
+        return adSkus.size === 1 ? [...adSkus][0] : adSkus.size > 1 ? '' : String(campaign?.sku || '').trim().toUpperCase();
+      };
+      const skuKey = (sku: unknown, asin: unknown) => {
+        const normalizedSku = String(sku || '').trim().toUpperCase();
+        return normalizedSku ? `SKU:${normalizedSku}` : `ASIN:${String(asin || '').trim().toUpperCase()}`;
+      };
+      const historicalSkuKey = (row: any) => {
+        const asin = String(row.asin || '').trim().toUpperCase();
+        const sku = String(row.sku || '').trim().toUpperCase();
+        if (sku) return skuKey(sku, asin);
+        const matches = products.filter((product: any) => product.status !== 'archived'
+          && String(product.asin || '').trim().toUpperCase() === asin
+          && String(product.sku || '').trim());
+        return matches.length === 1 ? skuKey(matches[0].sku, asin) : skuKey('', asin);
+      };
+      // Count manual campaigns once per SKU; paused campaigns still consume capacity.
+      const manualCampaignCountBySku = new Map<string, number>();
       const countedManualCampaignIds = new Set<string>();
       for (const campaign of campaigns) {
         const name = String(campaign.name || campaign.campaign_name || '');
@@ -183,12 +213,13 @@ Deno.serve(async (request) => {
         if (!id || countedManualCampaignIds.has(id)) continue;
         countedManualCampaignIds.add(id);
         const asin = String(campaign.asin || name.match(/B0[A-Z0-9]{8}/i)?.[0] || '').toUpperCase();
-        if (asin) manualCampaignCountByAsin.set(asin, (manualCampaignCountByAsin.get(asin) || 0) + 1);
+        const identity = skuKey(resolvedCampaignSku(campaign), asin);
+        if (asin && identity.startsWith('SKU:')) manualCampaignCountBySku.set(identity, (manualCampaignCountBySku.get(identity) || 0) + 1);
       }
-      const assessmentByAsin = new Map<string, any>();
+      const assessmentBySku = new Map<string, any>();
       for (const row of assessments) {
-        const asin = String(row.asin || '').toUpperCase();
-        if (asin && !assessmentByAsin.has(asin)) assessmentByAsin.set(asin, row);
+        const key = skuKey(row.sku, row.asin);
+        if (key.startsWith('SKU:') && !assessmentBySku.has(key)) assessmentBySku.set(key, row);
       }
       const settings = settingsRows[0] || {};
       const minBid = numberValue(settings.min_bid, 0.25);
@@ -204,9 +235,10 @@ Deno.serve(async (request) => {
         if (String(keyword.match_type || '').toLowerCase() !== 'exact') continue;
         const campaign = campaignById.get(String(keyword.campaign_id || ''));
         const asin = String(keyword.asin || campaign?.asin || '').toUpperCase();
+        const sku = keyword.sku || resolvedCampaignSku(campaign);
         const term = normalizeSearchTerm(keyword.keyword_text || keyword.keyword);
         if (asin && term) {
-          const key = `${asin}|${term}`;
+          const key = `${skuKey(sku, asin)}|${term}`;
           exactKeys.add(key);
           exactDestinationByKey.set(key, {
             campaignId: String(keyword.campaign_id || campaign?.campaign_id || campaign?.amazon_campaign_id || ''),
@@ -217,17 +249,17 @@ Deno.serve(async (request) => {
 
       const promotionByKey = new Map<string, any>();
       for (const promotion of promotions) {
-        const key = `${String(promotion.asin || '').toUpperCase()}|${normalizeSearchTerm(promotion.normalized_search_term || promotion.source_search_term)}`;
+        const key = `${historicalSkuKey(promotion)}|${normalizeSearchTerm(promotion.normalized_search_term || promotion.source_search_term)}`;
         if (key !== '|') promotionByKey.set(key, promotion);
       }
       const termBankByKey = new Map<string, any>();
       for (const row of termBank) {
-        const key = `${String(row.asin || '').toUpperCase()}|${normalizeSearchTerm(row.term_normalized || row.term)}`;
+        const key = `${historicalSkuKey(row)}|${normalizeSearchTerm(row.term_normalized || row.term)}`;
         if (key !== '|') termBankByKey.set(key, row);
       }
       const keywordBankByKey = new Map<string, any>();
       for (const row of keywordBank) {
-        const key = `${String(row.asin || '').toUpperCase()}|${normalizeSearchTerm(row.normalized_keyword || row.keyword)}`;
+        const key = `${historicalSkuKey(row)}|${normalizeSearchTerm(row.normalized_keyword || row.keyword)}`;
         if (key !== '|') keywordBankByKey.set(key, row);
       }
 
@@ -249,15 +281,18 @@ Deno.serve(async (request) => {
       });
       const verifiedKeys = new Set(rawRowsInWindow
         .filter((row: any) => row.same_sku_attribution_verified === true)
-        .map((row: any) => `${String(row.advertised_asin || '').toUpperCase()}|${normalizeSearchTerm(row.search_term)}`));
+        .map((row: any) => `${historicalSkuKey({ sku: row.advertised_sku || row.sku, asin: row.advertised_asin || row.asin })}|${normalizeSearchTerm(row.search_term)}`));
       // Registros legados SUMMARY podem sobrepor a janela DAILY. Quando já há
       // linha com atribuição same-SKU, a linha total-only é excluída para não
       // duplicar gasto/venda nem reduzir artificialmente a confiança.
       const rowsInWindow = rawRowsInWindow.filter((row: any) => {
-        const key = `${String(row.advertised_asin || '').toUpperCase()}|${normalizeSearchTerm(row.search_term)}`;
+        const key = `${historicalSkuKey({ sku: row.advertised_sku || row.sku, asin: row.advertised_asin || row.asin })}|${normalizeSearchTerm(row.search_term)}`;
         return !verifiedKeys.has(key) || row.same_sku_attribution_verified === true;
       });
-      const aggregates = aggregateSearchTermSnapshots(rowsInWindow);
+      const aggregates = aggregateSearchTermSnapshots(rowsInWindow.map((row: any) => ({
+        ...row,
+        source_campaign_type: row.source_campaign_type || sourceCampaignType(row, campaignById),
+      })));
       const rejected: any[] = [];
       const candidates: any[] = [];
       let bankCreated = 0;
@@ -265,14 +300,15 @@ Deno.serve(async (request) => {
 
       for (const aggregate of aggregates) {
         if (body.sku && aggregate.sku.trim().toUpperCase() !== String(body.sku).trim().toUpperCase()) continue;
-        const key = `${aggregate.asin}|${aggregate.normalizedTerm}`;
+        const identity = skuKey(aggregate.sku, aggregate.asin);
+        const key = `${identity}|${aggregate.normalizedTerm}`;
         const matchesSku = (row: any) => String(row.sku || '').trim().toUpperCase() === aggregate.sku.trim().toUpperCase()
           && String(row.asin || '').toUpperCase() === aggregate.asin;
         const productMatches = products.filter((row: any) => row.status !== 'archived' && row.catalog_sync_status !== 'duplicate' && matchesSku(row));
         const economyMatches = economics.filter(matchesSku);
         const product = productMatches.length === 1 ? productMatches[0] : undefined;
         const econ = economyMatches.length === 1 ? economyMatches[0] : undefined;
-        const assessment = assessmentByAsin.get(aggregate.asin);
+        const assessment = assessmentBySku.get(identity);
         const policy = resolveOperatingAcos(econ, targetAcos);
         const observedCpc = aggregate.clicks > 0 ? aggregate.spend / aggregate.clicks : 0;
         const safeCpc = resolveSafeMaxCpc({ economics: econ,
@@ -399,18 +435,19 @@ Deno.serve(async (request) => {
         (a.evaluation.sameSkuAcos ?? 9999) - (b.evaluation.sameSkuAcos ?? 9999)
       );
       const selected: any[] = [];
-      const selectedByAsin = new Map<string, number>();
-      const workingCountByAsin = new Map<string, number>(manualCampaignCountByAsin);
+      const selectedBySku = new Map<string, number>();
+      const workingCountBySku = new Map<string, number>(manualCampaignCountBySku);
       for (const candidate of candidates) {
         if (selected.length >= maxPromotions) break;
         const asin = String(candidate.aggregate.asin || '').toUpperCase();
+        const identity = skuKey(candidate.aggregate.sku, asin);
         const eligible = evaluateManualExactExpansion({
           availableFbaUnits: availableInventory(candidate.product),
           sameSkuAttributionVerified: candidate.aggregate.attributionVerified === true
             || String(candidate.aggregate.attributionFallbackReason || '').includes('single_advertised_sku_fallback'),
           sameSkuOrders: candidate.aggregate.sameSkuOrders,
-          manualCampaignCount: workingCountByAsin.get(asin) || 0,
-          createdThisCycle: selectedByAsin.get(asin) || 0,
+          manualCampaignCount: workingCountBySku.get(identity) || 0,
+          createdThisCycle: selectedBySku.get(identity) || 0,
           alreadyExact: false,
         });
         if (!eligible.eligible) {
@@ -418,8 +455,8 @@ Deno.serve(async (request) => {
           continue;
         }
         selected.push(candidate);
-        selectedByAsin.set(asin, (selectedByAsin.get(asin) || 0) + 1);
-        workingCountByAsin.set(asin, (workingCountByAsin.get(asin) || 0) + 1);
+        selectedBySku.set(identity, (selectedBySku.get(identity) || 0) + 1);
+        workingCountBySku.set(identity, (workingCountBySku.get(identity) || 0) + 1);
       }
       const promoted: any[] = [];
       const failed: any[] = [];
@@ -431,7 +468,7 @@ Deno.serve(async (request) => {
 
           for (const candidate of batch) {
             const primarySource = candidate.aggregate.sources[0] || {};
-            const idempotencyKey = `${aid}|${candidate.aggregate.asin}|${candidate.aggregate.normalizedTerm}|EXACT|same_sku_v1`;
+            const idempotencyKey = `${aid}|${skuKey(candidate.aggregate.sku, candidate.aggregate.asin)}|${candidate.aggregate.normalizedTerm}|EXACT|same_sku_v1`;
             try {
               const promotion = await base44.asServiceRole.entities.SearchTermPromotion.create({
                 amazon_account_id: aid,
@@ -458,7 +495,7 @@ Deno.serve(async (request) => {
                 initial_budget: candidate.initialBudget,
                 winner_score: candidate.winnerScore,
                 amazon_confirmation_status: 'pending',
-                destination_campaign_name: campaignName(candidate.aggregate.asin, candidate.aggregate.term),
+              destination_campaign_name: campaignName(candidate.aggregate.asin, candidate.aggregate.sku, candidate.aggregate.term),
                 promotion_status: 'campaign_creating',
                 completion_status: 'incomplete',
                 idempotency_key: idempotencyKey,
@@ -475,7 +512,7 @@ Deno.serve(async (request) => {
 
           const campaignResponse = await ads(base44, aid, 'sameSkuHarvestCreateCampaigns', '/sp/campaigns', {
             campaigns: prepared.map((item) => ({
-              name: campaignName(item.aggregate.asin, item.aggregate.term),
+              name: campaignName(item.aggregate.asin, item.aggregate.sku, item.aggregate.term),
               targetingType: 'MANUAL',
               state: 'ENABLED',
               budget: { budgetType: 'DAILY', budget: item.initialBudget },
@@ -588,8 +625,39 @@ Deno.serve(async (request) => {
           if (!withKeyword.length) continue;
           await wait(1500);
 
-          const negatives: any[] = [];
+          // Amazon's accepted write response is not proof that the Manual
+          // campaign is serving. Verify remote ENABLED state before excluding
+          // the term from its AUTO source.
+          const campaignIdsToConfirm = [...new Set(withKeyword.map((item) => String(item.campaignId)))];
+          const confirmationResponse = await ads(base44, aid, 'sameSkuHarvestConfirmManualCampaigns', '/sp/campaigns/list', {
+            stateFilter: { include: ['ENABLED'] },
+            campaignIdFilter: { include: campaignIdsToConfirm },
+            maxResults: Math.max(10, campaignIdsToConfirm.length),
+          }, 'application/vnd.spCampaign.v3+json').catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
+          const confirmationPayload = payloadOf(confirmationResponse);
+          const remotelyConfirmedIds = new Set<string>((confirmationPayload?.campaigns || confirmationPayload?.success || [])
+            .filter((row: any) => String(row?.state || '').toUpperCase() === 'ENABLED')
+            .map((row: any) => String(row?.campaignId || '')));
+          const confirmedManuals: any[] = [];
           for (const item of withKeyword) {
+            if (remotelyConfirmedIds.has(String(item.campaignId))) {
+              confirmedManuals.push(item);
+              continue;
+            }
+            const message = amazonFailure(confirmationResponse, 'A campanha manual ainda não foi confirmada como ativa pela Amazon.');
+            await base44.asServiceRole.entities.SearchTermPromotion.update(item.promotion.id, {
+              promotion_status: 'confirming',
+              amazon_confirmation_status: 'pending',
+              completion_status: 'manual_structure_pending_verification',
+              last_error: message,
+              updated_at: now,
+            }).catch(() => null);
+            failed.push({ asin: item.aggregate.asin, sku: item.aggregate.sku, term: item.aggregate.term, stage: 'manual_campaign_confirmation', error: message });
+          }
+          if (!confirmedManuals.length) continue;
+
+          const negatives: any[] = [];
+          for (const item of confirmedManuals) {
             const distinct = new Set<string>();
             for (const source of item.aggregate.sources.filter(sourceNeedsNegative)) {
               const key = `${source.campaignId}|${source.adGroupId}|${item.aggregate.normalizedTerm}`;
@@ -614,7 +682,7 @@ Deno.serve(async (request) => {
             }, 'application/vnd.spNegativeKeyword.v3+json').catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
           }
 
-          for (const item of withKeyword) {
+          for (const item of confirmedManuals) {
             const itemNegatives = negatives.map((entry, index) => ({ ...entry, index })).filter((entry) => entry.item.promotion.id === item.promotion.id);
             const negativeIds = itemNegatives.map((entry) => {
               const success = successAt(negativeResponse, 'negativeKeywords', entry.index);
@@ -629,8 +697,8 @@ Deno.serve(async (request) => {
                 amazon_campaign_id: item.campaignId,
                 asin: item.aggregate.asin,
                 sku: item.aggregate.sku || item.product?.sku || null,
-                name: campaignName(item.aggregate.asin, item.aggregate.term),
-                campaign_name: campaignName(item.aggregate.asin, item.aggregate.term),
+              name: campaignName(item.aggregate.asin, item.aggregate.sku, item.aggregate.term),
+              campaign_name: campaignName(item.aggregate.asin, item.aggregate.sku, item.aggregate.term),
                 campaign_type: 'SP',
                 targeting_type: 'MANUAL',
                 state: 'enabled',
@@ -712,7 +780,7 @@ Deno.serve(async (request) => {
             await base44.asServiceRole.entities.SearchTermPromotion.update(item.promotion.id, {
               promotion_status: negativesComplete ? 'confirming' : 'repair_required',
               amazon_confirmation_status: negativesComplete ? 'amazon_accepted' : 'pending',
-              completion_status: negativesComplete ? 'amazon_accepted_awaiting_probe' : 'manual_active_negative_pending',
+              completion_status: negativesComplete ? 'amazon_accepted_awaiting_probe' : itemNegatives.length === 0 ? 'manual_active_no_auto_source' : 'manual_active_negative_pending',
               destination_campaign_id: item.campaignId,
               destination_ad_group_id: item.adGroupId,
               destination_ad_id: item.productAdId || null,
@@ -769,7 +837,7 @@ Deno.serve(async (request) => {
               execution_mode: 'EXECUTE_NOW',
               confirmation_required: true,
               confirmation_status: 'pending',
-              idempotency_key: `${aid}|${item.aggregate.asin}|${item.aggregate.normalizedTerm}|same_sku_exact_v1`,
+              idempotency_key: `${aid}|${skuKey(item.aggregate.sku, item.aggregate.asin)}|${item.aggregate.normalizedTerm}|same_sku_exact_v1`,
               source_function: 'runImmediateSameSkuSearchTermHarvest',
               evaluated_at: now,
               executed_at: now,
@@ -802,7 +870,7 @@ Deno.serve(async (request) => {
         amazon_account_id: aid,
         window: `${cutoff}|${today}`,
         search_term_rows: rowsInWindow.length,
-        unique_asin_terms: aggregates.length,
+        unique_literal_terms: aggregates.length,
         same_sku_candidates: candidates.length,
         selected: selected.length,
         selected_candidates: selected.map(({ aggregate, safeBid, policy }) => ({
@@ -850,7 +918,7 @@ Deno.serve(async (request) => {
     return Response.json({
       ok: reports.every((report) => report.failed === 0),
       dry_run: dryRun,
-      policy: 'one_same_sku_sale_then_manual_exact_if_profitable_and_not_duplicate',
+      policy: 'three_verified_same_sku_sales_literal_term_positive_economics_no_duplicate',
       lookback_days: lookbackDays,
       accounts_processed: reports.length,
       reports,

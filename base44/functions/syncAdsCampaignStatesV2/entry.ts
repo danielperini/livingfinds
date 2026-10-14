@@ -196,9 +196,30 @@ Deno.serve(async (request) => {
     console.log(`[syncV8] enabled/paused: ${found.size} — excluindo archived`);
 
     // Carregar apenas campanhas não-archived locais
-    const existing = await base44.asServiceRole.entities.Campaign.filter(
-      { amazon_account_id: accountId }, '-updated_at', 5000
-    ).catch(() => []);
+    const [existing, productAds, products] = await Promise.all([
+      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, '-updated_at', 5000).catch(() => []),
+      base44.asServiceRole.entities.ProductAd.filter({ amazon_account_id: accountId }, '-synced_at', 5000).catch(() => []),
+      base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, '-updated_date', 5000).catch(() => []),
+    ]);
+    const skusByCampaign = new Map<string, Set<string>>();
+    for (const ad of productAds) {
+      const campaignId = String(ad.campaign_id || '');
+      const sku = String(ad.sku || '').trim().toUpperCase();
+      if (!campaignId || !sku) continue;
+      const values = skusByCampaign.get(campaignId) || new Set<string>();
+      values.add(sku);
+      skusByCampaign.set(campaignId, values);
+    }
+    const skusByAsin = new Map<string, Set<string>>();
+    for (const product of products) {
+      if (product.status === 'archived') continue;
+      const asin = String(product.asin || '').trim().toUpperCase();
+      const sku = String(product.sku || '').trim().toUpperCase();
+      if (!asin || !sku) continue;
+      const values = skusByAsin.get(asin) || new Set<string>();
+      values.add(sku);
+      skusByAsin.set(asin, values);
+    }
 
     const existingById = new Map<string, any[]>();
     for (const row of existing) {
@@ -221,6 +242,11 @@ Deno.serve(async (request) => {
       )[0];
       const resolvedTargetingType = canonicalNameTargetingType(campaign, local) ||
         campaign._resolvedTargetingType || targetingType(campaign, local);
+      const productAdSkus = skusByCampaign.get(id) || new Set<string>();
+      const asin = String(local?.asin || '').trim().toUpperCase();
+      const resolvedSku = productAdSkus.size === 1 ? [...productAdSkus][0]
+        : productAdSkus.size > 1 ? ''
+        : String(local?.sku || '').trim().toUpperCase() || (skusByAsin.get(asin)?.size === 1 ? [...(skusByAsin.get(asin) || [])][0] : '');
       const record = {
         amazon_account_id: accountId,
         campaign_id: id,
@@ -228,6 +254,11 @@ Deno.serve(async (request) => {
         name: campaign.name,
         campaign_name: campaign.name,
         campaign_type: 'SP',
+        sku: resolvedSku || null,
+        sku_identity_status: productAdSkus.size > 1 ? 'ambiguous'
+          : productAdSkus.size === 1 ? 'verified_product_ad'
+          : resolvedSku ? (local?.sku ? local?.sku_identity_status || 'single_sku_fallback' : 'single_sku_fallback')
+          : 'unknown',
         targeting_type: resolvedTargetingType,
         amazon_targeting_type: resolvedTargetingType,
         amazon_status: remoteState,

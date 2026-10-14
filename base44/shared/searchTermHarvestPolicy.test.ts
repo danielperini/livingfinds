@@ -114,23 +114,25 @@ Deno.test('orçamento de EXACT vencedor usa economia e CPC em vez de valor fixo'
   if (budget <= 15 || budget > 30) throw new Error(`orçamento vencedor não competitivo: ${budget}`);
 });
 
-Deno.test('exige duas vendas verificadas do mesmo SKU e bloqueia venda halo', () => {
+Deno.test('exige mais de duas vendas verificadas do mesmo SKU e bloqueia venda halo', () => {
   const base = {
     asin: 'B0FN4RCXY2', sku: 'SKU-1', term: 'lixeira inox 15l', normalizedTerm: 'lixeira inox 15l',
     termFamilyKey: 'lixeira inox 15l', rawVariants: ['lixeira inox 15l'],
-    impressions: 20, clicks: 2, spend: 0.8, totalOrders: 2, totalSales: 407.6,
-    sameSkuOrders: 2, sameSkuSales: 407.6, haloOrders: 0, haloSales: 0, latestDate: '2026-07-31',
+    impressions: 20, clicks: 3, spend: 0.8, totalOrders: 3, totalSales: 611.4,
+    sameSkuOrders: 3, sameSkuSales: 611.4, haloOrders: 0, haloSales: 0, latestDate: '2026-07-31',
     sourceRows: [], sources: [], attributionVerified: true, skuResolutionVerified: true,
   };
   const eligible = evaluateHarvestCandidate({ aggregate: base, inStock: true, economicsActionable: true, breakEvenAcos: 40, safeBid: 0.45, alreadyExact: false, alreadyPromoted: false });
-  if (!eligible.eligible) throw new Error(`duas vendas do mesmo SKU deveriam promover: ${eligible.reason}`);
+  if (!eligible.eligible) throw new Error(`três vendas do mesmo SKU deveriam promover: ${eligible.reason}`);
   const oneSale = evaluateHarvestCandidate({ aggregate: { ...base, totalOrders: 1, sameSkuOrders: 1, totalSales: 203.8, sameSkuSales: 203.8 }, inStock: true, economicsActionable: true, breakEvenAcos: 40, safeBid: 0.45, alreadyExact: false, alreadyPromoted: false });
-  if (oneSale.eligible || oneSale.reason !== 'requires_two_verified_same_sku_orders') throw new Error('uma única venda não pode criar campanha manual');
+  if (oneSale.eligible || oneSale.reason !== 'requires_more_than_two_verified_same_sku_orders') throw new Error('menos de três vendas não podem criar campanha manual');
+  const twoSales = evaluateHarvestCandidate({ aggregate: { ...base, sameSkuOrders: 2 }, inStock: true, economicsActionable: true, breakEvenAcos: 40, safeBid: 0.45, alreadyExact: false, alreadyPromoted: false });
+  if (twoSales.eligible || twoSales.reason !== 'requires_more_than_two_verified_same_sku_orders') throw new Error('duas vendas ainda não podem criar campanha manual');
   for (const breakEvenAcos of [null, 0, -5]) {
     if (evaluateHarvestCandidate({ aggregate: base, inStock: true, economicsActionable: true, breakEvenAcos, safeBid: 0.45, alreadyExact: false, alreadyPromoted: false }).eligible) throw new Error('margem ausente/negativa não pode promover');
   }
   const halo = evaluateHarvestCandidate({ aggregate: { ...base, sameSkuOrders: 0, sameSkuSales: 0, haloOrders: 1, haloSales: 203.8 }, inStock: true, economicsActionable: true, breakEvenAcos: 40, safeBid: 0.45, alreadyExact: false, alreadyPromoted: false });
-  if (halo.eligible || halo.reason !== 'requires_two_verified_same_sku_orders') throw new Error('venda halo não pode promover');
+  if (halo.eligible || halo.reason !== 'requires_more_than_two_verified_same_sku_orders') throw new Error('venda halo não pode promover');
 });
 
 Deno.test('identifica fragmento contíguo do título em sugestões geradas', () => {
@@ -156,7 +158,7 @@ Deno.test('EXACT equivalente ativa não é duplicada', () => {
   const aggregate = {
     asin: 'B0FN4RCXY2', sku: 'SKU-1', term: 'lixeira inox', normalizedTerm: 'lixeira inox',
     termFamilyKey: 'lixeira inox', rawVariants: ['lixeira inox'], impressions: 20, clicks: 2,
-    spend: 1, totalOrders: 2, totalSales: 60, sameSkuOrders: 2, sameSkuSales: 60,
+    spend: 1, totalOrders: 3, totalSales: 90, sameSkuOrders: 3, sameSkuSales: 90,
     haloOrders: 0, haloSales: 0, latestDate: '2026-08-25', sourceRows: [], sources: [],
     attributionVerified: true, skuResolutionVerified: true,
   };

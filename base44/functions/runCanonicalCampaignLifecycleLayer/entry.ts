@@ -91,12 +91,11 @@ Deno.serve(async (request) => {
       const harvesting = await invoke(base44, 'runImmediateSameSkuSearchTermHarvest', {
         ...common,
         lookback_days: 65,
-        // A primeira venda same-SKU comprovada cria um teste EXACT de 72h com
-        // bid econômico. Duas vendas continuam sendo sinal de escala, não uma
-        // barreira para descobrir cedo termos lucrativos.
-        minimum_orders: 1,
+        // Só promover o termo de busca real após pelo menos três pedidos
+        // atribuídos ao mesmo SKU e economia positiva confirmada.
+        minimum_orders: 3,
         initial_exact_test_hours: 72,
-        maximum_orders_for_initial_promotion: 3,
+        maximum_orders_for_initial_promotion: 2,
         target_acos: targetAcos,
         target_acos_source: 'PerformanceSettings',
         inherit_source_bid: true,

@@ -78,6 +78,7 @@ jobs:
             base44/shared/metricsToAmazonMutation.e2e.test.ts \
             base44/shared/autoCampaignRepairPolicy.test.ts \
             base44/shared/skuCampaignDistributionPolicy.test.ts \
+            base44/shared/manualKickoffReactivationPolicy.test.ts \
             base44/shared/skuCampaignScope.test.ts \
             base44/shared/campaignMetricsIntegrity.test.ts \
             base44/shared/economicBudgetBalancer.test.ts

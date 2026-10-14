@@ -79,10 +79,12 @@ async function cleanupQueue(base44: any, accountId?: string) {
   let resumedFromStock = 0;
   let unlocked = 0;
   let duplicatesRemoved = 0;
+  let ambiguousIdentity = 0;
   const seen = new Set<string>();
 
   for (const item of rows) {
-    const key = `${item.amazon_account_id}|${item.asin}|${item.mode}|${String(item.keyword || '').trim().toLowerCase()}`;
+    const normalizedMode = item.mode === 'manual_only' ? 'manual_only' : 'auto_only';
+    const key = `${item.amazon_account_id}|${String(item.sku || '').trim().toUpperCase()}|${item.asin}|${normalizedMode}|${String(item.keyword || '').trim().toLowerCase()}`;
     if (seen.has(key) && item.status !== 'processing') {
       await base44.asServiceRole.entities.ProductKickoffQueue.delete(item.id).catch(() => {});
       duplicatesRemoved++;
@@ -90,16 +92,32 @@ async function cleanupQueue(base44: any, accountId?: string) {
     }
     seen.add(key);
 
-    const productKey = `${item.amazon_account_id}|${item.asin}`;
+    const productKey = `${item.amazon_account_id}|${String(item.sku || '').trim().toUpperCase()}|${item.asin}`;
     if (!productCache.has(productKey)) {
       const products = await base44.asServiceRole.entities.Product.filter({
         amazon_account_id: item.amazon_account_id,
         asin: item.asin,
         ...(item.sku ? { sku: item.sku } : {}),
-      }, '-updated_at', 1).catch(() => []);
-      productCache.set(productKey, products[0] || null);
+      }, '-updated_at', 20).catch(() => []);
+      const candidates = products.filter((product: any) => product.status !== 'archived'
+        && product.catalog_sync_status !== 'duplicate');
+      const distinctSkus = new Set(candidates.map((product: any) => String(product.sku || '').trim().toUpperCase()).filter(Boolean));
+      const resolved = item.sku
+        ? candidates.find((product: any) => String(product.sku || '').trim().toUpperCase() === String(item.sku).trim().toUpperCase()) || null
+        : distinctSkus.size === 1 ? candidates[0] || null : null;
+      productCache.set(productKey, resolved);
     }
     const product = productCache.get(productKey);
+
+    if (!product) {
+      await base44.asServiceRole.entities.ProductKickoffQueue.update(item.id, {
+        status: 'cancelled', started_at: null,
+        last_error: 'Kick-off legado sem SKU não pode ser resolvido com segurança para este ASIN.',
+        last_stage: 'sku_identity_guard', error_code: 'ambiguous_or_missing_sku_identity', retryable: false,
+      }).catch(() => {});
+      ambiguousIdentity++;
+      continue;
+    }
 
     if (isOutOfStock(product)) {
       if (item.status !== 'waiting_stock') {
@@ -141,6 +159,7 @@ async function cleanupQueue(base44: any, accountId?: string) {
     resumed_from_stock: resumedFromStock,
     unlocked,
     duplicates_removed: duplicatesRemoved,
+    ambiguous_identity_cancelled: ambiguousIdentity,
   };
 }
 
@@ -185,8 +204,22 @@ Deno.serve(async (request) => {
         amazon_account_id: item.amazon_account_id,
         asin: item.asin,
         ...(item.sku ? { sku: item.sku } : {}),
-      }, '-updated_at', 1).catch(() => []);
-      const product = products[0];
+      }, '-updated_at', 20).catch(() => []);
+      const candidates = products.filter((row: any) => row.status !== 'archived' && row.catalog_sync_status !== 'duplicate');
+      const distinctSkus = new Set(candidates.map((row: any) => String(row.sku || '').trim().toUpperCase()).filter(Boolean));
+      const product = item.sku
+        ? candidates.find((row: any) => String(row.sku || '').trim().toUpperCase() === String(item.sku).trim().toUpperCase())
+        : distinctSkus.size === 1 ? candidates[0] : null;
+
+      if (!product) {
+        await base44.asServiceRole.entities.ProductKickoffQueue.update(item.id, {
+          status: 'cancelled', started_at: null,
+          last_error: 'Kick-off sem SKU não pode ser associado a um único produto do ASIN.',
+          last_stage: 'sku_identity_guard', error_code: 'ambiguous_or_missing_sku_identity', retryable: false,
+        }).catch(() => {});
+        results.push({ id: item.id, asin: item.asin, ok: false, blocked: true, reason: 'ambiguous_or_missing_sku_identity' });
+        continue;
+      }
 
       if (isOutOfStock(product)) {
         await setWaitingStock(base44, item, product);
@@ -240,8 +273,7 @@ Deno.serve(async (request) => {
               asin: item.asin,
               sku: item.sku || product?.sku || null,
               product_name: item.product_name || product?.product_name || item.asin,
-              max_keywords: 4,
-              minimum_ai_confidence: 0.90,
+          max_keywords: 0,
               _window_execution: true,
               _service_role: true,
             });
@@ -303,7 +335,7 @@ Deno.serve(async (request) => {
         });
 
         results.push({ id: item.id, asin: item.asin, ok: false, retry_scheduled: retry, retry_in_seconds: retry ? Math.round(backoffMs / 1000) : 0, response: data });
-      } catch (error) {
+      } catch (error: any) {
         const text = String(error?.message || error);
         const flags = classify({ error: text });
 
@@ -361,7 +393,7 @@ Deno.serve(async (request) => {
     }
 
     return Response.json({ ok: true, processed: results.length, batch_size: batchLimit, spacing_seconds: 15, cleanup, dedupe: dedupeResult?.data || dedupeResult || null, results });
-  } catch (error) {
+  } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || 'Erro ao processar fila de Kick-off V2' }, { status: 500 });
   }
 });

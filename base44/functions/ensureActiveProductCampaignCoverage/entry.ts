@@ -46,9 +46,13 @@ Deno.serve(async (req) => {
       let stockGuard: any = null;
       let campaignStateSync: any = null;
       if (!dryRun && !fastMode) {
-        catalogSync = dataOf(await base44.asServiceRole.functions.invoke('syncProductCatalogV2', {
-          _service_role: true, amazon_account_id: accountId,
-        }).catch((error: any) => ({ data: { ok: false, error: error?.message } })));
+        const lastInventorySync = Date.parse(String(account.sp_data_last_sync_at || ''));
+        const inventoryFresh = Number.isFinite(lastInventorySync) && Date.now() - lastInventorySync >= 0 && Date.now() - lastInventorySync < 10 * 60_000;
+        catalogSync = inventoryFresh
+          ? { ok: true, reused: true, inventory_asins: 1, observed_at: account.sp_data_last_sync_at }
+          : dataOf(await base44.asServiceRole.functions.invoke('syncProductCatalogV2', {
+              _service_role: true, amazon_account_id: accountId,
+            }).catch((error: any) => ({ data: { ok: false, error: error?.message } })));
         if (catalogSync?.ok !== false && Number(catalogSync?.inventory_asins || 0) > 0) {
           await base44.asServiceRole.functions.invoke('applyAdsScopeAuthorization', {
             _service_role: true, amazon_account_id: accountId, dry_run: false,
@@ -69,22 +73,53 @@ Deno.serve(async (req) => {
         campaignStateSync = dataOf(await base44.asServiceRole.functions.invoke('syncAdsCampaignStatesV2', {
           _service_role: true, amazon_account_id: accountId,
         }).catch((error: any) => ({ data: { ok: false, error: error?.message } })));
-        await base44.asServiceRole.functions.invoke('deduplicateAutoCampaignsByAsin', {
+        const duplicateSync = dataOf(await base44.asServiceRole.functions.invoke('deduplicateAutoCampaignsByAsin', {
           _service_role: true, amazon_account_id: accountId, dry_run: false,
-        });
+        }).catch((error: any) => ({ data: { ok: false, error: error?.message } })));
+        const preflightFailures = Object.entries({
+          catalog_sync: catalogSync,
+          offer_sync: offerSync,
+          stock_guard: stockGuard,
+          campaign_state_sync: campaignStateSync,
+          auto_deduplication: duplicateSync,
+        }).filter(([stage, result]: [string, any]) => {
+          if (stage === 'catalog_sync') return result?.ok !== true || Number(result?.inventory_asins || 0) <= 0;
+          return result?.ok !== true;
+        }).map(([stage, result]: [string, any]) => ({ stage, error: result?.error || 'Etapa sem confirmação válida da Amazon.' }));
+        if (preflightFailures.length) {
+          accountResults.push({
+            amazon_account_id: accountId, active_products: 0, processed: 0, created: 0,
+            reactivated: 0, already_enabled: 0, failed: preflightFailures.length,
+            stage_failures: preflightFailures, rows: [], catalog_sync: catalogSync,
+            stock_guard: stockGuard, campaign_state_sync: campaignStateSync,
+            auto_deduplication: duplicateSync,
+          });
+          continue;
+        }
       }
 
       const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, '-updated_date', 2000);
       const eligible = products.filter(p => hasFreshAdsInventory(p) && campaignCoverageEligible(p));
       const limitedEligible = eligible.slice(0, maxProducts);
-      const seenAsins = new Set<string>();
+      const seenSkus = new Set<string>();
       const rows: any[] = [];
+      const productAds = await base44.asServiceRole.entities.ProductAd.filter({ amazon_account_id: accountId }, '-synced_at', 5000).catch(() => []);
+      const productAdSkusByCampaign = new Map<string, Set<string>>();
+      for (const ad of productAds) {
+        const campaignId = String(ad.campaign_id || '');
+        const adSku = String(ad.sku || '').trim().toUpperCase();
+        if (!campaignId || !adSku) continue;
+        const values = productAdSkusByCampaign.get(campaignId) || new Set<string>();
+        values.add(adSku);
+        productAdSkusByCampaign.set(campaignId, values);
+      }
 
       for (const product of limitedEligible) {
         const sku = String(product.sku).trim();
+        const skuKey = sku.toUpperCase();
         const asin = String(product.asin).trim().toUpperCase();
-        if (seenAsins.has(asin)) continue;
-        seenAsins.add(asin);
+        if (seenSkus.has(skuKey)) continue;
+        seenSkus.add(skuKey);
 
         if (dryRun) {
           const campaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId, asin }, undefined, 100);
@@ -92,7 +127,12 @@ Deno.serve(async (req) => {
             const targeting = String(c.targeting_type || '').toUpperCase();
             const name = String(c.name || c.campaign_name || '').toUpperCase();
             const state = String(c.state || c.status || '').toUpperCase();
-            return c.archived !== true && state !== 'ARCHIVED' && (targeting === 'AUTO' || name.includes('AUTO'));
+            const campaignId = String(c.amazon_campaign_id || c.campaign_id || '');
+            const linkedSkus = productAdSkusByCampaign.get(campaignId) || new Set<string>();
+            const identityMatches = linkedSkus.size === 1 && linkedSkus.has(skuKey)
+              || linkedSkus.size === 0 && String(c.sku || '').trim().toUpperCase() === skuKey
+              || linkedSkus.size === 0 && !c.sku && products.filter((row: any) => String(row.asin || '').toUpperCase() === asin && row.status !== 'archived').length === 1;
+            return identityMatches && c.archived !== true && state !== 'ARCHIVED' && (targeting === 'AUTO' || name.includes('AUTO'));
           });
           rows.push({ sku, asin, action: autos.length ? (String(autos[0].state || autos[0].status).toUpperCase() === 'ENABLED' ? 'existing_enabled' : 'would_reactivate') : 'would_create', auto_campaigns: autos.length, exact_one_auto_after_reconciliation: autos.length === 1 });
           continue;
@@ -123,7 +163,7 @@ Deno.serve(async (req) => {
         // confirma o teto de exatamente uma AUTO antes dos reparos e harvest.
         finalAutoReconciliation = dataOf(await base44.asServiceRole.functions.invoke('deduplicateAutoCampaignsByAsin', {
           _service_role: true, amazon_account_id: accountId, dry_run: false,
-          asins: [...seenAsins],
+          asins: [...new Set(limitedEligible.map((p: any) => String(p.asin || '').toUpperCase()))],
         }).catch((error: any) => ({ data: { ok: false, error: error?.message } })));
         repair = dataOf(await base44.asServiceRole.functions.invoke('repairIncompleteAutoCampaigns', {
           _service_role: true, amazon_account_id: accountId, asins: limitedEligible.map((p: any) => p.asin),
