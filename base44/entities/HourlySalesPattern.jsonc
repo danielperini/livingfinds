@@ -9,6 +9,10 @@
       "type": "string",
       "description": "ASIN do produto. null = padr\u00e3o da conta (agregado global)"
     },
+    "sku": {
+      "type": "string",
+      "description": "SKU exato do produto; padrões de horário não são agregados entre variantes"
+    },
     "day_of_week": {
       "type": "integer",
       "minimum": 0,

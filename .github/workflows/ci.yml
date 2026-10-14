@@ -77,7 +77,9 @@ jobs:
             base44/shared/v6siaLifecycle.e2e.test.ts \
             base44/shared/metricsToAmazonMutation.e2e.test.ts \
             base44/shared/autoCampaignRepairPolicy.test.ts \
-            base44/shared/skuCampaignDistributionPolicy.test.ts
+            base44/shared/skuCampaignDistributionPolicy.test.ts \
+            base44/shared/skuCampaignScope.test.ts \
+            base44/shared/economicBudgetBalancer.test.ts
       - name: Check SKU campaign distribution enforcement
         run: |
           deno check --node-modules-dir=auto \
@@ -115,6 +117,15 @@ jobs:
             base44/functions/reconcileAndRetryDecisions/entry.ts
       - name: Check canonical weekly review
         run: deno check --node-modules-dir=auto base44/functions/runCanonicalWeeklyDecisionReview/entry.ts
+      - name: Check SKU and campaign isolated decision engines
+        run: |
+          deno check --node-modules-dir=auto \
+            base44/shared/skuCampaignScope.ts \
+            base44/functions/runEconomicBudgetBalancer/entry.ts \
+            base44/functions/runEconomicCurveAdsGuard/entry.ts \
+            base44/functions/runAsinPeakProfileLearning/entry.ts \
+            base44/functions/promoteWinningSearchTerms/entry.ts \
+            base44/functions/negateKeywordInAutoCampaign/entry.ts
       - name: Check canonical economy-first dayparting
         run: |
           deno check --node-modules-dir=auto \

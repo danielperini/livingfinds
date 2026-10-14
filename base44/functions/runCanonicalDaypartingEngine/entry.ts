@@ -2,6 +2,7 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 import { runCanonicalNativeDaypartSync } from '../../shared/canonicalNativeDaypartSync.ts';
 import { readConfirmedTodaySpend, resolveDailyCap } from '../../shared/portfolioBudgetMath.ts';
 import { evaluateCentralGoals } from '../../shared/centralPerformanceGoals.ts';
+import { latestMetricsByCampaign, resolveProductScope, resolveSkuScopedRow, selectCampaignHourEvidence, uniqueCampaignRows } from '../../shared/skuCampaignScope.ts';
 
 /**
  * Motor canônico de dayparting híbrido.
@@ -13,7 +14,7 @@ import { evaluateCentralGoals } from '../../shared/centralPerformanceGoals.ts';
  * - subentrega econômica pode autorizar micro-recuperação de exposição;
  * - dry-run não persiste nada.
  */
-const ENGINE_VERSION = 'canonical-dayparting-v5-sales-recovery';
+const ENGINE_VERSION = 'canonical-dayparting-v6-sku-campaign-isolated';
 const MIN_REDUCTION_IMPRESSIONS = 200;
 const MIN_REDUCTION_CLICKS = 10;
 const MIN_REDUCTION_SPEND = 12;
@@ -102,56 +103,51 @@ function isDayAggregatePattern(row: any) {
   return Number(row?.hour) === 0 && !row?.asin && !row?.campaign_id && Number(row?.occurrences || 0) > 24;
 }
 
-function resolveSlot(decisions: any[], patterns: any[], controller: any, dayOfWeek: number, hour: number) {
-  const learnedDecision = decisions
-    .filter((row) => Number(row.day_of_week) === dayOfWeek && Number(row.hour) === hour && !isCanonicalAudit(row))
-    .sort((a, b) => timestamp(b) - timestamp(a))[0] || null;
-  const pattern = patterns
-    .filter((row) => Number(row.day_of_week) === dayOfWeek && Number(row.hour) === hour && !isDayAggregatePattern(row))
-    .sort((a, b) => timestamp(b) - timestamp(a))[0] || null;
-
-  if (learnedDecision && (!pattern || timestamp(learnedDecision) >= timestamp(pattern))) {
-    return {
-      classification: classify(learnedDecision.slot_classification),
-      score: Number(learnedDecision.time_slot_score || 0),
-      mature: learnedDecision.data_mature === true || ['HIGH', 'VERY_HIGH'].includes(String(learnedDecision.data_confidence || '')),
-      source: 'DaypartingDecision_learned',
-      source_updated_at: learnedDecision.updated_at || learnedDecision.created_at || null,
-    };
-  }
-  if (pattern) {
-    return {
-      classification: classify(pattern.classification),
-      score: Number(pattern.peak_score || 0),
-      mature: Number(pattern.occurrences || 0) >= 3 && String(pattern.classification || '') !== 'INSUFFICIENT_DATA',
-      source: 'HourlySalesPattern',
-      source_updated_at: pattern.updated_at || pattern.created_at || null,
-    };
-  }
-
-  const scores = parseObject(controller?.hour_value_scores);
-  const score = Number(scores?.[hour] || 0);
+function resolveSlot(
+  decisions: any[],
+  patterns: any[],
+  dayOfWeek: number,
+  hour: number,
+  campaignId: string,
+  sku: string,
+) {
+  const evidence = selectCampaignHourEvidence({
+    decisions: decisions.filter((row) => !isCanonicalAudit(row)),
+    patterns,
+    campaignId,
+    sku,
+    dayOfWeek,
+    hour,
+  });
+  const row = evidence.row;
+  if (!row) return {
+    classification: 'COLLECTING_DATA',
+    score: 0,
+    mature: false,
+    source: evidence.source,
+    source_updated_at: null,
+  };
+  const isDecision = evidence.source === 'campaign_decision';
   return {
-    classification: score >= 90 ? 'ELITE_TIME'
-      : score >= 75 ? 'STRONG_TIME'
-      : score >= 55 ? 'NORMAL_TIME'
-      : score >= 35 ? 'WEAK_TIME'
-      : score > 0 ? 'LOSS_TIME'
-      : 'COLLECTING_DATA',
-    score,
-    mature: score > 0,
-    source: score > 0 ? 'AccountDailySpendController' : 'no_hourly_data',
-    source_updated_at: controller?.updated_at || null,
+    classification: classify(isDecision ? row.slot_classification : row.classification),
+    score: Number(isDecision ? row.time_slot_score || 0 : row.peak_score || 0),
+    mature: isDecision
+      ? row.data_mature === true || ['HIGH', 'VERY_HIGH'].includes(String(row.data_confidence || ''))
+      : row.asin_data_maturity === 'sufficient' ||
+        (Number(row.occurrences || 0) >= 3 && String(row.classification || '') !== 'INSUFFICIENT_DATA'),
+    source: isDecision ? 'campaign_daypart_decision' : evidence.source === 'sku_profile' ? 'sku_hourly_profile' : 'sku_hourly_sales_pattern',
+    source_updated_at: row.updated_at || row.created_at || null,
   };
 }
 
-function campaignMetrics(campaign: any) {
-  const spend = Number(campaign.current_spend ?? campaign.spend ?? 0);
-  const sales = Number(campaign.sales || 0);
-  const orders = Number(campaign.orders || 0);
-  const impressions = Number(campaign.impressions || 0);
-  const clicks = Number(campaign.clicks || 0);
-  const storedAcos = Number(campaign.acos || 0);
+function campaignMetrics(campaign: any, confirmedCampaign: any = null) {
+  const source = confirmedCampaign || campaign;
+  const spend = Number(source.current_spend ?? source.spend ?? source.cost ?? 0);
+  const sales = Number(source.sales || 0);
+  const orders = Number(source.orders ?? source.purchases ?? 0);
+  const impressions = Number(source.impressions || 0);
+  const clicks = Number(source.clicks || 0);
+  const storedAcos = Number(source.acos || 0);
   const acos = sales > 0 ? (spend / sales) * 100 : storedAcos > 0 ? storedAcos : null;
   return { spend, sales, orders, impressions, clicks, acos };
 }
@@ -253,13 +249,12 @@ function chooseMultiplier(params: {
   const minDownMultiplier = Math.max(0.50, 1 - Math.max(0, Math.min(50, maxDecreasePct)) / 100);
   const profitable = sampleMature && orders > 0 && acos !== null && acos <= targetAcos;
   const exceptional = sampleMature && orders >= 2 && acos !== null && acos <= targetAcos * 0.80;
-  const canRecoverDelivery = deliveryRecoveryEligible && !economicRisk && !nativeCovered && !['overpacing', 'morning_reserve'].includes(pacing);
+  const canRecoverDelivery = deliveryRecoveryEligible && !economicRisk && !nativeCovered && !['overpacing', 'account_hard_cap'].includes(pacing);
   const recoveryMultiplier = Math.min(winner ? 1.08 : 1.05, maxUpMultiplier);
 
   if (!slot.mature || slot.classification === 'COLLECTING_DATA') {
     if (canRecoverDelivery) return { multiplier: recoveryMultiplier, reason: `Subentrega econômica: micro-recuperação de exposição em +${r2((recoveryMultiplier - 1) * 100)}%, limitada por safe CPC e pacing.` };
-    if (pacing === 'morning_reserve' && !winner) return { multiplier: 0.95, reason: 'Pacing matinal acima da trajetória: contenção mínima de 5%, preservando presença no leilão.' };
-    if (isDemandProbeWindow(hour) && explorationEligible && !economicRisk && !nativeCovered) {
+    if (isDemandProbeWindow(hour) && explorationEligible && !economicRisk && !nativeCovered && !['overpacing', 'account_hard_cap'].includes(pacing)) {
       const probe = winner ? 1.05 : 1.03;
       return { multiplier: Math.min(probe, maxUpMultiplier), reason: `Exploração econômica controlada de ${Math.round((Math.min(probe, maxUpMultiplier) - 1) * 100)}% em janela de demanda.` };
     }
@@ -268,7 +263,7 @@ function chooseMultiplier(params: {
 
   if (slot.classification === 'ELITE_TIME' || slot.classification === 'STRONG_TIME') {
     if (nativeCompensationMultiplier !== null) return { multiplier: Math.max(minDownMultiplier, Math.min(1, nativeCompensationMultiplier)), reason: 'Compensação local: regra Amazon não pôde ser pausada diante de guardrail.' };
-    if (pacing === 'overpacing' || pacing === 'morning_reserve' || economicRisk) return { multiplier: 1, reason: 'Aumento bloqueado por pacing/proteção de lucro; baseline preservado.' };
+    if (pacing === 'overpacing' || pacing === 'account_hard_cap' || economicRisk) return { multiplier: 1, reason: 'Aumento bloqueado pelo pacing desta campanha ou pelo teto global da conta; baseline preservado.' };
     if (nativeCovered) return { multiplier: 1, reason: 'Regra Amazon aplicável cobre a janela; manter/restaurar bid-base local.' };
     if (!sampleMature || !profitable) {
       if (canRecoverDelivery) return { multiplier: recoveryMultiplier, reason: `${slot.classification} com subentrega e economia segura: recuperação moderada antes da maturidade.` };
@@ -288,7 +283,7 @@ function chooseMultiplier(params: {
       return { multiplier, reason: `NORMAL com subentrega econômica: recuperação de +${r2((multiplier - 1) * 100)}% para preservar volume de vendas.` };
     }
     if (pacing === 'morning_reserve' && !winner) return { multiplier: 0.95, reason: 'NORMAL matinal acima da trajetória: contenção mínima de 5%.' };
-    if (isDemandProbeWindow(hour) && explorationEligible && !economicRisk && !nativeCovered) {
+    if (isDemandProbeWindow(hour) && explorationEligible && !economicRisk && !nativeCovered && !['overpacing', 'account_hard_cap'].includes(pacing)) {
       const probe = winner ? 1.05 : 1.03;
       return { multiplier: Math.min(probe, maxUpMultiplier), reason: `NORMAL com exploração econômica de ${Math.round((Math.min(probe, maxUpMultiplier) - 1) * 100)}%.` };
     }
@@ -318,6 +313,7 @@ async function logBid(base44: any, data: any) {
   await base44.asServiceRole.entities.AdsBidChangeLog.create({
     amazon_account_id: data.amazon_account_id,
     campaign_id: data.campaign_id,
+    sku: data.sku || null,
     ad_group_id: data.ad_group_id || null,
     entity_type: data.entity_type,
     entity_id: data.entity_id,
@@ -374,12 +370,13 @@ Deno.serve(async (request) => {
       queuePreflight = response?.data || response || {};
     }
 
-    const [configs, performance, controllers, campaigns, products, economics, adGroups, keywords, productTargets, patterns, decisions, nativeRules, intradaySnapshots, todayMetrics] = await Promise.all([
+    const [configs, performance, controllers, campaigns, products, productAds, economics, adGroups, keywords, productTargets, patterns, decisions, nativeRules, intradaySnapshots, todayMetrics] = await Promise.all([
       base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, undefined, 1).catch(() => []),
       base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, undefined, 1).catch(() => []),
       base44.asServiceRole.entities.AccountDailySpendController.filter({ amazon_account_id: aid, spend_date: clock.date }, undefined, 1).catch(() => []),
       base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, undefined, 1000).catch(() => []),
       base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, undefined, 1000).catch(() => []),
+      base44.asServiceRole.entities.ProductAd.filter({ amazon_account_id: aid }, '-updated_at', 5000).catch(() => []),
       base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, undefined, 1000).catch(() => []),
       base44.asServiceRole.entities.AdGroup.filter({ amazon_account_id: aid }, undefined, 3000).catch(() => []),
       base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-spend', 10000).catch(() => []),
@@ -416,65 +413,79 @@ Deno.serve(async (request) => {
     if (!todaySpend.available) {
       return Response.json({ ok: true, skipped: true, reason: 'pacing_data_stale', data_source: todaySpend.source, freshness_seconds: todaySpend.freshnessSeconds, confidence: todaySpend.confidence, amazon_writes_blocked: true });
     }
-    const plannedSpendByNow = dailyCap > 0 ? dailyCap * plannedBudgetShare(clock.hour) : 0;
-    const morningReserve = clock.hour >= 7 && clock.hour < 12 && dailyCap > 0 && confirmedSpend > plannedSpendByNow * 1.10;
-    const deliveryGap = clock.hour >= 7 && dailyCap > 0 && plannedSpendByNow > 0 && confirmedSpend < plannedSpendByNow * 0.75;
-    const pacing = morningReserve
-      ? 'morning_reserve'
-      : String(controller.spend_pacing || (dailyCap > 0 && confirmedSpend > plannedSpendByNow * 1.10 ? 'overpacing' : 'on_track'));
-
-    const productByAsin = new Map(products.map((product: any) => [String(product.asin || ''), product]));
-    const economicsByAsin = new Map(economics.map((economic: any) => [String(economic.asin || ''), economic]));
-    const slot = resolveSlot(decisions, patterns, controller, clock.dayOfWeek, clock.hour);
+    const accountHardCapReached = dailyCap > 0 && todaySpend.estimatedCurrentSpend >= dailyCap;
+    const campaignMetricById = latestMetricsByCampaign(todaySpend.campaignRows || []);
+    const campaignRows = uniqueCampaignRows(campaigns);
     const results: any[] = [];
+    const campaignSlots: any[] = [];
     let executed = 0, restored = 0, skipped = 0, failed = 0, nativeRulesPaused = 0, nativeRulesReactivated = 0;
 
-    for (const campaign of campaigns) {
+    for (const campaign of campaignRows) {
       const cid = amazonCampaignId(campaign);
       const type = campaignType(campaign);
-      const asin = String(campaign.asin || '');
-      const product = productByAsin.get(asin);
-      if (!cid || !active(campaign.state || campaign.status) || campaign.archived === true || stock(product) <= 0 || String(campaign.campaign_type || 'SP').toUpperCase() !== 'SP') continue;
+      const productScope = resolveProductScope(campaign, productAds, products);
+      const product = productScope.product;
+      const asin = productScope.asin;
+      const sku = productScope.sku;
+      if (!cid || !active(campaign.state || campaign.status) || campaign.archived === true || String(campaign.campaign_type || 'SP').toUpperCase() !== 'SP') continue;
+      if (productScope.status !== 'resolved') {
+        skipped++;
+        results.push({ campaign_id: cid, asin, sku, skipped: true, reason: `product_identity_${productScope.status}` });
+        continue;
+      }
+      if (stock(product) <= 0) continue;
       if (eligibleAsins && !eligibleAsins.has(asin)) {
         skipped++;
-        results.push({ campaign_id: cid, asin, skipped: true, reason: 'outside_eligible_asins_scope' });
+        results.push({ campaign_id: cid, asin, sku, skipped: true, reason: 'outside_eligible_asins_scope' });
         continue;
       }
 
-      const cm = campaignMetrics(campaign);
+      const campaignMetric = campaignMetricById.get(cid) || null;
+      const cm = campaignMetrics(campaign, campaignMetric);
+      const slot = resolveSlot(decisions, patterns, clock.dayOfWeek, clock.hour, cid, sku);
+      campaignSlots.push({ campaign_id: cid, asin, sku, classification: slot.classification, source: slot.source, mature: slot.mature });
+      const campaignBudget = Number(campaign.daily_budget || campaign.budget || 0);
+      const plannedCampaignSpend = campaignBudget > 0 ? campaignBudget * plannedBudgetShare(clock.hour) : 0;
+      const campaignOverpacing = campaignBudget > 0 && cm.spend > plannedCampaignSpend * 1.10;
+      const campaignDeliveryGap = clock.hour >= 7 && plannedCampaignSpend > 0 && cm.spend < plannedCampaignSpend * 0.75;
+      const pacing = accountHardCapReached ? 'account_hard_cap'
+        : campaignOverpacing ? 'overpacing'
+          : campaignDeliveryGap ? 'underpacing' : 'on_track';
+      const economic = resolveSkuScopedRow(product, economics) || {};
+      const productTargetAcos = Number(economic.target_acos || perf.target_acos || cfg.target_acos || targetAcos);
+      const safeMaxCpc = Number(economic.safe_max_cpc || economic.maximum_safe_cpc || perf.max_cpc || 0);
+      const breakEvenAcos = Number(economic.break_even_acos || campaign.break_even_acos || 0) || null;
       const centralGoals = evaluateCentralGoals({
-        targetAcos: perf.target_acos || cfg.target_acos,
+        targetAcos: productTargetAcos,
         maximumAcos: perf.max_acos || cfg.maximum_acos,
         targetRoas: perf.target_roas || cfg.target_roas,
         targetTacos: perf.target_tacos || cfg.target_tacos,
         maximumCpc: perf.max_cpc || cfg.maximum_cpc,
-        dailyBudget: dailyCap,
+        dailyBudget: campaignBudget,
         acos: cm.acos,
         roas: cm.spend > 0 ? cm.sales / cm.spend : null,
         tacos: null,
         cpc: cm.clicks > 0 ? cm.spend / cm.clicks : null,
-        spend: confirmedSpend,
+        spend: cm.spend,
         profitPositive: true,
         dataComplete: cm.spend > 0 || cm.impressions > 0,
       });
 
-      const economic = economicsByAsin.get(asin) || {};
-      const safeMaxCpc = Number(economic.safe_max_cpc || economic.maximum_safe_cpc || perf.max_cpc || 0);
-      const breakEvenAcos = Number(economic.break_even_acos || campaign.break_even_acos || 0) || null;
-      const winner = cm.orders > 0 && cm.acos !== null && cm.acos <= targetAcos;
+
+      const winner = cm.orders > 0 && cm.acos !== null && cm.acos <= productTargetAcos;
       const economicRisk = String(economic.profit_protection_mode || '').toLowerCase() === 'paused' ||
         Number(economic.profit_after_ads_3d || 0) < 0 ||
         (breakEvenAcos !== null && cm.acos !== null && cm.acos >= breakEvenAcos * 0.95);
       const sampleMature = cm.impressions >= MIN_REDUCTION_IMPRESSIONS && cm.clicks >= MIN_REDUCTION_CLICKS && cm.spend >= MIN_REDUCTION_SPEND;
       const currentCpc = cm.clicks > 0 ? cm.spend / cm.clicks : 0;
       const cpcHasRoom = safeMaxCpc > 0 && (cm.clicks === 0 || currentCpc <= safeMaxCpc * 0.90);
-      const deliveryRecoveryEligible = deliveryGap && !economicRisk && cpcHasRoom && centralGoals.permissions.topOfSearch &&
+      const deliveryRecoveryEligible = campaignDeliveryGap && !accountHardCapReached && !economicRisk && cpcHasRoom && centralGoals.permissions.topOfSearch &&
         cm.impressions < MIN_REDUCTION_IMPRESSIONS && cm.clicks < MIN_REDUCTION_CLICKS &&
-        (cm.acos === null || cm.acos <= targetAcos * 1.10);
+        (cm.acos === null || cm.acos <= productTargetAcos * 1.10);
       const explorationEligible = safeMaxCpc > 0 && !economicRisk && (
-        winner || deliveryRecoveryEligible || (cm.clicks >= 1 && (cm.acos === null || cm.acos <= targetAcos * 1.20))
+        winner || deliveryRecoveryEligible || (cm.clicks >= 1 && (cm.acos === null || cm.acos <= productTargetAcos * 1.20))
       );
-      const strategicManual = type === 'MANUAL' && cm.orders >= minManualOrders && cm.sales > 0 && cm.acos !== null && cm.acos <= targetAcos;
+      const strategicManual = type === 'MANUAL' && cm.orders >= minManualOrders && cm.sales > 0 && cm.acos !== null && cm.acos <= productTargetAcos;
       const manualExplorationEligible = type === 'MANUAL' && explorationEligible && centralGoals.permissions.topOfSearch;
       if (type === 'MANUAL' && !strategicManual && !manualExplorationEligible) {
         skipped++;
@@ -500,7 +511,8 @@ Deno.serve(async (request) => {
       const maxEnabledAdjustment = enabledApplicable.reduce((max, rule) => Math.max(max, Number(rule.adjustment_value || 0)), 0);
       const maxProjectedBid = campaignBaseBids.reduce((max, base) => Math.max(max, base * (1 + maxEnabledAdjustment / 100)), 0);
       const nativeGuardReasons: string[] = [];
-      if (pacing === 'overpacing') nativeGuardReasons.push('overpacing');
+      if (pacing === 'overpacing') nativeGuardReasons.push('campaign_overpacing');
+      if (accountHardCapReached) nativeGuardReasons.push('account_global_hard_cap');
       if (economicRisk) nativeGuardReasons.push('profit_protection');
       if (!centralGoals.permissions.topOfSearch) nativeGuardReasons.push(`central_goals_${centralGoals.mode.toLowerCase()}`);
       if (maxEnabledAdjustment > maxIncreasePct + 0.001) nativeGuardReasons.push(`rule_${maxEnabledAdjustment}%_above_cap_${maxIncreasePct}%`);
@@ -516,7 +528,7 @@ Deno.serve(async (request) => {
         }
         if (failedRulePcts.length > 0) {
           const rulePct = Math.max(...failedRulePcts);
-          const allowedEffectivePct = nativeGuardReasons.includes('overpacing') || nativeGuardReasons.includes('profit_protection') ? 0 : maxIncreasePct;
+          const allowedEffectivePct = nativeGuardReasons.includes('campaign_overpacing') || nativeGuardReasons.includes('account_global_hard_cap') || nativeGuardReasons.includes('profit_protection') ? 0 : maxIncreasePct;
           nativeCompensationMultiplier = (1 + allowedEffectivePct / 100) / (1 + rulePct / 100);
         }
       } else if (!dryRun && pausedGuardApplicable.length > 0 && nativeGuardReasons.length === 0) {
@@ -565,15 +577,15 @@ Deno.serve(async (request) => {
           const cap = r2(Math.max(floor, Math.min(...caps)));
           const wasAdjusted = entity.row.daypart_active === true || (entity.entityType !== 'product_target' && group.daypart_active === true);
 
-          const choice = chooseMultiplier({ slot, nativeCovered, nativeCompensationMultiplier, pacing, winner, sampleMature, orders: cm.orders, acos: cm.acos, targetAcos, economicRisk, hour: clock.hour, explorationEligible, deliveryRecoveryEligible, maxIncreasePct, maxDecreasePct });
+          const choice = chooseMultiplier({ slot, nativeCovered, nativeCompensationMultiplier, pacing, winner, sampleMature, orders: cm.orders, acos: cm.acos, targetAcos: productTargetAcos, economicRisk, hour: clock.hour, explorationEligible, deliveryRecoveryEligible, maxIncreasePct, maxDecreasePct });
           const targetBid = r2(Math.max(floor, Math.min(cap, baseBid * choice.multiplier)));
           const changed = Math.abs(targetBid - currentBid) >= 0.01;
           const restoring = changed && wasAdjusted && choice.multiplier === 1;
           const idem = `${aid}|canonical_daypart|${entity.entityType}|${entity.entityId}|${clock.date}|${clock.hour}|${targetBid}`;
-          const reason = `${choice.reason} Base R$${baseBid.toFixed(2)}; faixa R$${floor.toFixed(2)}–R$${cap.toFixed(2)}; multiplicador ${choice.multiplier.toFixed(3)}x; fonte ${slot.source}.`;
+          const reason = `${choice.reason} SKU ${sku}; campanha ${cid}; orçamento da campanha como referência R${campaignBudget.toFixed(2)}; teto global da conta R${dailyCap.toFixed(2)}. Fonte horária ${slot.source}.`;
 
           if (dryRun) {
-            results.push({ campaign_id: cid, ad_group_id: gid, entity_type: entity.entityType, entity_id: entity.entityId, dry_run: true, changed, bid_before: currentBid, bid_after: targetBid, base_bid: baseBid, floor, cap, native_covered: nativeCovered, delivery_recovery_eligible: deliveryRecoveryEligible, reason });
+            results.push({ campaign_id: cid, asin, sku, account_hard_cap_reached: accountHardCapReached, campaign_budget_reference: campaignBudget, ad_group_id: gid, entity_type: entity.entityType, entity_id: entity.entityId, dry_run: true, changed, bid_before: currentBid, bid_after: targetBid, base_bid: baseBid, floor, cap, native_covered: nativeCovered, delivery_recovery_eligible: deliveryRecoveryEligible, reason });
             continue;
           }
 
@@ -591,6 +603,7 @@ Deno.serve(async (request) => {
             target_id: entity.target?.target_id || null,
             targeting_type: type,
             asin,
+            sku,
             keyword_text: entity.keyword?.keyword_text || entity.target?.target_value || null,
             match_type: entity.keyword?.match_type || null,
             day_of_week: clock.dayOfWeek,
@@ -659,6 +672,7 @@ Deno.serve(async (request) => {
                 keyword_id: entity.entityId,
                 keyword_text: entity.keyword?.keyword_text || null,
                 asin,
+                sku,
                 action: 'set_bid',
                 current_value: currentBid,
                 proposed_value: targetBid,
@@ -732,7 +746,7 @@ Deno.serve(async (request) => {
                 await base44.asServiceRole.entities.AdGroup.update(group.id, { ...state, default_bid: targetBid }).catch(() => {});
               }
 
-              await logBid(base44, { amazon_account_id: aid, campaign_id: cid, ad_group_id: gid, entity_type: entity.entityType, entity_id: entity.entityId, keyword_id: entity.keyword?.keyword_id || null, keyword_text: entity.keyword?.keyword_text || entity.target?.target_value || null, target_id: entity.target?.target_id || null, asin, bid_before: currentBid, bid_after: targetBid, base_bid: baseBid, reason, classification: slot.classification, now: clock.iso });
+              await logBid(base44, { amazon_account_id: aid, campaign_id: cid, asin, sku, ad_group_id: gid, entity_type: entity.entityType, entity_id: entity.entityId, keyword_id: entity.keyword?.keyword_id || null, keyword_text: entity.keyword?.keyword_text || entity.target?.target_value || null, target_id: entity.target?.target_id || null, bid_before: currentBid, bid_after: targetBid, base_bid: baseBid, reason, classification: slot.classification, now: clock.iso });
               executed++;
               if (restoring) restored++;
             } else failed++;
@@ -750,7 +764,7 @@ Deno.serve(async (request) => {
             if (audit?.id) await base44.asServiceRole.entities.DaypartingDecision.update(audit.id, { status: 'failed', reason: `${reason} ERRO: ${error?.message || String(error)}`.slice(0, 1000), updated_at: clock.iso }).catch(() => {});
           }
 
-          results.push({ campaign_id: cid, ad_group_id: gid, entity_type: entity.entityType, entity_id: entity.entityId, targeting_type: type, strategic_manual: strategicManual, manual_exploration_eligible: manualExplorationEligible, native_covered: nativeCovered, native_compensation_multiplier: nativeCompensationMultiplier, delivery_recovery_eligible: deliveryRecoveryEligible, slot: slot.classification, base_bid: baseBid, floor, cap, bid_before: currentBid, bid_after: targetBid, multiplier: choice.multiplier, ok, reason: choice.reason });
+          results.push({ campaign_id: cid, asin, sku, campaign_budget_reference: campaignBudget, account_hard_cap_reached: accountHardCapReached, ad_group_id: gid, entity_type: entity.entityType, entity_id: entity.entityId, targeting_type: type, strategic_manual: strategicManual, manual_exploration_eligible: manualExplorationEligible, native_covered: nativeCovered, native_compensation_multiplier: nativeCompensationMultiplier, delivery_recovery_eligible: deliveryRecoveryEligible, slot: slot.classification, base_bid: baseBid, floor, cap, bid_before: currentBid, bid_after: targetBid, multiplier: choice.multiplier, ok, reason: choice.reason });
           await wait(500);
         }
       }
@@ -767,7 +781,7 @@ Deno.serve(async (request) => {
         completed_at: new Date().toISOString(),
         duration_ms: Date.now() - startedAt,
         records_processed: executed,
-        result_summary: JSON.stringify({ hour_brt: clock.hour, slot: slot.classification, delivery_gap: deliveryGap, executed, restored, skipped, failed, native_rules_paused: nativeRulesPaused, native_rules_reactivated: nativeRulesReactivated }).slice(0, 1500),
+        result_summary: JSON.stringify({ hour_brt: clock.hour, campaign_slots: campaignSlots.length, account_hard_cap_reached: accountHardCapReached, executed, restored, skipped, failed, native_rules_paused: nativeRulesPaused, native_rules_reactivated: nativeRulesReactivated }).slice(0, 1500),
         error_message: failed > 0 ? `${failed} ajuste(s) sem confirmação da Amazon.` : null,
       }).catch(() => {});
     }
@@ -778,7 +792,7 @@ Deno.serve(async (request) => {
       engine_version: ENGINE_VERSION,
       hour_brt: clock.hour,
       day_of_week: clock.dayOfWeek,
-      slot,
+      campaign_slots: campaignSlots,
       bid_envelope: {
         minimum_multiplier: 0.50,
         maximum_multiplier: 1.50,
@@ -792,12 +806,12 @@ Deno.serve(async (request) => {
       queue_preflight: queuePreflight,
       native_rules_paused: nativeRulesPaused,
       native_rules_reactivated: nativeRulesReactivated,
-      pacing,
-      delivery_gap: deliveryGap,
+      account_hard_cap_reached: accountHardCapReached,
+      account_spend_source: todaySpend.source,
+      account_spend_updated_at: todaySpend.capturedAt || ('observedAt' in todaySpend ? todaySpend.observedAt : null) || null,
       confirmed_spend_today: r2(confirmedSpend),
       daily_cap: dailyCap,
-      planned_spend_by_now: r2(plannedSpendByNow),
-      planned_budget_share: plannedBudgetShare(clock.hour),
+      budget_scope: 'global_cap_only_campaign_budgets_are_references',
       executed,
       restored,
       skipped,

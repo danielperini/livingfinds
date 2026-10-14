@@ -43,6 +43,10 @@
     "asin": {
       "type": "string"
     },
+    "sku": {
+      "type": "string",
+      "description": "SKU exato associado à decisão para isolamento dos sinais do produto"
+    },
     "keyword_text": {
       "type": "string"
     },

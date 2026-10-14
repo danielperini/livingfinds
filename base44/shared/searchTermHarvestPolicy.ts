@@ -387,6 +387,21 @@ export function aggregateSearchTermSnapshots(rows: any[]): HarvestAggregate[] {
   });
 }
 
+/** Aggregate repeated snapshots per source, then keep campaigns isolated for decisions. */
+export function aggregateSearchTermSnapshotsByCampaign(rows: any[]): Array<HarvestAggregate & { sourceCampaignId: string }> {
+  const byCampaign = new Map<string, any[]>();
+  for (const row of rows || []) {
+    const campaignId = String(row.campaign_id || row.amazon_campaign_id || '');
+    if (!campaignId) continue;
+    const current = byCampaign.get(campaignId) || [];
+    current.push(row);
+    byCampaign.set(campaignId, current);
+  }
+  return [...byCampaign.entries()].flatMap(([sourceCampaignId, campaignRows]) =>
+    aggregateSearchTermSnapshots(campaignRows).map((aggregate) => ({ ...aggregate, sourceCampaignId }))
+  );
+}
+
 export function calculateSafeHarvestBid(input: { observedCpc: number; safeCpc: number; minBid: number; maxBid: number }): number | null {
   const minBid = Math.max(0.02, numberValue(input.minBid, 0.25));
   const maxBid = Math.max(minBid, numberValue(input.maxBid, 3));

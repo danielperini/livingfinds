@@ -1,5 +1,6 @@
 import {
   aggregateSearchTermSnapshots,
+  aggregateSearchTermSnapshotsByCampaign,
   aggregateSearchTerms,
   calculateSafeHarvestBid,
   calculateWinnerExactBudget,
@@ -10,6 +11,34 @@ import {
   normalizeSearchTerm,
   resolveSameSkuAttribution,
 } from './searchTermHarvestPolicy.ts';
+
+
+Deno.test('mantém a evidência do termo separada por SKU e campanha de origem', () => {
+  const rows = [
+    {
+      campaign_id: 'AUTO-RED', ad_group_id: 'G1', keyword_id: 'T1',
+      advertised_asin: 'B0VARIANT1', advertised_sku: 'SKU-RED',
+      search_term: 'lixeira automática branca', source_campaign_type: 'AUTO',
+      source_target_type: 'AUTO', same_sku_attribution_verified: true,
+      same_sku_orders: 1, same_sku_sales: 72.9, total_orders: 1, total_sales: 72.9,
+      date: '2026-10-10', attribution_window_days: 7, clicks: 5, spend: 2,
+    },
+    {
+      campaign_id: 'AUTO-BLACK', ad_group_id: 'G2', keyword_id: 'T2',
+      advertised_asin: 'B0VARIANT1', advertised_sku: 'SKU-BLACK',
+      search_term: 'lixeira automática branca', source_campaign_type: 'AUTO',
+      source_target_type: 'AUTO', same_sku_attribution_verified: true,
+      same_sku_orders: 3, same_sku_sales: 220, total_orders: 3, total_sales: 220,
+      date: '2026-10-10', attribution_window_days: 7, clicks: 12, spend: 8,
+    },
+  ];
+  const result = aggregateSearchTermSnapshotsByCampaign(rows);
+  if (result.length !== 2) throw new Error(`esperava 2 evidências de campanha, recebeu ${result.length}`);
+  const red = result.find((row) => row.sourceCampaignId === 'AUTO-RED');
+  const black = result.find((row) => row.sourceCampaignId === 'AUTO-BLACK');
+  if (red?.sku !== 'SKU-RED' || red.sameSkuOrders !== 1 || red.spend !== 2) throw new Error('misturou evidência da campanha vermelha');
+  if (black?.sku !== 'SKU-BLACK' || black.sameSkuOrders !== 3 || black.spend !== 8) throw new Error('misturou evidência da campanha preta');
+});
 
 Deno.test('normaliza acentos, caixa e espaços para deduplicação', () => {
   if (normalizeSearchTerm('  Lixeira   Automática  ') !== 'lixeira automatica') throw new Error('normalização incorreta');
