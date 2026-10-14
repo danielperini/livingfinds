@@ -13,21 +13,29 @@ export async function readAllEntityPages<T extends Record<string, unknown>>(
   const rows: T[] = [];
   const seen = new Set<string>();
   let cursor: string | null = null;
+  let offset = 0;
+  let cursorMode = false;
+  let previousArrayPage = '';
   try {
     while (true) {
-      const page: any = cursor
-        ? await entity.filter(query, { cursor, limit: pageSize })
-        : await entity.filter(query, { sort, limit: pageSize });
+      const page: any = cursorMode
+        ? await entity.filter(query, cursor ? { cursor, limit: pageSize } : { sort, limit: pageSize })
+        : await entity.filter(query, sort, pageSize, offset);
       if (Array.isArray(page)) {
+        const fingerprint = page.map((item: T) => String(item?.id || '')).join('|');
+        if (page.length && fingerprint === previousArrayPage) {
+          return { rows, error: 'A paginação por offset repetiu a mesma página; consulta incompleta', complete: false };
+        }
+        previousArrayPage = fingerprint;
         for (const item of page as T[]) {
           const id = String(item?.id || '');
           if (!id || !seen.has(id)) { rows.push(item); if (id) seen.add(id); }
         }
-        if (page.length >= pageSize) {
-          return { rows, error: 'SDK não retornou cursor após atingir o limite da página; consulta incompleta', complete: false };
-        }
+        offset += page.length;
+        if (page.length >= pageSize) continue;
         return { rows, error: null, complete: true };
       }
+      cursorMode = true;
       const items = Array.isArray(page?.items) ? page.items as T[] : null;
       if (!items) return { rows: rows.length ? rows : null, error: 'Resposta de paginação inválida; consulta incompleta', complete: false };
       for (const item of items) {
