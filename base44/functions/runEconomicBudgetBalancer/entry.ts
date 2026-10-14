@@ -1,8 +1,9 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { productGate } from '../../shared/campaignDeliveryGovernor.ts';
+import { readConfirmedTodaySpend } from '../../shared/portfolioBudgetMath.ts';
+import { latestMetricsByCampaign, resolveProductScope, resolveSkuScopedRow, uniqueCampaignRows } from '../../shared/skuCampaignScope.ts';
 import {
   ECONOMIC_BALANCER_VERSION,
-  allocateVirtualBudgets,
   calculateMaxSpendWithoutSale,
   classifyEconomicCampaign,
   proposeEconomicAdjustment,
@@ -80,18 +81,16 @@ function aggregateHistory(rows: any[], campaignId: string, days: number) {
 }
 
 function productFor(campaign: any, products: any[], productAds: any[]) {
-  const campaignId = campaignIdOf(campaign);
-  const ad = productAds.find((row) => String(row.campaign_id || '') === campaignId);
-  const asin = upper(campaign.asin || ad?.asin);
-  const sku = upper(campaign.sku || ad?.sku);
-  return products.find((row) => (asin && upper(row.asin) === asin) || (sku && upper(row.sku) === sku)) || null;
+  return resolveProductScope(campaign, productAds, products);
 }
 
 function economicsFor(product: any, rows: any[]) {
-  if (!product) return null;
-  const asin = upper(product.asin);
-  const sku = upper(product.sku);
-  return rows.find((row) => (asin && upper(row.asin) === asin) || (sku && upper(row.sku) === sku)) || null;
+  return resolveSkuScopedRow(product, rows);
+}
+
+function metricTimestamp(row: any) {
+  const value = new Date(String(row?.synced_at || row?.observed_at || row?.updated_at || row?.created_at || 0)).getTime();
+  return Number.isFinite(value) ? value : 0;
 }
 
 function economicsSnapshot(economics: any, targetAcosFallback: number) {
@@ -280,7 +279,9 @@ Deno.serve(async (request) => {
         : rawConfig.economic_budget_balancer_enabled === true && rawConfig.enabled !== false;
       const accountDryRun = dryRun || !featureEnabled;
       const latestIntraday = latestIntradayByCampaign(intradayRows);
-      const campaignRows = campaigns.filter((row) => upper(row.campaign_type || 'SP') === 'SP');
+      const latestTodayMetrics = latestMetricsByCampaign(historyRows, today);
+      const accountSpend = readConfirmedTodaySpend({ snapshots: intradayRows, dailyMetrics: historyRows, spendDate: today });
+      const campaignRows = uniqueCampaignRows(campaigns.filter((row) => upper(row.campaign_type || 'SP') === 'SP'));
       const campaignById = new Map<string, any>(campaignRows.map((row: any) => [campaignIdOf(row), row]));
       const promotedFromAuto = new Set(promotions.filter((promotion: any) =>
         ['manual_active', 'completed', 'keyword_created'].includes(lower(promotion.promotion_status)) &&
@@ -291,17 +292,18 @@ Deno.serve(async (request) => {
       const prepared: any[] = campaignRows.map((campaign) => {
         const campaignId = campaignIdOf(campaign);
         const intraday = latestIntraday.get(campaignId) || null;
-        const product = productFor(campaign, products, productAds);
-        const canonicalSnapshot = canonicalSnapshots.find((snapshot) =>
-          (upper(product?.sku) && upper(snapshot.sku) === upper(product.sku)) ||
-          (upper(product?.asin || campaign.asin) && upper(snapshot.asin) === upper(product?.asin || campaign.asin))
-        ) || null;
+        const productScope = productFor(campaign, products, productAds);
+        const product = productScope.product;
+        const canonicalSnapshot = resolveSkuScopedRow(product, canonicalSnapshots);
+        const dailyMetric = latestTodayMetrics.get(campaignId) || null;
+        const liveMetric = [intraday, dailyMetric].filter(Boolean).sort((a, b) => metricTimestamp(b) - metricTimestamp(a))[0] || null;
+        const metricsSource = liveMetric || campaign;
         const metrics = {
-          impressions: finite(body.daily_close && canonicalSnapshot ? canonicalSnapshot.impressions_1d : intraday?.impressions ?? campaign.impressions),
-          clicks: finite(body.daily_close && canonicalSnapshot ? canonicalSnapshot.clicks_1d : intraday?.clicks ?? campaign.clicks),
-          spend: finite(body.daily_close && canonicalSnapshot ? canonicalSnapshot.spend_1d : intraday?.spend ?? campaign.current_spend ?? campaign.spend),
-          sales: finite(body.daily_close && canonicalSnapshot ? canonicalSnapshot.same_sku_sales : intraday?.sales ?? campaign.sales),
-          orders: finite(body.daily_close && canonicalSnapshot ? canonicalSnapshot.same_sku_orders : intraday?.orders ?? campaign.orders),
+          impressions: finite(metricsSource.impressions),
+          clicks: finite(metricsSource.clicks),
+          spend: finite(metricsSource.spend ?? metricsSource.current_spend),
+          sales: finite(metricsSource.sales),
+          orders: finite(metricsSource.orders ?? metricsSource.purchases),
         };
         const economics = economicsFor(product, economicsRows);
         const econ = canonicalSnapshot ? {
@@ -325,71 +327,35 @@ Deno.serve(async (request) => {
         const history65 = aggregateHistory(historyRows, campaignId, 65);
         const profitAfterAds = metrics.orders * econ.marginAmount - metrics.spend;
         const acos = metrics.sales > 0 ? metrics.spend / metrics.sales * 100 : null;
-        const freshSource = intraday?.observed_at || intraday?.created_at || campaign.synced_at || campaign.updated_at;
-        const fresh = canonicalSnapshot ? canonicalSnapshot.data_fresh === true : minutesOld(freshSource) <= config.metricsFreshMinutes;
+        const freshSource = liveMetric ? metricTimestamp(liveMetric) : metricTimestamp(campaign);
+        const fresh = freshSource > 0 && minutesOld(new Date(freshSource).toISOString()) <= config.metricsFreshMinutes;
         const complete = structurallyComplete(campaign, adGroups, productAds, keywords, targets);
         const lowVolume = history30.orders > 0
           ? history30.orders / 30 <= 1
           : history65.orders <= 2 && age > 24;
         return {
-          campaign, campaignId, intraday, metrics, product, economics, econ, inventory, canonicalSnapshot,
-          productEligibility, age, history30, history65, profitAfterAds, acos, fresh, complete, lowVolume,
+          campaign, campaignId, intraday, metrics, product, productScope, economics, econ, inventory, canonicalSnapshot,
+          currentBudget: finite(campaign.daily_budget || campaign.budget),
+          productEligibility, age, history30, history65, profitAfterAds, acos, fresh, complete: complete && productScope.status === 'resolved', lowVolume,
           promotedFromAuto: promotedFromAuto.has(campaignId),
           metricVersion: metricsVersion(intraday || campaign, metrics),
         };
       });
 
-      const totalSpend = prepared.reduce((sum, row) => sum + row.metrics.spend, 0);
-      const remainingBudget = roundMoney(Math.max(0, config.accountDailyBudgetLimit - totalSpend));
-      const reservedPendingSpend = priorDecisions
-        .filter((decision) => ['approved', 'scheduled', 'executing', 'confirming'].includes(String(decision.status || '')))
-        .reduce((sum, decision) => sum + Math.max(0, finite(decision.expected_impact_value)), 0);
-      const accountCommittedSpend = roundMoney(totalSpend + reservedPendingSpend);
-      const accountOutOfBudget = config.accountDailyBudgetLimit > 0 && accountCommittedSpend >= config.accountDailyBudgetLimit;
+      const accountHardCap = config.accountDailyBudgetLimit;
+      const accountCommittedSpend = accountSpend.available
+        ? finite(accountSpend.estimatedCurrentSpend, accountSpend.confirmedSpend)
+        : accountHardCap;
+      const accountHardCapBlocksGrowth = !accountSpend.available ||
+        (accountHardCap > 0 && accountCommittedSpend >= accountHardCap);
+      const remainingBudget = roundMoney(Math.max(0, accountHardCap - accountCommittedSpend));
+      const totalSpend = accountSpend.available ? finite(accountSpend.confirmedSpend) : 0;
 
       const decisionOrder = [...prepared].sort((left, right) => {
         const staleZeroDelivery = (row: any) => row.age >= 168 && row.metrics.clicks <= 0 && row.metrics.spend <= 0 ? 1 : 0;
         return staleZeroDelivery(right) - staleZeroDelivery(left) || right.age - left.age;
       });
-      for (const row of decisionOrder) {
-        row.spendShare = totalSpend > 0 ? row.metrics.spend / totalSpend : 0;
-        row.classification = classifyEconomicCampaign({
-          campaignType: row.campaign.campaign_type || 'SP',
-          isAuto: upper(row.campaign.targeting_type) === 'AUTO',
-          state: row.campaign.state || row.campaign.status,
-          amazonStatus: row.campaign.amazon_status,
-          ageHours: row.age,
-          dataFresh: row.fresh,
-          structurallyComplete: row.complete,
-          economicsAvailable: row.econ.available,
-          inStock: row.productEligibility.eligible,
-          accountOutOfBudget,
-          ...row.metrics,
-          spendShare: row.spendShare,
-          targetShare: 0,
-          lowVolume: row.lowVolume,
-          profitAfterAds: row.profitAfterAds,
-          acos: row.acos,
-          targetAcos: row.econ.targetAcos,
-        }, config);
-        if (!accountOutOfBudget && row.promotedFromAuto && upper(row.campaign.targeting_type) === 'MANUAL' &&
-          row.metrics.impressions <= 0 && row.metrics.clicks <= 0 && row.metrics.spend <= 0 &&
-          row.econ.available && row.productEligibility.eligible) {
-          row.classification = 'PROTECTED_WINNER';
-        }
-      }
 
-      const allocations = allocateVirtualBudgets(prepared.map((row) => ({
-        campaignId: row.campaignId,
-        isAuto: upper(row.campaign.targeting_type) === 'AUTO',
-        ageHours: row.age,
-        classification: row.classification,
-        marginPercent: row.econ.marginPercent,
-        economicConfidence: row.econ.confidence,
-        stockCoverageDays: row.inventory.coverageDays,
-        profitAfterAds: row.profitAfterAds,
-      })), config.accountDailyBudgetLimit, config);
-      const allocationByCampaign = new Map(allocations.map((row) => [row.campaignId, row]));
 
       const classificationCounts: Record<string, number> = {};
       const simulated: any[] = [];
@@ -402,8 +368,6 @@ Deno.serve(async (request) => {
         !['failed', 'cancelled', 'rejected', 'skipped'].includes(String(decision.status || ''))).length;
 
       for (const row of decisionOrder) {
-        const allocation = allocationByCampaign.get(row.campaignId) || { targetShare: 0, virtualBudget: 0, segment: 'guarded' };
-        row.targetShare = allocation.targetShare;
         row.classification = classifyEconomicCampaign({
           campaignType: row.campaign.campaign_type || 'SP',
           isAuto: upper(row.campaign.targeting_type) === 'AUTO',
@@ -414,16 +378,14 @@ Deno.serve(async (request) => {
           structurallyComplete: row.complete,
           economicsAvailable: row.econ.available,
           inStock: row.productEligibility.eligible,
-          accountOutOfBudget,
           ...row.metrics,
           spendShare: row.spendShare,
-          targetShare: row.targetShare,
           lowVolume: row.lowVolume,
           profitAfterAds: row.profitAfterAds,
           acos: row.acos,
           targetAcos: row.econ.targetAcos,
         }, config);
-        if (!accountOutOfBudget && row.promotedFromAuto && upper(row.campaign.targeting_type) === 'MANUAL' &&
+        if (row.promotedFromAuto && upper(row.campaign.targeting_type) === 'MANUAL' &&
           row.metrics.impressions <= 0 && row.metrics.clicks <= 0 && row.metrics.spend <= 0 &&
           row.econ.available && row.productEligibility.eligible) {
           row.classification = 'PROTECTED_WINNER';
@@ -440,7 +402,7 @@ Deno.serve(async (request) => {
         const provisionalAction = row.classification === 'PROTECTED_WINNER' ? 'increase_budget'
           : ['NEW_NO_IMPRESSIONS', 'NEW_IMPRESSIONS_NO_CLICKS'].includes(row.classification) ? 'increase_bid'
             : 'reduce_bid';
-        const bidEntity = ['PROTECTED_WINNER', 'ACCOUNT_OUT_OF_BUDGET'].includes(row.classification) ? null : chooseBidEntity({
+        const bidEntity = row.classification === 'PROTECTED_WINNER' ? null : chooseBidEntity({
           campaign: row.campaign,
           classification: row.classification,
           action: provisionalAction,
@@ -448,7 +410,7 @@ Deno.serve(async (request) => {
           targets,
           adGroups,
         });
-        const currentBudget = finite(row.campaign.daily_budget || row.campaign.budget);
+        const currentBudget = row.currentBudget;
         const entityMetrics = bidEntity?.metrics || row.metrics;
         const maxSpendWithoutSale = calculateMaxSpendWithoutSale(config, row.econ.allowableAdSpendPerOrder);
         let adjustment: ReturnType<typeof proposeEconomicAdjustment> = proposeEconomicAdjustment({
@@ -466,13 +428,25 @@ Deno.serve(async (request) => {
           sales: finite(entityMetrics.sales ?? row.metrics.sales),
           spend: finite(entityMetrics.spend ?? row.metrics.spend),
           spendShare: row.spendShare,
-          targetShare: row.targetShare,
-          maxSpendWithoutSale,
+                    maxSpendWithoutSale,
           budgetExhausted: row.campaign.budget_exhausted === true || lower(row.campaign.budget_status) === 'exhausted' ||
             (currentBudget > 0 && row.metrics.spend >= currentBudget * 0.90),
-          remainingAccountBudget: remainingBudget,
           budgetOptimizationEnabled: rawConfig.budget_optimization_enabled !== false,
         }, config);
+        if (accountHardCapBlocksGrowth && ['increase_bid', 'increase_budget'].includes(adjustment.action)) {
+          adjustment = {
+            action: 'observe',
+            valueAfter: null,
+            changePct: 0,
+            rule: 'ACCOUNT_GLOBAL_HARD_CAP_GROWTH_BLOCK',
+            reason: accountSpend.available
+              ? 'O teto global de gasto da conta foi atingido; métricas e orçamento desta campanha continuam individuais, mas não haverá expansão de gasto neste ciclo.'
+              : 'Gasto atual da conta não pôde ser confirmado; expansão bloqueada pelo teto global até uma leitura atualizada.',
+            confidence: 99,
+            nextReviewHours: 1,
+            blockedBy: accountSpend.available ? 'ACCOUNT_GLOBAL_HARD_CAP' : 'ACCOUNT_SPEND_UNVERIFIED',
+          };
+        }
 
         let canonicalBid: ReturnType<typeof buildCanonicalBidDecision> | null = null;
         if (['increase_bid', 'reduce_bid'].includes(adjustment.action) && bidEntity) {
@@ -594,13 +568,18 @@ Deno.serve(async (request) => {
           account_daily_budget_limit: config.accountDailyBudgetLimit,
           account_daily_spend: roundMoney(totalSpend),
           account_committed_spend: accountCommittedSpend,
-          account_out_of_budget: accountOutOfBudget,
+          account_hard_cap_blocks_growth: accountHardCapBlocksGrowth,
+        account_spend_source: accountSpend.source,
+        account_spend_updated_at: accountSpend.capturedAt || accountSpend.observedAt || null,
           remaining_account_budget: remainingBudget,
           hours_remaining_today: Math.max(0, 24 - Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false }).format(new Date()))),
-          campaign_virtual_budget: allocation.virtualBudget,
-          campaign_spend_share: row.spendShare,
-          campaign_target_share: row.targetShare,
-          spend_share_deviation: row.spendShare - row.targetShare,
+          
+          sku: row.productScope.sku,
+          asin: row.productScope.asin,
+          campaign_targeting_type: row.campaign.targeting_type,
+          daily_budget_reference: row.currentBudget,
+          campaign_budget_utilization: row.spendShare,
+          budget_scope: 'campaign_reference_only',
           daily_spend: row.metrics.spend,
           spend_velocity: finite(row.intraday?.hour_brt) > 0 ? row.metrics.spend / finite(row.intraday.hour_brt) : null,
           impressions: row.metrics.impressions,
@@ -617,7 +596,7 @@ Deno.serve(async (request) => {
           stock_coverage_days: row.inventory.coverageDays,
           economic_confidence: row.econ.confidence,
           classification: row.classification,
-          segment: allocation.segment,
+          segment: upper(row.campaign.targeting_type) === 'AUTO' ? 'auto_discovery' : 'manual_campaign',
           rule: adjustment.rule,
           metrics_version: row.metricVersion,
           next_evaluation_at: evaluationDueAt,
@@ -633,8 +612,8 @@ Deno.serve(async (request) => {
           entity_type: entityType,
           entity_id: entityId,
           entity_name: isBudget ? row.campaign.name || row.campaign.campaign_name : bidEntity.entityName,
-          asin: row.product?.asin || row.campaign.asin || null,
-          sku: row.product?.sku || row.campaign.sku || null,
+          asin: row.productScope.asin || null,
+          sku: row.productScope.sku || null,
           classification: row.classification,
           action,
           value_before: valueBefore,
@@ -685,9 +664,9 @@ Deno.serve(async (request) => {
           haloOrders: 0,
           cooldownActive: false,
           accountDailyCap: config.accountDailyBudgetLimit,
-          accountSpend: totalSpend,
-          reservedPendingSpend,
-          proposedSpendImpact: isBudget ? Math.max(0, finite(adjustment.valueAfter) - valueBefore) : 0,
+          accountSpend: accountCommittedSpend,
+          reservedPendingSpend: 0,
+          proposedSpendImpact: 0,
           defensive: row.canonicalSnapshot?.risk_state === 'LOSS_CONFIRMED',
           rollbackPlan,
           maxBidIncreasePct: 0.10,
@@ -747,10 +726,9 @@ Deno.serve(async (request) => {
           account_daily_budget_limit: evidence.account_daily_budget_limit,
           account_daily_spend: evidence.account_daily_spend,
           remaining_account_budget: evidence.remaining_account_budget,
-          campaign_virtual_budget: evidence.campaign_virtual_budget,
-          campaign_spend_share: evidence.campaign_spend_share,
-          campaign_target_share: evidence.campaign_target_share,
-          spend_share_deviation: evidence.spend_share_deviation,
+          campaign_budget_reference: evidence.daily_budget_reference,
+          campaign_budget_utilization: evidence.campaign_budget_utilization,
+          budget_scope: evidence.budget_scope,
           campaign_classification: row.classification,
           confidence: adjustment.confidence / 100,
           decision_confidence_level: adjustment.confidence >= 90 ? 'high' : adjustment.confidence >= 75 ? 'medium' : 'low',
@@ -813,9 +791,7 @@ Deno.serve(async (request) => {
 
       const confirmation: any = { skipped: true, reason: 'queue_execution_and_confirmation_are_separate_schedules' };
 
-      const campaignSummary = prepared.map((row) => {
-        const allocation = allocationByCampaign.get(row.campaignId) || { targetShare: 0, virtualBudget: 0, segment: 'guarded' };
-        return {
+      const campaignSummary = prepared.map((row) => ({
           campaign_id: row.campaignId,
           campaign_name: row.campaign.name || row.campaign.campaign_name,
           asin: row.product?.asin || row.campaign.asin || null,
@@ -825,9 +801,10 @@ Deno.serve(async (request) => {
           age_hours: roundMoney(row.age),
           classification: row.classification,
           spend: roundMoney(row.metrics.spend),
-          spend_share: row.spendShare,
-          target_share: allocation.targetShare,
-          virtual_budget: allocation.virtualBudget,
+          campaign_budget_utilization: row.spendShare,
+          daily_budget_reference: row.currentBudget,
+          campaign_budget_utilization: row.spendShare,
+          product_scope_status: row.productScope.status,
           impressions: row.metrics.impressions,
           clicks: row.metrics.clicks,
           orders: row.metrics.orders,
@@ -836,8 +813,7 @@ Deno.serve(async (request) => {
           data_fresh: row.fresh,
           economics_available: row.econ.available,
           safe_max_cpc: row.econ.safeMaxCpc,
-        };
-      });
+        }));
 
       const result = {
         amazon_account_id: accountId,
@@ -848,7 +824,9 @@ Deno.serve(async (request) => {
         account_daily_budget_limit: config.accountDailyBudgetLimit,
         account_daily_spend: roundMoney(totalSpend),
         account_committed_spend: accountCommittedSpend,
-        account_out_of_budget: accountOutOfBudget,
+        account_hard_cap_blocks_growth: accountHardCapBlocksGrowth,
+        account_spend_source: accountSpend.source,
+        account_spend_updated_at: accountSpend.capturedAt || accountSpend.observedAt || null,
         remaining_account_budget: remainingBudget,
         classifications: classificationCounts,
         campaigns_analyzed: campaignSummary.length,
