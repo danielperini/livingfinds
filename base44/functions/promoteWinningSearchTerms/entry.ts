@@ -26,7 +26,7 @@
  * Não cria motor paralelo. Integrado via runDailyMasterOrchestrator.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
-import { aggregateSearchTermSnapshots } from '../../shared/searchTermHarvestPolicy.ts';
+import { aggregateSearchTermSnapshotsByCampaign } from '../../shared/searchTermHarvestPolicy.ts';
 
 // ── Configurações (sobrescritas por AutopilotConfig / PerformanceSettings) ──
 const CFG = {
@@ -61,9 +61,10 @@ function isAutomaticCampaign(campaign: any): boolean {
   return type.includes('AUTO') || /^AUTO\s*\|/.test(name) || /\|\s*AUTO\s*\|/.test(name);
 }
 
-function campaignName(asin: string, term: string): string {
+function campaignName(asin: string, term: string, sku = ''): string {
   const t = term.replace(/[|]/g, '-').slice(0, 55);
-  return `SP | MANUAL | EXACT | ${asin} | ${t}`.slice(0, 128);
+  const identity = sku || asin;
+  return `SP | MANUAL | EXACT | ${identity} | ${t}`.slice(0, 128);
 }
 
 function adGroupName(asin: string): string {
@@ -243,9 +244,62 @@ Deno.serve(async (req) => {
       base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, undefined, 3000).catch(() => []),
     ]);
 
-    const productMap = new Map(products.map((p: any) => [p.asin, p]));
-    const snapshotMap = new Map(snapshots.map((s: any) => [s.asin, s]));
-    const econMap = new Map(economics.map((e: any) => [e.asin, e]));
+    const productsByAsin = new Map<string, any[]>();
+    const productRowsBySku = new Map<string, any[]>();
+    for (const product of products) {
+      const asin = String(product.asin || '').toUpperCase();
+      const sku = String(product.sku || '').trim().toUpperCase();
+      if (asin) {
+        const rows = productsByAsin.get(asin) || [];
+        rows.push(product);
+        productsByAsin.set(asin, rows);
+      }
+      if (sku) {
+        const rows = productRowsBySku.get(sku) || [];
+        rows.push(product);
+        productRowsBySku.set(sku, rows);
+      }
+    }
+    const productsBySku = new Map([...productRowsBySku].filter(([, rows]) => rows.length === 1).map(([sku, rows]) => [sku, rows[0]]));
+    const uniqueProductByAsin = new Map([...productsByAsin].filter(([, rows]) => rows.length === 1).map(([asin, rows]) => [asin, rows[0]]));
+    const productForIdentity = (asin: string, sku: string) => {
+      const normalizedAsin = String(asin || '').toUpperCase();
+      const normalizedSku = String(sku || '').toUpperCase();
+      if (normalizedSku) {
+        const exact = productsBySku.get(normalizedSku);
+        if (!exact || (normalizedAsin && String(exact.asin || '').toUpperCase() !== normalizedAsin)) return null;
+        return exact;
+      }
+      return uniqueProductByAsin.get(normalizedAsin) || null;
+    };
+    const skuForIdentity = (asin: string, sku: string) =>
+      String(sku || productForIdentity(asin, sku)?.sku || '').trim().toUpperCase();
+    const termKey = (asin: string, sku: string, term: string) =>
+      `${skuForIdentity(asin, sku) ? `SKU:${skuForIdentity(asin, sku)}` : `ASIN:${String(asin || '').toUpperCase()}` }|${normalizeTerm(term)}`;
+    const snapshotMap = new Map(snapshots.map((snapshot: any) => [String(snapshot.asin || '').toUpperCase(), snapshot]));
+    const economicsBySku = new Map<string, any>();
+    for (const row of [...economics].sort((a: any, b: any) =>
+      new Date(String(b.updated_at || b.synced_at || b.created_at || 0)).getTime() -
+      new Date(String(a.updated_at || a.synced_at || a.created_at || 0)).getTime())) {
+      const sku = String(row.sku || '').trim().toUpperCase();
+      if (sku && !economicsBySku.has(sku)) economicsBySku.set(sku, row);
+    }
+    const economicsByAsinRows = new Map<string, any[]>();
+    for (const row of economics) {
+      const asin = String(row.asin || '').toUpperCase();
+      if (!asin) continue;
+      const rows = economicsByAsinRows.get(asin) || [];
+      rows.push(row);
+      economicsByAsinRows.set(asin, rows);
+    }
+    for (const rows of economicsByAsinRows.values()) {
+      rows.sort((a: any, b: any) =>
+        new Date(String(b.updated_at || b.synced_at || b.created_at || 0)).getTime() -
+        new Date(String(a.updated_at || a.synced_at || a.created_at || 0)).getTime());
+    }
+    const econForIdentity = (asin: string, sku: string) =>
+      (sku && economicsBySku.get(String(sku).toUpperCase())) ||
+      (uniqueProductByAsin.has(String(asin || '').toUpperCase()) ? economicsByAsinRows.get(String(asin).toUpperCase())?.[0] : undefined);
     const autoCampaignIds = new Set(
       campaigns
         .filter((campaign: any) =>
@@ -267,13 +321,13 @@ Deno.serve(async (req) => {
     const exactKeyIndex = new Set(
       existingKeywords
         .filter((k: any) => !['archived'].includes(k.state || k.status || ''))
-        .map((k: any) => `${k.asin}|${normalizeTerm(k.keyword_text || k.keyword || '')}`)
+        .map((k: any) => termKey(k.asin, k.sku || uniqueProductByAsin.get(String(k.asin || '').toUpperCase())?.sku, k.keyword_text || k.keyword || ''))
     );
     // Índice: ASIN|term → promoção já existe
     const promoIndex = new Set(
       existingPromos
         .filter((p: any) => !['failed', 'blocked_duplicate'].includes(p.promotion_status || p.status || ''))
-        .map((p: any) => `${p.asin}|${normalizeTerm(p.normalized_search_term || p.source_search_term || '')}`)
+        .map((p: any) => termKey(p.asin, p.sku || uniqueProductByAsin.get(String(p.asin || '').toUpperCase())?.sku, p.normalized_search_term || p.source_search_term || ''))
     );
 
     // ── FASE 1: Agregar Search Terms sem somar janelas móveis sobrepostas ──
@@ -282,16 +336,19 @@ Deno.serve(async (req) => {
     const termMap = new Map<string, any>();
     const sourceRows = searchTerms.filter((row: any) => {
       const campaign = campaignById.get(String(row.campaign_id || ''));
-      const asin = String(row.advertised_asin || campaign?.asin || '');
-      return Boolean(asin && row.search_term && autoCampaignIds.has(String(row.campaign_id || '')) &&
-        row.same_sku_attribution_verified === true && (!force_asin || asin === force_asin) &&
+      const asin = String(row.advertised_asin || campaign?.asin || '').toUpperCase();
+      const sku = String(row.advertised_sku || row.sku || campaign?.sku || uniqueProductByAsin.get(asin)?.sku || '').trim().toUpperCase();
+      return Boolean(asin && sku && productForIdentity(asin, sku) && row.search_term && autoCampaignIds.has(String(row.campaign_id || '')) &&
+        row.same_sku_attribution_verified === true && (!force_asin || asin === String(force_asin).toUpperCase()) &&
         (!row.date || row.date < SAFE_CUTOFF));
     });
-    for (const aggregate of aggregateSearchTermSnapshots(sourceRows)) {
-      const key = `${aggregate.asin}|${normalizeTerm(aggregate.term)}`;
+    for (const aggregate of aggregateSearchTermSnapshotsByCampaign(sourceRows)) {
+      const sourceCampaignId = aggregate.sourceCampaignId;
+      const key = `${sourceCampaignId}|${termKey(aggregate.asin, aggregate.sku, aggregate.term)}`;
       if (!key || termMap.has(key)) continue;
       termMap.set(key, {
         asin: aggregate.asin,
+        sku: aggregate.sku,
         search_term: aggregate.term,
         normalized_term: normalizeTerm(aggregate.term),
         campaign_id: aggregate.sources[0]?.campaignId || '',
@@ -328,7 +385,7 @@ Deno.serve(async (req) => {
       const roas = agg.spend > 0 && agg.sales > 0 ? agg.sales / agg.spend : null;
 
       // ACoS sustentável do produto
-      const econ = econMap.get(agg.asin);
+      const econ = econForIdentity(agg.asin, agg.sku);
       const sustainableAcos = econ?.break_even_acos_percent || econ?.contribution_margin_percent || TARGET_ACOS * 1.5;
 
       // WINNER_STRONG: ACoS <= target
@@ -347,14 +404,14 @@ Deno.serve(async (req) => {
       }
 
       // Verificar produto
-      const product = productMap.get(agg.asin);
+      const product = productForIdentity(agg.asin, agg.sku);
       if (!product) { rejected.push({ ...agg, reject_reason: 'Produto não encontrado' }); continue; }
       if (product.inventory_status === 'out_of_stock' || Number(product.fba_inventory || 0) <= 0) {
         rejected.push({ ...agg, reject_reason: 'Sem estoque' }); continue;
       }
 
       // Verificar duplicidade: não criar se já existe keyword exata ou promoção ativa
-      const dupKey = `${agg.asin}|${agg.normalized_term}`;
+      const dupKey = termKey(agg.asin, agg.sku, agg.normalized_term);
       if (exactKeyIndex.has(dupKey)) {
         rejected.push({ ...agg, reject_reason: 'Keyword exata já existe para este ASIN', duplicate: true }); continue;
       }
@@ -376,17 +433,24 @@ Deno.serve(async (req) => {
       .sort((a: any, b: any) => (b.orders - a.orders) || (a.acos - b.acos))
       .slice(0, CFG.MAX_ORIGINALS_PER_RUN);
 
+    const promotedThisRun = new Set<string>();
     for (const winner of actionableWinners) {
+      const winnerKey = termKey(winner.asin, winner.sku, winner.normalized_term);
+      if (exactKeyIndex.has(winnerKey) || promoIndex.has(winnerKey) || promotedThisRun.has(winnerKey)) {
+        rejected.push({ ...winner, reject_reason: 'Winner SKU+termo já promovido ou duplicado nesta execução', duplicate: true });
+        continue;
+      }
+      promotedThisRun.add(winnerKey);
       if (dry_run) {
-        createdOriginal.push({ ...winner, dry_run: true, campaign_name: campaignName(winner.asin, winner.search_term) });
+        createdOriginal.push({ ...winner, dry_run: true, campaign_name: campaignName(winner.asin, winner.search_term, winner.sku) });
         continue;
       }
 
       // Calcular bid inicial
       const avgCpc = winner.clicks > 0 ? winner.spend / winner.clicks : 0;
       const sustainableCpc = (() => {
-        const econ = econMap.get(winner.asin);
-        const price = Number(econ?.current_price || productMap.get(winner.asin)?.price || 0);
+        const econ = econForIdentity(winner.asin, winner.sku);
+        const price = Number(econ?.current_price || productForIdentity(winner.asin, winner.sku)?.price || 0);
         const cvr = winner.clicks > 0 ? winner.orders / winner.clicks : 0.05;
         if (price > 0 && cvr > 0) return price * cvr * (TARGET_ACOS / 100);
         return 0;
@@ -396,7 +460,7 @@ Deno.serve(async (req) => {
         : CFG.INITIAL_BID_DEFAULT;
       initialBid = Math.round(Math.max(MIN_BID, Math.min(MAX_BID, initialBid)) * 100) / 100;
 
-      const campName = campaignName(winner.asin, winner.search_term);
+      const campName = campaignName(winner.asin, winner.search_term, winner.sku);
       const agName = adGroupName(winner.asin);
 
       try {
@@ -426,7 +490,7 @@ Deno.serve(async (req) => {
         await new Promise(r => setTimeout(r, 2000));
 
         // STEP 3: Product Ad
-        const product = productMap.get(winner.asin);
+        const product = productForIdentity(winner.asin, winner.sku);
         const paPayload: any = { campaignId, adGroupId, state: 'ENABLED' };
         if (product?.sku) paPayload.sku = product.sku; else paPayload.asin = winner.asin;
         await adsCmd(base44, aid, 'POST', '/sp/productAds', {
@@ -452,7 +516,7 @@ Deno.serve(async (req) => {
         const promo = await base44.asServiceRole.entities.SearchTermPromotion.create({
           amazon_account_id: aid,
           asin: winner.asin,
-          sku: product?.sku || '',
+          sku: winner.sku || product?.sku || '',
           source_campaign_id: winner.campaign_id,
           source_ad_group_id: winner.ad_group_id,
           source_search_term: winner.search_term,
@@ -472,7 +536,7 @@ Deno.serve(async (req) => {
           destination_campaign_name: campName,
           destination_ad_group_id: adGroupId,
           destination_keyword_id: keywordId || null,
-          idempotency_key: `${aid}|${winner.asin}|${winner.normalized_term}|EXACT|${today}`,
+          idempotency_key: `${aid}|${winner.sku || winner.asin}|${winner.normalized_term}|EXACT|${today}`,
           protected_by_winner_term: true,
           completed_at: now,
           created_at: now,
@@ -484,9 +548,10 @@ Deno.serve(async (req) => {
           amazon_account_id: aid,
           campaign_id: campaignId,
           amazon_campaign_id: campaignId,
+          asin: winner.asin,
+          sku: winner.sku || product?.sku || '',
           name: campName,
           campaign_name: campName,
-          asin: winner.asin,
           targeting_type: 'MANUAL',
           campaign_type: 'SP',
           state: 'enabled',
@@ -507,6 +572,7 @@ Deno.serve(async (req) => {
           ad_group_id: adGroupId,
           keyword_id: keywordId || `local_${Date.now()}`,
           asin: winner.asin,
+          sku: winner.sku || product?.sku || '',
           keyword: winner.search_term,
           keyword_text: winner.search_term,
           match_type: 'exact',
@@ -521,8 +587,8 @@ Deno.serve(async (req) => {
         }).catch(() => {});
 
         // Atualizar índices locais para evitar dedup na mesma run
-        exactKeyIndex.add(`${winner.asin}|${winner.normalized_term}`);
-        promoIndex.add(`${winner.asin}|${winner.normalized_term}`);
+        exactKeyIndex.add(termKey(winner.asin, winner.sku, winner.normalized_term));
+        promoIndex.add(termKey(winner.asin, winner.sku, winner.normalized_term));
 
         // Atualizar SearchTerm como promovido
         if (winner.id) {
@@ -535,6 +601,7 @@ Deno.serve(async (req) => {
         const termBankItems = await base44.asServiceRole.entities.TermBank.filter({
           amazon_account_id: aid,
           asin: winner.asin,
+          sku: winner.sku,
         }, undefined, 500).catch(() => []);
         const existingTB = termBankItems.find((t: any) =>
           normalizeTerm(t.term || t.keyword || '') === winner.normalized_term
@@ -555,6 +622,7 @@ Deno.serve(async (req) => {
           await base44.asServiceRole.entities.TermBank.create({
             amazon_account_id: aid,
             asin: winner.asin,
+            sku: winner.sku,
             term: winner.search_term,
             keyword: winner.search_term,
             normalized_term: winner.normalized_term,
@@ -576,6 +644,7 @@ Deno.serve(async (req) => {
 
         createdOriginal.push({
           asin: winner.asin,
+          sku: winner.sku,
           term: winner.search_term,
           winner_tier: winner.winner_tier,
           campaign_id: campaignId,
@@ -594,6 +663,8 @@ Deno.serve(async (req) => {
             amazon_account_id: aid,
             asin: winner.asin,
             keyword_text: winner.search_term,
+            sku: winner.sku,
+            source_campaign_id: winner.campaign_id,
             manual_campaign_id: campaignId,
             triggered_by: 'promoteWinningSearchTerms',
             _service_role: true,
@@ -632,7 +703,7 @@ Deno.serve(async (req) => {
         if (destProd.asin === winner.asin) continue;
         if (expansionsCount >= CFG.MAX_EXPANSIONS_PER_RUN) break;
 
-        const destKey = `${destProd.asin}|${winner.normalized_term}`;
+        const destKey = termKey(destProd.asin, destProd.sku, winner.normalized_term);
         if (exactKeyIndex.has(destKey) || promoIndex.has(destKey)) continue;
 
         const destSnap = snapshotMap.get(destProd.asin);
@@ -660,7 +731,7 @@ Deno.serve(async (req) => {
         if (score < CFG.MIN_CROSS_ASIN_RELEVANCE) continue;
 
         // Calcular bid para destino
-        const destEcon = econMap.get(destProd.asin);
+        const destEcon = econForIdentity(destProd.asin, destProd.sku);
         const destAov  = Number(destEcon?.current_price || destProd.price || 0);
         const destTargetAcos = Number(destEcon?.target_acos || TARGET_ACOS);
         const destCvr  = winner.clicks > 0 ? winner.orders / winner.clicks : 0.05;
@@ -669,12 +740,12 @@ Deno.serve(async (req) => {
         let destBid = destSusCpc > 0 ? Math.min(srcCpc * 0.85, destSusCpc * 0.85) : srcCpc * 0.80;
         destBid = Math.round(Math.max(MIN_BID, Math.min(MAX_BID, destBid)) * 100) / 100;
 
-        const destCampName = campaignName(destProd.asin, winner.search_term);
+        const destCampName = campaignName(destProd.asin, winner.search_term, destProd.sku);
         const testEndsAt = new Date(Date.now() + CFG.TEST_WINDOW_HOURS * 3600000).toISOString();
 
         if (dry_run) {
           crossAsinExpansions.push({
-            source_asin: winner.asin, destination_asin: destProd.asin,
+            source_asin: winner.asin, source_sku: winner.sku, destination_asin: destProd.asin, destination_sku: destProd.sku,
             term: winner.search_term, relevance_score: score,
             bid: destBid, campaign_name: destCampName, dry_run: true,
           });
@@ -796,6 +867,7 @@ Deno.serve(async (req) => {
             name: destCampName,
             campaign_name: destCampName,
             asin: destProd.asin,
+            sku: destProd.sku || '',
             targeting_type: 'MANUAL',
             campaign_type: 'SP',
             state: 'enabled', status: 'enabled',
@@ -812,6 +884,7 @@ Deno.serve(async (req) => {
             await base44.asServiceRole.functions.invoke('negateKeywordInAutoCampaign', {
               amazon_account_id: aid,
               asin: destProd.asin,
+              sku: destProd.sku || '',
               keyword_text: winner.search_term,
               manual_campaign_id: destCampaignId,
               triggered_by: 'promoteWinningSearchTerms_crossAsin',
