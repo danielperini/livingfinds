@@ -1,4 +1,6 @@
-// Supervisory diagnostics use the current operational snapshot window. Historical
+import { readAllEntityPages } from './v6siaEvidencePaging.ts';
+
+// Operational consumers use the current snapshot window. Historical
 // reports and decision evidence remain stored separately and are never relabelled fresh.
 export function v6siaSnapshotQuery(accountId: string, nowMs = Date.now()) {
   return {
@@ -8,6 +10,16 @@ export function v6siaSnapshotQuery(accountId: string, nowMs = Date.now()) {
       $lte: new Date(nowMs).toISOString(),
     },
   };
+}
+
+export async function readFreshOperationalSnapshots(
+  entity: { filter: (...args: any[]) => Promise<any> }, accountId: string,
+  runId?: string, nowMs = Date.now(),
+): Promise<Record<string, any>[]> {
+  const query = { ...v6siaSnapshotQuery(accountId, nowMs), ...(runId ? { run_id: runId } : {}) };
+  const result = await readAllEntityPages(entity, query, '-captured_at');
+  if (!result.complete || !result.rows) throw new Error(`Current snapshot collection incomplete: ${result.error || 'unknown'}`);
+  return result.rows;
 }
 
 const dailyFields: Record<string, string> = {

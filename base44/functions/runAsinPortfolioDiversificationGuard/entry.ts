@@ -2,6 +2,7 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { productAdsEligibility } from '../../shared/productAdsEligibility.ts';
 import { resolveProductScope, uniqueCampaignRows } from '../../shared/skuCampaignScope.ts';
 import { aggregateLatestCampaignMetrics, campaignSnapshotCoverage } from '../../shared/campaignMetricsIntegrity.ts';
+import { readFreshOperationalSnapshots } from '../../shared/v6siaSnapshotScope.ts';
 
 const SOURCE = 'runAsinPortfolioDiversificationGuard';
 const finite = (value: unknown, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
@@ -51,9 +52,7 @@ Deno.serve(async (request) => {
         base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, '-updated_at', 5000).catch(() => []),
         base44.asServiceRole.entities.IntradaySpendSnapshot.filter({ amazon_account_id: accountId, spend_date: today }, '-observed_at', 10000).catch(() => []),
         base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: accountId }, '-created_at', 10000).catch(() => []),
-        body.snapshot_run_id
-          ? base44.asServiceRole.entities.RepricingSnapshot.filter({ amazon_account_id: accountId, run_id: body.snapshot_run_id }, '-created_at', 10000).catch(() => [])
-          : base44.asServiceRole.entities.RepricingSnapshot.filter({ amazon_account_id: accountId }, '-created_at', 10000).catch(() => []),
+        readFreshOperationalSnapshots(base44.asServiceRole.entities.RepricingSnapshot, accountId, body.snapshot_run_id),
         base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: accountId }, '-date', 10000).catch(() => []),
       ]);
 
