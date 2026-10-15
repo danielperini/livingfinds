@@ -1,16 +1,38 @@
 -- MANUAL maintenance only. Verify a pg_dump backup first; never run from startup.
 -- Preserve the last 30 days and every snapshot referenced by decisions or evidence.
 BEGIN;
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '10min';
 SELECT pg_advisory_xact_lock(hashtextextended('livingfinds:snapshot-retention',0));
 CREATE TEMP TABLE retained_snapshot_references (id text PRIMARY KEY) ON COMMIT DROP;
 DO $$
-DECLARE entity_table text;
+DECLARE entity_table text; references_json text; references_array jsonb;
 BEGIN
   FOREACH entity_table IN ARRAY ARRAY['optimization_decision','amazon_action_queue','hourly_metric','listing_enhancement_history','listing_enhancement_proposal','strategy_session'] LOOP
     IF to_regclass(entity_table) IS NOT NULL THEN
       EXECUTE format('INSERT INTO retained_snapshot_references SELECT data->>''snapshot_id'' FROM %I WHERE nullif(data->>''snapshot_id'','''') IS NOT NULL ON CONFLICT DO NOTHING', entity_table);
     END IF;
   END LOOP;
+  IF to_regclass('strategy_session') IS NOT NULL THEN
+    INSERT INTO retained_snapshot_references
+      SELECT data->>'original_state_snapshot_id' FROM strategy_session
+      WHERE nullif(data->>'original_state_snapshot_id','') IS NOT NULL
+      ON CONFLICT DO NOTHING;
+  END IF;
+  IF to_regclass('hourly_metric') IS NOT NULL THEN
+    FOR references_json IN SELECT data->>'source_snapshot_ids_json' FROM hourly_metric
+      WHERE nullif(data->>'source_snapshot_ids_json','') IS NOT NULL
+    LOOP
+      -- Malformed references abort maintenance rather than dropping their evidence.
+      references_array := references_json::jsonb;
+      IF jsonb_typeof(references_array) <> 'array' THEN
+        RAISE EXCEPTION 'Snapshot retention blocked: invalid hourly snapshot references';
+      END IF;
+      INSERT INTO retained_snapshot_references
+        SELECT value FROM jsonb_array_elements_text(references_array)
+        WHERE nullif(value,'') IS NOT NULL ON CONFLICT DO NOTHING;
+    END LOOP;
+  END IF;
   IF to_regclass('v6_sia_evidence_link') IS NOT NULL THEN
     INSERT INTO retained_snapshot_references
       SELECT data->>'source_record_id' FROM v6_sia_evidence_link

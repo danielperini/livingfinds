@@ -38,13 +38,17 @@ Deno.test({
       await client.unsafe(`set search_path to "${schema}"`);
       await client.unsafe('create table repricing_snapshot(id text primary key, created_date timestamptz not null, data jsonb)');
       await client.unsafe('create table optimization_decision(data jsonb); create table v6_sia_evidence_link(data jsonb)');
+      await client.unsafe('create table hourly_metric(data jsonb); create table strategy_session(data jsonb)');
       await client.unsafe(`insert into repricing_snapshot values ('expired',now()-interval '40 days','{}'),('decision-source',now()-interval '40 days','{}'),('ai-source',now()-interval '40 days','{}'),('fresh',now(),'{}')`);
       await client.unsafe(`insert into optimization_decision values ('{"snapshot_id":"decision-source"}'); insert into v6_sia_evidence_link values ('{"source_table":"RepricingSnapshot","source_record_id":"ai-source"}')`);
+      await client.unsafe(`insert into repricing_snapshot values ('hourly-source',now()-interval '40 days','{}'),('strategy-source',now()-interval '40 days','{}')`);
+      await client.unsafe('insert into hourly_metric values ($1::jsonb);', [{ source_snapshot_ids_json: JSON.stringify(['hourly-source']) }]);
+      await client.unsafe('insert into strategy_session values ($1::jsonb)', [{ original_state_snapshot_id: 'strategy-source' }]);
       const script = await Deno.readTextFile('server/migrations/retain_repricing_snapshots_manual.sql');
       await client.unsafe(script);
       await client.unsafe(script);
       const rows = await client.unsafe('select id from repricing_snapshot order by id');
-      if (JSON.stringify(rows.map((r) => r.id)) !== JSON.stringify(['ai-source','decision-source','fresh'])) throw new Error('Retention removed current or referenced evidence');
+      if (JSON.stringify(rows.map((r) => r.id)) !== JSON.stringify(['ai-source','decision-source','fresh','hourly-source','strategy-source'])) throw new Error('Retention removed current or referenced evidence');
       const audit = await client.unsafe('select removed_count from snapshot_retention_audit order by id');
       if (Number(audit[0].removed_count) !== 1 || Number(audit[1].removed_count) !== 0) throw new Error('Retention reprocessing is not idempotent');
     } finally {
