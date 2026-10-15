@@ -157,8 +157,8 @@ docker compose -f "$compose_candidate" --project-directory "$VPS_PATH/server" ex
 echo '--- verificando índices das consultas de snapshots ---'
 docker compose -f "$compose_candidate" --project-directory "$VPS_PATH/server" exec -T db psql -v ON_ERROR_STOP=1 -U livingfinds -d livingfinds -f - \
   < "$stage/server/migrations/20261015_repricing_snapshot_lookup_indexes.sql"
-lookup_indexes="$(docker compose -f "$compose_candidate" --project-directory "$VPS_PATH/server" exec -T db psql -U livingfinds -d livingfinds -Atc "SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indisvalid AND c.relname IN ('repricing_snapshot_account_captured','repricing_snapshot_account_window_created','repricing_snapshot_account_created','repricing_snapshot_account_run_created')")"
-if [ "$lookup_indexes" != 4 ]; then echo 'SNAPSHOT_INDEX_VERIFY=failed' >&2; exit 8; fi
+lookup_indexes="$(docker compose -f "$compose_candidate" --project-directory "$VPS_PATH/server" exec -T db psql -U livingfinds -d livingfinds -Atc "SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indisvalid AND c.relname IN ('repricing_snapshot_account_captured','repricing_snapshot_account_window_created','repricing_snapshot_account_created','repricing_snapshot_account_run_created','repricing_snapshot_account_captured_range')")"
+if [ "$lookup_indexes" != 5 ]; then echo 'SNAPSHOT_INDEX_VERIFY=failed' >&2; exit 8; fi
 
 echo '--- preservando código anterior para reversão compatível ---'
 mkdir -p "$rollback/server"

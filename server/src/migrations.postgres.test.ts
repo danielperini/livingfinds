@@ -92,10 +92,18 @@ Deno.test({
         const rows = await client.unsafe(query);
         if (rows.length !== 10 || rows[0].id !== '2000') throw new Error('Indexed query changed ordering or results');
       }
+      // Exact date comparison emitted by EntityRepo for the 24h operational window.
+      const boundedQuery = `SELECT * FROM repricing_snapshot WHERE (data->>'amazon_account_id')='test-account'
+        AND (data->>'captured_at') >= '1900' AND (data->>'captured_at') <= '1999'
+        ORDER BY (data->'captured_at') DESC NULLS LAST,id ASC LIMIT 1000`;
+      const boundedPlan = JSON.stringify(await client.unsafe(`EXPLAIN (FORMAT JSON) ${boundedQuery}`));
+      if (!boundedPlan.includes('repricing_snapshot_account_captured_range') || boundedPlan.includes('"Node Type":"Seq Scan"')) throw new Error(`Daily range scanned historical payloads: ${boundedPlan}`);
+      const boundedRows = await client.unsafe(boundedQuery);
+      if (boundedRows[0].id !== '1999' || boundedRows.some((row) => String(row.data.captured_at) < '1900' || String(row.data.captured_at) > '1999')) throw new Error('Daily range changed results');
       const count = await client.unsafe('select count(*)::int as total from repricing_snapshot');
       if (count[0].total !== 2000) throw new Error('Migration changed snapshot rows');
       const indexes = await client.unsafe(`select count(*)::int as total from pg_index i join pg_class c on c.oid=i.indexrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname=$1 and i.indisvalid and c.relname like 'repricing_snapshot_account_%'`, [schema]);
-      if (indexes[0].total !== 4) throw new Error('Migration did not validate all four indexes');
+      if (indexes[0].total !== 5) throw new Error('Migration did not validate all five indexes');
     } finally {
       await client.unsafe(`drop schema if exists "${schema}" cascade`);
       await client.end({ timeout: 3 });
