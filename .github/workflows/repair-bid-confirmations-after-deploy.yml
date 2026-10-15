@@ -1,9 +1,7 @@
-name: Repair bid confirmations after deploy
+name: Reconcile bid confirmations (manual)
 
 on:
-  workflow_run:
-    workflows: ["Deploy para VPS"]
-    types: [completed]
+  workflow_dispatch:
 
 concurrency:
   group: repair-bid-confirmations-after-deploy

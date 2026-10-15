@@ -32,6 +32,8 @@ jobs:
         run: node --test src/lib/motorLabels.test.js
       - name: Test daily growth cycle recovery contract
         run: node --test src/lib/proactiveGrowthCycle.test.js
+      - name: Test post-deploy Amazon workflow isolation
+        run: node --test src/lib/postDeployHooks.test.js
       - name: Test interface navigation, operational queue and overlay contracts
         run: node --test src/lib/navigation.test.js src/lib/operationalQueueHealth.test.js src/lib/pagination.test.js src/lib/toastPointerEvents.test.js src/lib/durableMotorExecution.test.js src/lib/proactiveGrowthCycle.test.js
       - name: Typecheck
