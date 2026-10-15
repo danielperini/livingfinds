@@ -13,3 +13,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS repricing_snapshot_account_created
   ON repricing_snapshot ((data->>'amazon_account_id'), (data->'created_at') DESC NULLS LAST);
 CREATE INDEX CONCURRENTLY IF NOT EXISTS repricing_snapshot_account_run_created
   ON repricing_snapshot ((data->>'amazon_account_id'), (data->>'run_id'), (data->'created_at') DESC NULLS LAST);
+-- EntityRepo compares ISO date ranges as text, independently of its JSONB sort.
+-- Match that expression so a daily query does not fetch every historical payload.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS repricing_snapshot_account_captured_range
+  ON repricing_snapshot ((data->>'amazon_account_id'), (data->>'captured_at'));
