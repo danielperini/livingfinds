@@ -1,6 +1,62 @@
 import postgres from 'npm:postgres';
+import { bulkCreateEvidenceLinksWithSql } from './sdk/entities.ts';
 
 const databaseUrl = Deno.env.get('LIVINGFINDS_TEST_DATABASE_URL');
+
+Deno.test({
+  name: 'PostgreSQL evidence batches use one query and preserve stable IDs and existing metadata on replay',
+  ignore: !databaseUrl,
+  fn: async () => {
+    const client = postgres(databaseUrl!, { max: 1, connect_timeout: 8, idle_timeout: 5 });
+    const table = `lf_evidence_${crypto.randomUUID().replaceAll('-', '')}`;
+    try {
+      await client.unsafe(`create table "${table}"(id text primary key,created_by text,created_date timestamptz,updated_date timestamptz,data jsonb)`);
+      let calls = 0;
+      const db = { unsafe: (text: string, args: any[]) => { calls++; return client.unsafe(text,args); } };
+      const batch = Array.from({ length: 250 }, (_, i) => ({ id: `link-${i}`, source_record_id: `source-${i}`, created_by: 'original', created_date: '2026-10-14T00:00:00Z' }));
+      const created = await bulkCreateEvidenceLinksWithSql(db,table,batch);
+      if (calls !== 1 || created.length !== 250 || created[249].id !== 'link-249') throw new Error('Evidence batch was not one ordered query');
+      const replayed = await bulkCreateEvidenceLinksWithSql(db,table,batch.map((r) => ({id:r.id,confirmed:true,created_by:'changed'})));
+      if (Number(calls) !== 2 || replayed[0].created_by !== 'original' || replayed[0].source_record_id !== 'source-0' || replayed[0].confirmed !== true || new Date(replayed[0].created_date).toISOString() !== '2026-10-14T00:00:00.000Z') throw new Error('Replay altered evidence history');
+      const rows = await client.unsafe(`select count(*)::int AS n from "${table}"`);
+      if (rows[0].n !== 250) throw new Error('Replay duplicated evidence');
+    } finally {
+      await client.unsafe(`drop table if exists "${table}"`);
+      await client.end({ timeout: 3 });
+    }
+  },
+});
+
+Deno.test({
+  name: 'Manual snapshot retention removes only old unreferenced rows and is safe to repeat',
+  ignore: !databaseUrl,
+  fn: async () => {
+    const client = postgres(databaseUrl!, { max: 1, connect_timeout: 8, idle_timeout: 5 });
+    const schema = `lf_retention_${crypto.randomUUID().replaceAll('-', '')}`;
+    try {
+      await client.unsafe(`create schema "${schema}"`);
+      await client.unsafe(`set search_path to "${schema}"`);
+      await client.unsafe('create table repricing_snapshot(id text primary key, created_date timestamptz not null, data jsonb)');
+      await client.unsafe('create table optimization_decision(data jsonb); create table v6_sia_evidence_link(data jsonb)');
+      await client.unsafe('create table hourly_metric(data jsonb); create table strategy_session(data jsonb)');
+      await client.unsafe(`insert into repricing_snapshot values ('expired',now()-interval '40 days','{}'),('decision-source',now()-interval '40 days','{}'),('ai-source',now()-interval '40 days','{}'),('fresh',now(),'{}')`);
+      await client.unsafe(`insert into optimization_decision values ('{"snapshot_id":"decision-source"}'); insert into v6_sia_evidence_link values ('{"source_table":"RepricingSnapshot","source_record_id":"ai-source"}')`);
+      await client.unsafe(`insert into repricing_snapshot values ('hourly-source',now()-interval '40 days','{}'),('strategy-source',now()-interval '40 days','{}')`);
+      await client.unsafe('insert into hourly_metric values ($1::jsonb);', [{ source_snapshot_ids_json: JSON.stringify(['hourly-source']) }]);
+      await client.unsafe('insert into strategy_session values ($1::jsonb)', [{ original_state_snapshot_id: 'strategy-source' }]);
+      const script = await Deno.readTextFile('server/migrations/retain_repricing_snapshots_manual.sql');
+      await client.unsafe(script);
+      await client.unsafe(script);
+      const rows = await client.unsafe('select id from repricing_snapshot order by id');
+      if (JSON.stringify(rows.map((r) => r.id)) !== JSON.stringify(['ai-source','decision-source','fresh','hourly-source','strategy-source'])) throw new Error('Retention removed current or referenced evidence');
+      const audit = await client.unsafe('select removed_count from snapshot_retention_audit order by id');
+      if (Number(audit[0].removed_count) !== 1 || Number(audit[1].removed_count) !== 0) throw new Error('Retention reprocessing is not idempotent');
+    } finally {
+      await client.unsafe(`drop schema if exists "${schema}" cascade`);
+      await client.end({ timeout: 3 });
+    }
+  },
+});
 
 Deno.test({
   name: 'PostgreSQL snapshot lookup indexes preserve rows and cover the observed slow query shapes',

@@ -2,6 +2,7 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { sanitizeV6SIAError } from '../../shared/v6siaFailurePolicy.ts';
 import { latestRowsByKey, v6siaDecisionOutcome, v6siaImplementationStatus } from '../../shared/v6siaReviewEvidence.ts';
 import { readAllEntityPages } from '../../shared/v6siaEvidencePaging.ts';
+import { v6siaOperationalScope } from '../../shared/v6siaSnapshotScope.ts';
 import { buildV6SIAEvidenceLinks, shouldForceV6SIANewAnalysis, v6siaReviewCompletion } from '../../shared/v6siaLifecycle.ts';
 
 function pickSafeFailures(value: any): any[] {
@@ -70,7 +71,8 @@ function rowDate(row: any, fields: string[]): string | null {
 async function readCanonicalTable(base44: any, table: string, accountId: string, sort: string, _legacyLimit: number) {
   const entity = base44.asServiceRole.entities[table];
   if (!entity?.filter) return { rows: null, error: 'Tabela ou método de leitura indisponível', complete: false };
-  const result = await readAllEntityPages(entity, { amazon_account_id: accountId }, sort, 1000);
+  const { query } = v6siaOperationalScope(table, accountId);
+  const result = await readAllEntityPages(entity, query, sort, 1000);
   return {
     rows: result.rows,
     error: result.error ? sanitizeV6SIAError(result.error) : null,
@@ -124,6 +126,7 @@ function sourceDescriptor(table: string, rows: any[] | null, dateFields: string[
     period_end: dates.at(-1) || null,
     as_of: asOf,
     record_ids_persisted_as_evidence_links: rows.filter((row) => Boolean(row.id)).length,
+    operational_scope: v6siaOperationalScope(table, '').rule,
   };
 }
 

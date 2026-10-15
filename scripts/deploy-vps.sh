@@ -23,6 +23,16 @@ case "$previous_scheduler" in true|false) ;; *) echo 'Estado anterior do schedul
 previous_motor_worker="$(docker compose -f "$compose_file" --project-directory "$VPS_PATH/server" exec -T app sh -lc 'printf %s "${ENABLE_MOTOR_RUN_WORKER:-true}"')"
 case "$previous_motor_worker" in true|false) ;; *) echo 'Estado anterior do worker não pôde ser confirmado.' >&2; exit 3;; esac
 previous_release="$(docker compose -f "$compose_file" --project-directory "$VPS_PATH/server" exec -T app sh -lc 'printf %s "${LIVINGFINDS_RELEASE_SHA:-unknown}"')"
+# A previous interrupted deployment may have already paused the old container.
+# Keep the pre-maintenance state across retries instead of making that pause permanent.
+automation_state_file="$VPS_PATH/.deploy/automation-before-maintenance"
+if [ -f "$automation_state_file" ]; then
+  read -r previous_scheduler previous_motor_worker previous_release < "$automation_state_file"
+else
+  printf '%s %s %s\n' "$previous_scheduler" "$previous_motor_worker" "$previous_release" > "$automation_state_file"
+  chmod 600 "$automation_state_file"
+fi
+case "$previous_scheduler/$previous_motor_worker" in true/true|true/false|false/true|false/false) ;; *) echo 'Invalid saved automation state' >&2; exit 3;; esac
 paused=0
 release_applied=0
 restored=0
@@ -60,7 +70,11 @@ trap restore_automation EXIT
 echo '--- aguardando tarefas do scheduler terminarem antes da janela de manutenção ---'
 drained=0
 for attempt in $(seq 1 60); do
-  health="$(curl --max-time 20 -fsS http://127.0.0.1:8000/health)"
+  if ! health="$(curl --max-time 10 -fsS http://127.0.0.1:8000/health)"; then
+    echo "DRAIN_WAIT=health_unavailable|attempt=$attempt"
+    sleep 10
+    continue
+  fi
   running="$(printf '%s' "$health" | sed -n 's/.*"running_jobs":\([0-9][0-9]*\).*/\1/p')"
   test -n "$running"
   if [ "$running" = 0 ]; then drained=1; break; fi
@@ -106,12 +120,25 @@ docker compose -f "$compose_candidate" --project-directory "$VPS_PATH/server" ex
 
 echo '--- backup verificável do PostgreSQL ---'
 backup_file="$backups/livingfinds-$RELEASE_SHA.dump"
-docker compose -f "$compose_candidate" --project-directory "$VPS_PATH/server" exec -T db pg_dump -U livingfinds -d livingfinds -Fc > "$backup_file"
+# Only decision rows are touched by this migration. Preserve those rows and the
+# full schema; do not copy gigabytes of unrelated immutable snapshots each deploy.
+backup_tables=()
+for table in optimization_decision optimization_decision_idempotency_archive; do
+  exists="$(docker compose -f "$compose_candidate" --project-directory "$VPS_PATH/server" exec -T db psql -U livingfinds -d livingfinds -Atc "SELECT to_regclass('public.$table') IS NOT NULL")"
+  if [ "$exists" = t ]; then backup_tables+=(-t "$table"); fi
+done
+if [ "${#backup_tables[@]}" -gt 0 ]; then
+  docker compose -f "$compose_candidate" --project-directory "$VPS_PATH/server" exec -T db pg_dump -U livingfinds -d livingfinds -Fc "${backup_tables[@]}" > "$backup_file"
+else
+  docker compose -f "$compose_candidate" --project-directory "$VPS_PATH/server" exec -T db pg_dump -U livingfinds -d livingfinds -Fc --schema-only > "$backup_file"
+fi
+docker compose -f "$compose_candidate" --project-directory "$VPS_PATH/server" exec -T db pg_dump -U livingfinds -d livingfinds --schema-only > "$backup_file.schema.sql"
+chmod 600 "$backup_file.schema.sql"
 test -s "$backup_file"
 docker compose -f "$compose_candidate" --project-directory "$VPS_PATH/server" exec -T db pg_restore --list < "$backup_file" > /dev/null
 sha256sum "$backup_file" > "$backup_file.sha256"
 chmod 600 "$backup_file" "$backup_file.sha256"
-echo "DATABASE_BACKUP=verified|sha256=$(cut -d' ' -f1 "$backup_file.sha256")"
+echo "DATABASE_BACKUP=verified|scope=decision_tables_and_full_schema|sha256=$(cut -d' ' -f1 "$backup_file.sha256")"
 
 echo '--- preflight: arquivar snapshots duplicados sem remover decisões ---'
 report_file="$backups/idempotency-preflight-$RELEASE_SHA.txt"
@@ -181,5 +208,6 @@ docker compose -f "$compose_file" --project-directory "$VPS_PATH/server" exec -T
 restored=1
 paused=0
 trap - EXIT
+rm -f "$automation_state_file"
 echo "DEPLOY_VERIFIED_SHA=$RELEASE_SHA"
 echo 'POST_DEPLOY_AMAZON_MUTATIONS=none'
