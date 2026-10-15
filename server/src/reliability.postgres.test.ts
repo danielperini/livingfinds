@@ -178,7 +178,7 @@ Deno.test({
         Number(identityRace.filter((result) => result.created).length) !== 1
       ) {
         throw new Error(
-          'Criações concorrentes divergentes com a mesma chave de origem não foram serializadas em uma linha e um conflito.',
+          `Criações concorrentes divergentes com a mesma chave de origem falharam: rows=${String(identityRaceRows[0].count)}, results=${JSON.stringify(identityRace.map((result) => ({ created: result.created, reused: result.reused, conflict: result.conflict?.fields })))}`,
         );
       }
 
