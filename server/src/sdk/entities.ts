@@ -420,8 +420,10 @@ export async function createOptimizationDecisionIdempotentWithSql(
     // a different logical identity must conflict even before the unique-index
     // backstop is installed.
     const lockKeys = [
-      `optimization-decision:source:${accountId}\u0000${idempotencyKey}`,
-      `optimization-decision:logical:${accountId}\u0000${logicalKey}`,
+      // PostgreSQL text values cannot contain NUL bytes. JSON encoding keeps
+      // the tuple unambiguous while remaining valid UTF-8 for advisory locks.
+      JSON.stringify(['optimization-decision', 'source', accountId, idempotencyKey]),
+      JSON.stringify(['optimization-decision', 'logical', accountId, logicalKey]),
     ].sort();
     for (const lockKey of lockKeys) {
       await tx.unsafe('select pg_advisory_xact_lock(hashtextextended($1, 0))', [lockKey]);
