@@ -6,6 +6,7 @@ import {
   Clock, AlertTriangle, ChevronDown, ChevronRight, Settings, Target, History
 } from 'lucide-react';
 import PerformanceSettingsHistoryTable from '@/components/strategy/PerformanceSettingsHistoryTable';
+import { useDurableMotorRun } from '@/hooks/useDurableMotorRun';
 
 const ACTION_LABELS = {
   adjust_bid: 'Ajuste de Bid',
@@ -202,6 +203,7 @@ export default function StrategyEnginePage() {
   const [filterGoal, setFilterGoal] = useState('all');
   const [filterStatus, setFilterStatus] = useState('all');
   const [dryRun, setDryRun] = useState(true);
+  const { run: durableRun, error: durableError, start: startDurableRun } = useDurableMotorRun(account?.id);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -227,21 +229,22 @@ export default function StrategyEnginePage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  useEffect(() => {
+    if (!durableRun || !['completed', 'partial', 'failed', 'interrupted', 'remote_unknown'].includes(durableRun.status)) return;
+    setRunning(false);
+    if (durableRun.result_summary?.decisions) setResult(durableRun.result_summary);
+    void loadData();
+  }, [durableRun?.id, durableRun?.status, loadData]);
+
   const runEngine = async () => {
     if (!account || running) return;
     setRunning(true);
     setResult(null);
     setError(null);
     try {
-      const res = await base44.functions.invoke('runStrategyEngine', {
-        amazon_account_id: account.id,
-        dry_run: dryRun,
-      });
-      setResult(res?.data || null);
-      if (!dryRun) await loadData();
+      await startDurableRun('runStrategyEngine', { amazon_account_id: account.id, dry_run: dryRun });
     } catch (e) {
       setError(e.message);
-    } finally {
       setRunning(false);
     }
   };
@@ -250,15 +253,9 @@ export default function StrategyEnginePage() {
     if (!account || running) return;
     setRunning(true);
     try {
-      const res = await base44.functions.invoke('runStrategyEngine', {
-        amazon_account_id: account.id,
-        evaluate_only: true,
-      });
-      setResult(res?.data || null);
-      await loadData();
+      await startDurableRun('runStrategyEngine', { amazon_account_id: account.id, evaluate_only: true });
     } catch (e) {
       setError(e.message);
-    } finally {
       setRunning(false);
     }
   };
@@ -328,10 +325,10 @@ export default function StrategyEnginePage() {
               <span className={`absolute top-0.5 w-4 h-4 bg-cyan rounded-full shadow transition-all ${dryRun ? 'left-0.5' : 'left-4'}`} />
             </button>
           </div>
-          <button onClick={runEngine} disabled={running || !account}
+          <button onClick={runEngine} disabled={running || ['queued', 'running'].includes(durableRun?.status) || !account}
             className="flex items-center gap-1.5 px-4 py-2 bg-violet-500/20 border border-violet-500/30 text-violet-300 hover:bg-violet-500/30 text-sm font-semibold rounded-lg transition-colors disabled:opacity-50">
             {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-            {running ? 'Analisando...' : dryRun ? 'Simular Motor' : 'Executar Motor'}
+            {running ? 'Enfileirando...' : ['queued', 'running'].includes(durableRun?.status) ? 'Motor em execução' : dryRun ? 'Simular Motor' : 'Executar Motor'}
           </button>
         </div>
       </div>
@@ -345,6 +342,16 @@ export default function StrategyEnginePage() {
       {error && (
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3 flex items-center gap-2 text-xs text-red-400">
           <AlertTriangle className="w-4 h-4 flex-shrink-0" /> {error}
+        </div>
+      )}
+
+      {durableRun && (
+        <div className="bg-surface-1 border border-surface-2 rounded-xl p-3 text-xs text-slate-300 space-y-1">
+          <p className="font-semibold text-white">Execução: {durableRun.status} · {durableRun.current_stage || 'aguardando worker'}</p>
+          <p>Última atividade: {durableRun.last_activity_at ? new Date(durableRun.last_activity_at).toLocaleString('pt-BR') : '—'} · run_id: <span className="font-mono">{durableRun.id}</span></p>
+          {durableRun.remote_outcome === 'unknown' && <p className="text-amber-300">A Amazon pode ter recebido uma ação. O motor não a repetirá sem reconciliação.</p>}
+          {durableRun.errors?.length > 0 && <p className="text-red-300">{durableRun.errors.at(-1)?.message || 'Falha registrada na execução.'}</p>}
+          {durableError && <p className="text-amber-300">{durableError}</p>}
         </div>
       )}
 

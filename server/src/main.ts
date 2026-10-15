@@ -16,6 +16,8 @@ import { healthcheck, query } from './db.ts';
 import { makeEntities } from './sdk/entities.ts';
 import { makeIntegrations } from './sdk/integrations.ts';
 import { makeEnvironmentStatusResponse } from './environmentStatus.ts';
+import { enqueueMotorRun, getMotorRun, isMotorFunction, listMotorRuns, reportMotorRunProgress, startMotorRunWorker } from './motorRuns.ts';
+import { finishOptimizationDecisionExecution, renewOptimizationDecisionExecution, reserveOptimizationDecisionExecution } from './decisionExecutionClaims.ts';
 
 const PORT = Number(Deno.env.get('PORT') ?? 8000);
 const API_TOKEN = Deno.env.get('API_TOKEN') ?? '';
@@ -335,7 +337,113 @@ async function handler(req: Request): Promise<Response> {
     let dailyMotor: unknown;
     try { dailyMotor = await getDailyMotorRunStatus(); }
     catch { dailyMotor = { status: 'ledger_unavailable', confirmed_success: false }; }
-    return json({ ok: true, service: 'livingfinds-backend', functions: registry.size, db: await healthcheck(), scheduler: getSchedulerHealth(), daily_motor: dailyMotor });
+    return json({
+      ok: true,
+      service: 'livingfinds-backend',
+      functions: registry.size,
+      db: await healthcheck(),
+      scheduler: getSchedulerHealth(),
+      motor_worker: { enabled: Deno.env.get('ENABLE_MOTOR_RUN_WORKER') !== 'false' },
+      daily_motor: dailyMotor,
+    });
+  }
+  if (path === '/internal/optimization-decision-claims/reserve' && req.method === 'POST') {
+    if (!await apiAuthorized(req)) return json({ ok: false, error: 'Não autorizado' }, 401);
+    const body = await req.json().catch(() => ({}));
+    try {
+      const result = await reserveOptimizationDecisionExecution({ decisionId: body.decision_id, accountId: body.account_id });
+      return json({ ok: true, ...result }, result.authorized ? 200 : 409);
+    } catch (error) {
+      return json({ ok: false, error: 'Reserva atômica indisponível; nenhuma ação enviada.', detail: (error as Error).message }, 503);
+    }
+  }
+  if (path === '/internal/optimization-decisions/create-idempotent' && req.method === 'POST') {
+    if (!await apiAuthorized(req)) return json({ ok: false, error: 'Não autorizado' }, 401);
+    const body = await req.json().catch(() => ({}));
+    try {
+      const result = await entities.OptimizationDecision.createOptimizationDecisionIdempotent(body.decision || {});
+      // Conflicts are a business result, not an HTTP transport failure. Keep
+      // the structured result visible to the caller so it cannot be mistaken
+      // for a transient error and retried as a new proposal.
+      if (result.conflict) return json({ ok: true, ...result });
+      return json({ ok: true, ...result }, result.created ? 201 : 200);
+    } catch (error) {
+      return json({ ok: false, error: 'Criação idempotente de OptimizationDecision falhou.', detail: (error as Error).message }, 503);
+    }
+  }
+  if (path === '/internal/optimization-decision-claims/finish' && req.method === 'POST') {
+    if (!await apiAuthorized(req)) return json({ ok: false, error: 'Não autorizado' }, 401);
+    const body = await req.json().catch(() => ({}));
+    if (!['remote_acknowledged', 'remote_unknown', 'failed_before_send'].includes(body.status)) {
+      return json({ ok: false, error: 'Estado final da reserva inválido.' }, 400);
+    }
+    try {
+      const updated = await finishOptimizationDecisionExecution({ decisionId: body.decision_id, ownerId: body.owner_id, version: Number(body.version), status: body.status });
+      return updated ? json({ ok: true }) : json({ ok: false, error: 'Reserva ausente ou já finalizada.' }, 409);
+    } catch (error) {
+      return json({ ok: false, error: 'Não foi possível finalizar a reserva da decisão.', detail: (error as Error).message }, 503);
+    }
+  }
+  if (path === '/internal/optimization-decision-claims/renew' && req.method === 'POST') {
+    if (!await apiAuthorized(req)) return json({ ok: false, error: 'Não autorizado' }, 401);
+    const body = await req.json().catch(() => ({}));
+    try {
+      const result = await renewOptimizationDecisionExecution({ decisionId: body.decision_id, ownerId: body.owner_id, version: Number(body.version) });
+      return json({ ok: true, ...result }, result.renewed ? 200 : 409);
+    } catch (error) {
+      return json({ ok: false, error: 'Não foi possível renovar a posse da decisão.', detail: (error as Error).message }, 503);
+    }
+  }
+  // Durable motor run API. POST returns immediately; progress and final status
+  // remain queryable even if the client disconnects or the app process restarts.
+  if (path === '/api/motor-runs' && req.method === 'POST') {
+    if (!await apiAuthorized(req)) return json({ ok: false, error: 'Não autorizado' }, 401);
+    const body = await req.json().catch(() => ({}));
+    const functionName = body.function_name || 'runCanonicalDecisionCycle';
+    if (!isMotorFunction(functionName)) return json({ ok: false, error: 'Função de motor inválida.' }, 400);
+    try {
+      const accepted = await enqueueMotorRun({
+        request_key: String(body.request_key || body.payload?.correlation_id || crypto.randomUUID()),
+        function_name: functionName,
+        account_id: body.account_id || body.payload?.amazon_account_id || null,
+        payload: body.payload || {},
+      });
+      const run = accepted.run as Record<string, unknown>;
+      return json({ ok: true, accepted: !accepted.reused, reused: accepted.reused, blocked_by_existing: accepted.blocked_by_existing === true,
+        run_id: run.id, status: run.status, status_url: `/api/motor-runs/${encodeURIComponent(String(run.id))}` }, accepted.reused ? 200 : 202);
+    } catch (error) {
+      return json({ ok: false, error: (error as Error).message }, 503);
+    }
+  }
+  if (path === '/api/motor-runs' && req.method === 'GET') {
+    if (!await apiAuthorized(req)) return json({ ok: false, error: 'Não autorizado' }, 401);
+    try {
+      const accountId = url.searchParams.get('account_id') || 'default-account';
+      const runs = await listMotorRuns(accountId, Number(url.searchParams.get('limit') || 10));
+      return json({ ok: true, runs });
+    } catch (error) {
+      return json({ ok: false, error: 'Ledger de execuções temporariamente indisponível.', detail: (error as Error).message }, 503);
+    }
+  }
+  const motorRunMatch = path.match(/^\/api\/motor-runs\/([^/]+)\/?$/);
+  if (motorRunMatch && req.method === 'GET') {
+    if (!await apiAuthorized(req)) return json({ ok: false, error: 'Não autorizado' }, 401);
+    try {
+      const run = await getMotorRun(decodeURIComponent(motorRunMatch[1]));
+      return run ? json({ ok: true, run }) : json({ ok: false, error: 'Execução não encontrada.' }, 404);
+    } catch (error) {
+      return json({ ok: false, error: 'Ledger de execuções temporariamente indisponível.', detail: (error as Error).message }, 503);
+    }
+  }
+  const progressMatch = path.match(/^\/internal\/motor-runs\/([^/]+)\/progress\/?$/);
+  if (progressMatch && req.method === 'POST') {
+    const body = await req.json().catch(() => ({}));
+    try {
+      const updated = await reportMotorRunProgress(decodeURIComponent(progressMatch[1]), req.headers.get('x-motor-run-lease') || '', body);
+      return updated ? json({ ok: true }) : json({ ok: false, error: 'Execução perdeu a posse do lease ou já terminou.' }, 409);
+    } catch (error) {
+      return json({ ok: false, error: (error as Error).message }, 503);
+    }
   }
   if (path === '/api/admin/environment-status') {
     const user = await authenticatedUser(req);
@@ -450,6 +558,17 @@ async function handler(req: Request): Promise<Response> {
 console.log('[main] carregando funções...');
 const { loaded, failed } = await loadFunctions();
 if (failed.length) console.warn('[main] funções que não carregaram:', failed.join(', '));
+
+startMotorRunWorker(async (name, payload) => {
+  const handler = registry.get(name);
+  if (!handler) return { ok: false, error: `Função '${name}' não encontrada` };
+  const headers = new Headers({ 'content-type': 'application/json', 'x-service-role': 'true' });
+  const internalToken = Deno.env.get('INTERNAL_FUNCTION_TOKEN') || Deno.env.get('API_TOKEN') || Deno.env.get('ADMIN_PASSWORD') || '';
+  if (internalToken) headers.set('x-internal-invocation-token', internalToken);
+  const response = await handler(new Request(`http://127.0.0.1:${PORT}/functions/${name}`, { method: 'POST', headers, body: JSON.stringify(payload) }));
+  const data = await response.json().catch(() => ({ ok: false, error: 'Resposta JSON inválida da função.' }));
+  return { ...(data && typeof data === 'object' ? data : {}), http_status: response.status, ok: response.ok && (data as Record<string, unknown>)?.ok !== false };
+});
 
 startScheduler();
 

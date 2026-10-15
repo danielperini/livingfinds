@@ -1,5 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { inventoryDecisionPreflight } from '../../shared/inventorySyncPolicy.ts';
+import { reportDurableMotorRunProgress } from '../../shared/durableMotorRunProgress.ts';
 
 const invoke = async (base44: any, name: string, payload: Record<string, unknown>) => {
   try {
@@ -54,9 +55,51 @@ Deno.serve(async (request) => {
       _canonical_orchestrator: 'runUnifiedDecisionEngine',
       decision_engine_correlation_id: correlationId,
       dry_run: dryRun,
+      _motor_execution_run_id: body._motor_execution_run_id || null,
+      _motor_execution_lease: body._motor_execution_lease || null,
+    };
+    const runId = String(body._motor_execution_run_id || '') || null;
+    const runLease = String(body._motor_execution_lease || '') || null;
+    const maxStageMs = Math.max(30_000, Math.min(5 * 60_000, Number(Deno.env.get('MOTOR_STAGE_TIMEOUT_MS') || 180_000)));
+    let timedOutStage: string | null = null;
+    const invokeTracked = async (name: string, payload: Record<string, unknown>) => {
+      if (timedOutStage) return { ok: false, skipped: true, error: `Não iniciada: etapa ${timedOutStage} terminou com resultado remoto desconhecido.` };
+      const startedAt = new Date().toISOString();
+      const startMs = Date.now();
+      try {
+        await reportDurableMotorRunProgress({ runId, lease: runLease, stage: name, stageStatus: 'running', startedAt });
+      } catch (error) {
+        timedOutStage = name;
+        return { ok: false, error: String((error as Error)?.message || error), remote_outcome: 'unknown' };
+      }
+      let timer: number | undefined;
+      let timedOut = false;
+      const work = invoke(base44, name, payload);
+      const timeout = new Promise<Record<string, unknown>>((resolve) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          resolve({ ok: false, error: `Etapa excedeu ${maxStageMs} ms; estado remoto desconhecido.`, timed_out: true, remote_outcome: 'unknown' });
+        }, maxStageMs) as unknown as number;
+      });
+      const result = await Promise.race([work, timeout]);
+      if (timer) clearTimeout(timer);
+      const completedAt = new Date().toISOString();
+      const remoteOutcome = result.remote_outcome === 'unknown' || timedOut ? 'unknown' : undefined;
+      if (timedOut) timedOutStage = name;
+      try {
+        await reportDurableMotorRunProgress({
+          runId, lease: runLease, stage: name, stageStatus: timedOut ? 'remote_unknown' : result.ok === false ? 'failed' : result.report_status === 'processing' || result.report_status === 'pending' ? 'report_pending' : 'completed',
+          startedAt, completedAt, durationMs: Date.now() - startMs, error: result.error,
+          result, remoteOutcome,
+        });
+      } catch (error) {
+        timedOutStage = name;
+        return { ...result, ok: false, error: `Não foi possível salvar o checkpoint: ${String((error as Error)?.message || error)}`, remote_outcome: 'unknown' };
+      }
+      return result;
     };
 
-    const inventoryKickoff = await invoke(base44, 'checkInventoryChangesAndKickoff', common);
+    const inventoryKickoff = await invokeTracked('checkInventoryChangesAndKickoff', common);
     const inventoryPreflight = inventoryDecisionPreflight(inventoryKickoff, dryRun);
     if (!inventoryPreflight.allowed) {
       return Response.json({
@@ -76,16 +119,16 @@ Deno.serve(async (request) => {
       }, { status: 409 });
     }
     const reportRequest = dailyClose && !body.skip_sync
-      ? await invoke(base44, 'ensureDailyReportsCurrent', common)
+      ? await invokeTracked('ensureDailyReportsCurrent', common)
       : { ok: true, skipped: true };
     const dailyWinners = dailyClose && inventoryKickoff.ok === true && reportRequest.ok === true
-      ? await invoke(base44, 'runImmediateSameSkuSearchTermHarvest', {
+      ? await invokeTracked('runImmediateSameSkuSearchTermHarvest', {
           ...common, lookback_days: 30, max_promotions: 2, require_fresh_inventory: true,
           trigger_type: 'canonical_daily_same_sku_winners',
         })
       : { ok: true, skipped: true };
-    const scopeBefore = await invoke(base44, 'reconcileManualBidCycleScope', { ...common, skip_sync: body.skip_sync === true });
-    const snapshots = await invoke(base44, 'buildCanonicalMarketplaceSnapshots', {
+    const scopeBefore = await invokeTracked('reconcileManualBidCycleScope', { ...common, skip_sync: body.skip_sync === true });
+    const snapshots = await invokeTracked('buildCanonicalMarketplaceSnapshots', {
       ...common,
       mode: dailyClose || body.bootstrap === true ? 'bootstrap' : 'incremental',
       daily_close: dailyClose,
@@ -95,17 +138,17 @@ Deno.serve(async (request) => {
     const snapshotRunId = snapshots.run_id || snapshots.snapshot_run_id || correlationId;
 
     const economicAssessment = dailyClose
-      ? await invoke(base44, 'runDailyEconomicAssessment', { ...common, force: true, assessment_date: body.assessment_date || null })
+      ? await invokeTracked('runDailyEconomicAssessment', { ...common, force: true, assessment_date: body.assessment_date || null })
       : { ok: true, skipped: true };
-    const journeyAudit = await invoke(base44, 'classifyMarketplaceCampaignJourneys', common);
-    const manualStructureAudit = await invoke(base44, 'enforceCanonicalManualCampaigns', {
+    const journeyAudit = await invokeTracked('classifyMarketplaceCampaignJourneys', common);
+    const manualStructureAudit = await invokeTracked('enforceCanonicalManualCampaigns', {
       ...common,
       trigger_type: dailyClose ? 'unified_daily_manual_structure_audit' : 'unified_intraday_manual_structure_audit',
     });
 
     const economicCurveAdsGuard = body.skip_economic_curve_ads_guard === true
       ? { ok: true, skipped: true }
-      : await invoke(base44, 'runEconomicCurveAdsGuard', {
+      : await invokeTracked('runEconomicCurveAdsGuard', {
           ...common,
           max_actions: 20,
           target_mer_pct: body.target_mer_pct,
@@ -113,18 +156,18 @@ Deno.serve(async (request) => {
           trigger_type: dailyClose ? 'unified_daily_economic_curve_guard' : 'unified_intraday_economic_curve_guard',
         });
 
-    const deterministic = await invoke(base44, 'runDeterministicDecisionEngine', {
+    const deterministic = await invokeTracked('runDeterministicDecisionEngine', {
       ...common,
       skip_economic_bid_budget: true,
       skip_direct_execution: true,
       daily_close: dailyClose,
       snapshot_run_id: snapshotRunId,
     });
-    const decisionV3Shadow = await invoke(base44, 'runDecisionArbiterV3', common);
+    const decisionV3Shadow = await invokeTracked('runDecisionArbiterV3', common);
 
     const salesRecovery = body.skip_sales_recovery === true || dailyClose
       ? { ok: true, skipped: true }
-      : await invoke(base44, 'runIntradaySalesRecovery', {
+      : await invokeTracked('runIntradaySalesRecovery', {
           ...common,
           snapshot_run_id: snapshotRunId,
           trigger_type: 'unified_intraday_sales_recovery',
@@ -132,7 +175,7 @@ Deno.serve(async (request) => {
 
     const asinDiversification = body.skip_asin_diversification === true
       ? { ok: true, skipped: true }
-      : await invoke(base44, 'runAsinPortfolioDiversificationGuard', {
+      : await invokeTracked('runAsinPortfolioDiversificationGuard', {
           ...common,
           snapshot_run_id: snapshotRunId,
           serving_campaign_growth_target_pct: servingCampaignGrowthTargetPct,
@@ -142,7 +185,7 @@ Deno.serve(async (request) => {
         });
 
     const campaignLifecycle = lifecycleWindow
-      ? await invoke(base44, 'runCanonicalCampaignLifecycleLayer', {
+      ? await invokeTracked('runCanonicalCampaignLifecycleLayer', {
           ...common,
           daily_close: dailyClose,
           snapshot_run_id: snapshotRunId,
@@ -154,7 +197,7 @@ Deno.serve(async (request) => {
 
     const economicBalancer = lifecycleWindow
       ? { ok: true, skipped: true, delegated_to: 'runCanonicalCampaignLifecycleLayer' }
-      : await invoke(base44, 'runEconomicBudgetBalancer', {
+      : await invokeTracked('runEconomicBudgetBalancer', {
           ...common,
           mode: 'incremental', skip_sync: true, queue_only: true,
           snapshot_run_id: snapshotRunId, daily_close: false,
@@ -163,7 +206,7 @@ Deno.serve(async (request) => {
     const growthRecommendedByToday = salesRecovery?.serving_growth?.recommended === true;
     const servingGrowth = body.skip_serving_campaign_growth === true
       ? { ok: true, skipped: true }
-      : await invoke(base44, 'runServingCampaignGrowthObjective', {
+      : await invokeTracked('runServingCampaignGrowthObjective', {
           ...common,
           snapshot_run_id: snapshotRunId,
           serving_campaign_growth_target_pct: servingCampaignGrowthTargetPct,
@@ -180,7 +223,7 @@ Deno.serve(async (request) => {
 
     const deliveryHealth = body.skip_campaign_delivery_health === true
       ? { ok: true, skipped: true }
-      : await invoke(base44, 'reconcileCampaignDeliveryHealth', {
+      : await invokeTracked('reconcileCampaignDeliveryHealth', {
           ...common,
           snapshot_run_id: snapshotRunId,
           serving_campaign_growth_target_pct: servingCampaignGrowthTargetPct,
@@ -194,32 +237,32 @@ Deno.serve(async (request) => {
 
     const daypartConfiguration = body.skip_scheduled_daypart === true || !daypartWindow
       ? { ok: true, skipped: true }
-      : await invoke(base44, 'syncDaypartingConfiguration', {
+      : await invokeTracked('syncDaypartingConfiguration', {
           ...common,
           bootstrap_default_rules: body.bootstrap === true,
           migrate_canonical_rules: body.bootstrap === true || body.migrate_daypart_rules === true,
         });
     const daypartBudgetRestore = body.skip_scheduled_daypart === true || !daypartWindow
       ? { ok: true, skipped: true }
-      : await invoke(base44, 'reconcileDaypartCampaignBudgets', {
+      : await invokeTracked('reconcileDaypartCampaignBudgets', {
           ...common,
           now: body.now || null,
         });
     const scheduledCampaignState = body.skip_scheduled_daypart === true || !daypartWindow
       ? { ok: true, skipped: true }
-      : await invoke(base44, 'queueCanonicalCampaignDaypartState', {
+      : await invokeTracked('queueCanonicalCampaignDaypartState', {
           ...common, now: body.now || null,
         });
     const scheduledBidDaypart = body.skip_scheduled_daypart === true || !daypartWindow
       ? { ok: true, skipped: true }
-      : await invoke(base44, 'queueScheduledAdsDaypartTest', {
+      : await invokeTracked('queueScheduledAdsDaypartTest', {
           ...common,
           now: body.now || null,
         });
 
     const repricing = body.skip_repricing === true
       ? { ok: true, skipped: true }
-      : await invoke(base44, 'runAutomaticRepricing', {
+      : await invokeTracked('runAutomaticRepricing', {
           ...common,
           operation: dailyClose || body.full_repricing_evaluation === true ? 'full_evaluation' : 'evaluate',
           recommendation_only: dryRun || body.repricing_recommendation_only === true,
@@ -227,7 +270,7 @@ Deno.serve(async (request) => {
           daily_close: dailyClose,
           trigger: 'runUnifiedDecisionEngine',
         });
-    const scopeAfter = await invoke(base44, 'reconcileManualBidCycleScope', { ...common, skip_sync: true });
+    const scopeAfter = await invokeTracked('reconcileManualBidCycleScope', { ...common, skip_sync: true });
 
     const stages = {
       inventoryKickoff, inventoryPreflight, dailyWinners,
