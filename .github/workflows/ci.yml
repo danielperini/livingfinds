@@ -26,6 +26,8 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
+      - name: Test deployment transport and release receipt
+        run: node --test scripts/deploy.test.mjs
       - name: Test performance settings normalization
         run: node --test src/lib/performanceSettingsNormalization.test.js
       - name: Test Amazon confirmation labels
