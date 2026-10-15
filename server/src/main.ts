@@ -340,6 +340,7 @@ async function handler(req: Request): Promise<Response> {
     return json({
       ok: true,
       service: 'livingfinds-backend',
+      release_sha: Deno.env.get('LIVINGFINDS_RELEASE_SHA') ?? 'unknown',
       functions: registry.size,
       db: await healthcheck(),
       scheduler: getSchedulerHealth(),
