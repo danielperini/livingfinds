@@ -10,6 +10,7 @@ import { economicsAreActionable, resolveOperatingAcos, resolveSafeMaxCpc } from 
 import { resolveConfiguredBidPolicy } from '../../shared/configuredBidPolicy.ts';
 import { aggregateLatestCampaignMetrics, brazilReportDate, brazilReportDateDaysAgo } from '../../shared/campaignMetricsIntegrity.ts';
 import { resolveProductScope, resolveSkuScopedRow } from '../../shared/skuCampaignScope.ts';
+import { createEmptyHarvestMemo } from '../../shared/emptyHarvestMemo.ts';
 
 const SOURCE = 'reconcileCampaignDeliveryHealth';
 const active = (v: unknown) => ['enabled', 'active'].includes(String(v || '').toLowerCase());
@@ -112,6 +113,10 @@ Deno.serve(async (request) => {
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 50);
     const results: any[] = [];
+    const harvestOnceWhenEmpty = createEmptyHarvestMemo();
+    const harvestForScope = (payload: Record<string, any>) => harvestOnceWhenEmpty(payload, () =>
+      base44.asServiceRole.functions.invoke('runImmediateSameSkuSearchTermHarvest', payload)
+        .catch((error: any) => ({ ok: false, error: error?.message || String(error) })));
 
     for (const account of accounts) {
       const accountId = String(account.id);
@@ -407,21 +412,21 @@ Deno.serve(async (request) => {
           let replacement: any = { ok: false, reason: 'NO_CONFIRMED_SAME_SKU_REPLACEMENT' };
 
           if (!dryRun) {
-            const autoHarvest = await base44.asServiceRole.functions.invoke('runImmediateSameSkuSearchTermHarvest', {
+            const autoHarvest = await harvestForScope({
               amazon_account_id: accountId, _service_role: true, lookback_days: 65, max_promotions: 1,
               target_asins: [asin], source_campaign_type: 'AUTO',
               dry_run: false, trigger_type: 'zero_delivery_replacement_same_sku_auto_first',
-            }).catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
+            });
             let harvestData = autoHarvest?.data || autoHarvest || {};
             let promotedTerms = Array.isArray(harvestData?.reports)
               ? harvestData.reports.flatMap((r: any) => Array.isArray(r.promoted_terms) ? r.promoted_terms : [])
               : [];
             if (!promotedTerms.some((r: any) => upper(r.asin) === asin)) {
-              const fallbackHarvest = await base44.asServiceRole.functions.invoke('runImmediateSameSkuSearchTermHarvest', {
+              const fallbackHarvest = await harvestForScope({
                 amazon_account_id: accountId, _service_role: true, lookback_days: 65, max_promotions: 1,
                 target_asins: [asin], dry_run: false,
                 trigger_type: 'zero_delivery_replacement_same_sku_fallback',
-              }).catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
+              });
               harvestData = fallbackHarvest?.data || fallbackHarvest || {};
               promotedTerms = Array.isArray(harvestData?.reports)
                 ? harvestData.reports.flatMap((r: any) => Array.isArray(r.promoted_terms) ? r.promoted_terms : [])
