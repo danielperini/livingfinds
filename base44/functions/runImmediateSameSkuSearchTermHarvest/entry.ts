@@ -11,6 +11,7 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { hasFreshAdsInventory } from '../../shared/stockAdsPolicy.ts';
 import { evaluateManualExactExpansion, resolveManualExpansionLimits } from '../../shared/skuCampaignDistributionPolicy.ts';
 import { campaignCoverageEligible } from '../../shared/campaignCoverageEligibility.ts';
+import { loadSearchTermHarvestEvidence } from '../../shared/searchTermHarvestEvidence.ts';
 import {
   aggregateSearchTermSnapshots,
   calculateSafeHarvestBid,
@@ -112,16 +113,6 @@ async function ads(base44: any, accountId: string, operation: string, path: stri
   return unwrap(response);
 }
 
-async function loadPaged(entity: any, query: any, sort: string, maximum = 20000): Promise<any[]> {
-  const rows: any[] = [];
-  for (let skip = 0; skip < maximum; skip += 5000) {
-    const page = await entity.filter(query, sort, Math.min(5000, maximum - skip), skip).catch(() => []);
-    rows.push(...page);
-    if (page.length < 5000) break;
-  }
-  return rows;
-}
-
 function sourceNeedsNegative(source: any): boolean {
   const match = normalizeSearchTerm(source.matchType).replace(/_/g, '-');
   const campaignType = String(source.campaignType || '').toUpperCase();
@@ -154,19 +145,10 @@ Deno.serve(async (request) => {
     for (const account of accounts) {
       const aid = account.id;
       const now = new Date().toISOString();
-      const [searchTerms, campaigns, products, economics, assessments, settingsRows, keywords, promotions, termBank, keywordBank, productAds] = await Promise.all([
-        loadPaged(base44.asServiceRole.entities.SearchTerm, { amazon_account_id: aid }, '-date', 20000),
-        base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, '-updated_at', 5000).catch(() => []),
-        base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, '-updated_at', 3000).catch(() => []),
-        base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, '-updated_at', 3000).catch(() => []),
-        base44.asServiceRole.entities.DailyProductAdsAssessment.filter({ amazon_account_id: aid }, '-assessment_date', 5000).catch(() => []),
-        base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, '-updated_at', 1).catch(() => []),
-        base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-updated_at', 10000).catch(() => []),
-        base44.asServiceRole.entities.SearchTermPromotion.filter({ amazon_account_id: aid }, '-updated_at', 10000).catch(() => []),
-        base44.asServiceRole.entities.TermBank.filter({ amazon_account_id: aid }, '-updated_at', 10000).catch(() => []),
-        base44.asServiceRole.entities.KeywordBank.filter({ amazon_account_id: aid }, '-last_updated_at', 10000).catch(() => []),
-        base44.asServiceRole.entities.ProductAd.filter({ amazon_account_id: aid }, '-synced_at', 10000).catch(() => []),
-      ]);
+      const { searchTerms, campaigns, products, economics, assessments, settingsRows, keywords, promotions, termBank, keywordBank, productAds } =
+        await loadSearchTermHarvestEvidence(base44.asServiceRole.entities, aid, {
+          startDate: cutoff, endDate: today, assessmentStart: dateOffset(today, -1),
+        });
 
       const campaignById = new Map<string, any>();
       for (const campaign of campaigns) {
@@ -868,6 +850,7 @@ Deno.serve(async (request) => {
 
       const result = {
         amazon_account_id: aid,
+        evidence_complete: true,
         window: `${cutoff}|${today}`,
         search_term_rows: rowsInWindow.length,
         unique_literal_terms: aggregates.length,
@@ -917,6 +900,7 @@ Deno.serve(async (request) => {
 
     return Response.json({
       ok: reports.every((report) => report.failed === 0),
+      evidence_complete: true,
       dry_run: dryRun,
       policy: 'three_verified_same_sku_sales_literal_term_positive_economics_no_duplicate',
       lookback_days: lookbackDays,
