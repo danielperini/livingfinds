@@ -66,6 +66,7 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PATH: ${{ secrets.VPS_PATH }}
           RELEASE_SHA: ${{ github.sha }}
+          LIVE_BASE_URL: https://livingfinds.com.br
           SSHOPTS: -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o ConnectTimeout=30
         run: |
           VPS_PATH_B64="$(printf '%s' "$VPS_PATH" | base64 -w0)"
@@ -73,6 +74,7 @@ jobs:
             set -Eeuo pipefail
             VPS_PATH="$(printf '%s' "$VPS_PATH_B64" | base64 -d)"
             case "$RELEASE_SHA" in (*[!0-9a-f]*) echo 'SHA de release inválido' >&2; exit 2;; esac
+            export LIVINGFINDS_RELEASE_SHA="$RELEASE_SHA"
             test -d "$VPS_PATH"
             cd "$VPS_PATH"
 
@@ -232,7 +234,7 @@ jobs:
             docker compose -f "$compose_file" --project-directory "$VPS_PATH/server" exec -T app deno eval '
               const response = await fetch("http://127.0.0.1:8000/health");
               const health = await response.json();
-              if (!response.ok || !health.db || health.scheduler?.enabled !== true || health.motor_worker?.enabled !== true) Deno.exit(1);
+              if (!response.ok || !health.db || health.scheduler?.enabled !== true || health.motor_worker?.enabled !== true || health.release_sha !== Deno.env.get("LIVINGFINDS_RELEASE_SHA")) Deno.exit(1);
               console.log("AUTOMATION_RESTORED=confirmed|scheduler=" + health.scheduler.enabled + "|motor_worker=" + health.motor_worker.enabled);
             '
             restored=1
@@ -241,3 +243,26 @@ jobs:
             echo "DEPLOY_VERIFIED_SHA=$RELEASE_SHA"
             echo 'POST_DEPLOY_AMAZON_MUTATIONS=none'
           REMOTE
+          echo '--- verificando versão servida pelo domínio público ---'
+          node --input-type=module <<'NODE'
+          const base = process.env.LIVE_BASE_URL;
+          const expected = process.env.RELEASE_SHA;
+          const url = (path) => `${base}${path}?deploy_verify=${encodeURIComponent(expected)}`;
+          const [healthResponse, functionsResponse] = await Promise.all([
+            fetch(url('/health'), { cache: 'no-store' }),
+            fetch(url('/functions'), { cache: 'no-store' }),
+          ]);
+          if (!healthResponse.ok || !functionsResponse.ok) {
+            console.error(`PUBLIC_DEPLOY_VERIFY=failed|health_http=${healthResponse.status}|functions_http=${functionsResponse.status}`);
+            process.exit(1);
+          }
+          const health = await healthResponse.json();
+          const { functions = [] } = await functionsResponse.json();
+          const required = ['startMotorExecution', 'getMotorExecutionRun', 'listMotorExecutions', 'createOptimizationDecisionIdempotent'];
+          const missing = required.filter((name) => !functions.includes(name));
+          if (health.release_sha !== expected || health.db !== true || health.scheduler?.enabled !== true || health.motor_worker?.enabled !== true || missing.length) {
+            console.error(`PUBLIC_DEPLOY_VERIFY=failed|expected_sha=${expected}|served_sha=${health.release_sha ?? 'missing'}|db=${health.db}|scheduler=${health.scheduler?.enabled}|worker=${health.motor_worker?.enabled}|missing_functions=${missing.join(',')}`);
+            process.exit(1);
+          }
+          console.log(`PUBLIC_DEPLOY_VERIFY=confirmed|sha=${expected}|db=healthy|scheduler=enabled|worker=enabled`);
+          NODE
