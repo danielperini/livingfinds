@@ -157,10 +157,12 @@ Deno.test({
         createOptimizationDecisionIdempotentWithSql(client, decisionTable, {
           ...payload,
           idempotency_key: identityRaceKey,
+          cycle_key: `${payload.cycle_key}-identity-race`,
         }),
         createOptimizationDecisionIdempotentWithSql(client, decisionTable, {
           ...payload,
           idempotency_key: identityRaceKey,
+          cycle_key: `${payload.cycle_key}-identity-race`,
           entity_id: 'campaign-2',
           campaign_id: 'campaign-2',
         }),
