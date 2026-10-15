@@ -120,12 +120,25 @@ docker compose -f "$compose_candidate" --project-directory "$VPS_PATH/server" ex
 
 echo '--- backup verificável do PostgreSQL ---'
 backup_file="$backups/livingfinds-$RELEASE_SHA.dump"
-docker compose -f "$compose_candidate" --project-directory "$VPS_PATH/server" exec -T db pg_dump -U livingfinds -d livingfinds -Fc > "$backup_file"
+# Only decision rows are touched by this migration. Preserve those rows and the
+# full schema; do not copy gigabytes of unrelated immutable snapshots each deploy.
+backup_tables=()
+for table in optimization_decision optimization_decision_idempotency_archive; do
+  exists="$(docker compose -f "$compose_candidate" --project-directory "$VPS_PATH/server" exec -T db psql -U livingfinds -d livingfinds -Atc "SELECT to_regclass('public.$table') IS NOT NULL")"
+  if [ "$exists" = t ]; then backup_tables+=(-t "$table"); fi
+done
+if [ "${#backup_tables[@]}" -gt 0 ]; then
+  docker compose -f "$compose_candidate" --project-directory "$VPS_PATH/server" exec -T db pg_dump -U livingfinds -d livingfinds -Fc "${backup_tables[@]}" > "$backup_file"
+else
+  docker compose -f "$compose_candidate" --project-directory "$VPS_PATH/server" exec -T db pg_dump -U livingfinds -d livingfinds -Fc --schema-only > "$backup_file"
+fi
+docker compose -f "$compose_candidate" --project-directory "$VPS_PATH/server" exec -T db pg_dump -U livingfinds -d livingfinds --schema-only > "$backup_file.schema.sql"
+chmod 600 "$backup_file.schema.sql"
 test -s "$backup_file"
 docker compose -f "$compose_candidate" --project-directory "$VPS_PATH/server" exec -T db pg_restore --list < "$backup_file" > /dev/null
 sha256sum "$backup_file" > "$backup_file.sha256"
 chmod 600 "$backup_file" "$backup_file.sha256"
-echo "DATABASE_BACKUP=verified|sha256=$(cut -d' ' -f1 "$backup_file.sha256")"
+echo "DATABASE_BACKUP=verified|scope=decision_tables_and_full_schema|sha256=$(cut -d' ' -f1 "$backup_file.sha256")"
 
 echo '--- preflight: arquivar snapshots duplicados sem remover decisões ---'
 report_file="$backups/idempotency-preflight-$RELEASE_SHA.txt"
