@@ -334,7 +334,7 @@ export async function bulkCreateEvidenceLinksWithSql(db: any, table: string, ite
     SELECT id,created_by,coalesce(created_date,now()),coalesce(updated_date,now()),data
     FROM jsonb_to_recordset($1::jsonb) AS x(id text,created_by text,created_date timestamptz,updated_date timestamptz,data jsonb)
     ON CONFLICT(id) DO UPDATE SET data=${q(table)}.data || EXCLUDED.data,updated_date=now()
-    RETURNING *`, [JSON.stringify(payloads)]) as Row[];
+    RETURNING *`, [payloads]) as Row[];
   const byId = new Map(rows.map((row) => [row.id, mapRow(row)]));
   return items.map((item) => byId.get(item.id)!);
 }
