@@ -184,6 +184,7 @@ Deno.test({
       const executionPayload = {
         ...payload,
         idempotency_key: `${payload.idempotency_key}|execution`,
+        cycle_key: `${payload.cycle_key}-execution`,
         status: 'approved',
       };
       const execution = await createOptimizationDecisionIdempotentWithSql(
@@ -235,6 +236,7 @@ Deno.test({
       const uncertain = await createOptimizationDecisionIdempotentWithSql(client, decisionTable, {
         ...payload,
         idempotency_key: `${payload.idempotency_key}|uncertain`,
+        cycle_key: `${payload.cycle_key}-uncertain`,
         status: 'approved',
       });
       const uncertainId = String(uncertain.decision?.id);
@@ -287,6 +289,7 @@ Deno.test({
       const fenced = await createOptimizationDecisionIdempotentWithSql(client, decisionTable, {
         ...payload,
         idempotency_key: `${payload.idempotency_key}|fenced`,
+        cycle_key: `${payload.cycle_key}-fenced`,
         status: 'approved',
       });
       const fencedId = String(fenced.decision?.id);
