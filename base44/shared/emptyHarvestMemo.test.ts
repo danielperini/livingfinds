@@ -1,7 +1,7 @@
 import { createEmptyHarvestMemo } from './emptyHarvestMemo.ts';
 
 const payload = { amazon_account_id:'a',target_asins:['ASIN-A'],source_campaign_type:'AUTO',lookback_days:65,max_promotions:1,dry_run:false };
-const empty = () => ({ ok:true,reports:[{ amazon_account_id:'a',same_sku_candidates:0,selected:0,promoted:0,failed:0,promoted_terms:[],failures:[] }] });
+const empty = () => ({ ok:true,evidence_complete:true,reports:[{ evidence_complete:true,amazon_account_id:'a',same_sku_candidates:0,selected:0,promoted:0,failed:0,promoted_terms:[],failures:[] }] });
 
 Deno.test('47 campaigns with the same empty harvest invoke it once; a new cycle reads again', async () => {
   const memo=createEmptyHarvestMemo(); let calls=0;
@@ -28,6 +28,8 @@ Deno.test('mutations, candidates, partial responses and failures are never memoi
     (d:any)=>{d.reports[0].promoted=1;},(d:any)=>{d.reports[0].same_sku_candidates=1;},
     (d:any)=>{d.partial=true;},(d:any)=>{d.reports[0].failed=1;},(d:any)=>{d.ok=false;},
     (d:any)=>{d.reports=[];},(d:any)=>{delete d.reports[0].failures;},
+    (d:any)=>{delete d.evidence_complete;},(d:any)=>{delete d.reports[0].evidence_complete;},
+    (d:any)=>{d.complete=false;},(d:any)=>{d.reports[0].complete=false;},
   ]) {
     const memo=createEmptyHarvestMemo();let calls=0;
     const invoke=async()=>{calls++;const data=empty();modify(data);return data;};

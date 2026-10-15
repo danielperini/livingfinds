@@ -8,10 +8,10 @@ export function createEmptyHarvestMemo() {
     const response = await invoke();
     const data = response?.data || response;
     const reports = data?.reports;
-    if (data?.ok === true && data.partial !== true && data.complete !== false &&
+    if (data?.ok === true && data.evidence_complete === true && data.partial !== true && data.complete !== false &&
         Array.isArray(reports) && reports.length > 0 && reports.every((report: any) =>
           report.amazon_account_id === payload.amazon_account_id &&
-          report.partial !== true && report.complete !== false &&
+          report.evidence_complete === true && report.partial !== true && report.complete !== false &&
           report.same_sku_candidates === 0 && report.selected === 0 &&
           report.promoted === 0 && report.failed === 0 &&
           Array.isArray(report.promoted_terms) && report.promoted_terms.length === 0 &&
