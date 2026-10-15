@@ -1,6 +1,31 @@
 import postgres from 'npm:postgres';
+import { bulkCreateEvidenceLinksWithSql } from './sdk/entities.ts';
 
 const databaseUrl = Deno.env.get('LIVINGFINDS_TEST_DATABASE_URL');
+
+Deno.test({
+  name: 'PostgreSQL evidence batches use one query and preserve stable IDs and existing metadata on replay',
+  ignore: !databaseUrl,
+  fn: async () => {
+    const client = postgres(databaseUrl!, { max: 1, connect_timeout: 8, idle_timeout: 5 });
+    const table = `lf_evidence_${crypto.randomUUID().replaceAll('-', '')}`;
+    try {
+      await client.unsafe(`create table "${table}"(id text primary key,created_by text,created_date timestamptz,updated_date timestamptz,data jsonb)`);
+      let calls = 0;
+      const db = { unsafe: (text: string, args: any[]) => { calls++; return client.unsafe(text,args); } };
+      const batch = Array.from({ length: 250 }, (_, i) => ({ id: `link-${i}`, source_record_id: `source-${i}`, created_by: 'original', created_date: '2026-10-14T00:00:00Z' }));
+      const created = await bulkCreateEvidenceLinksWithSql(db,table,batch);
+      if (calls !== 1 || created.length !== 250 || created[249].id !== 'link-249') throw new Error('Evidence batch was not one ordered query');
+      const replayed = await bulkCreateEvidenceLinksWithSql(db,table,batch.map((r) => ({id:r.id,confirmed:true,created_by:'changed'})));
+      if (calls !== 2 || replayed[0].created_by !== 'original' || replayed[0].source_record_id !== 'source-0' || replayed[0].confirmed !== true || new Date(replayed[0].created_date).toISOString() !== '2026-10-14T00:00:00.000Z') throw new Error('Replay altered evidence history');
+      const rows = await client.unsafe(`select count(*)::int AS n from "${table}"`);
+      if (rows[0].n !== 250) throw new Error('Replay duplicated evidence');
+    } finally {
+      await client.unsafe(`drop table if exists "${table}"`);
+      await client.end({ timeout: 3 });
+    }
+  },
+});
 
 Deno.test({
   name: 'Manual snapshot retention removes only old unreferenced rows and is safe to repeat',

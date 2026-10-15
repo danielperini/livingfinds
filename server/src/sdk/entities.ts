@@ -250,6 +250,14 @@ export class EntityRepo {
   }
 
   async bulkCreate(items: Row[] = []): Promise<Row[]> {
+    // Supervision persists thousands of stable evidence IDs. Keep generic create()
+    // unchanged, but avoid one DB round trip per evidence link.
+    if (this.entity === 'V6SIAEvidenceLink' && items.length > 0 && items.length <= 500 &&
+        items.every((item) => typeof item.id === 'string' && item.id.length > 0) &&
+        new Set(items.map((item) => item.id)).size === items.length) {
+      await ensureTable(this.table);
+      return await bulkCreateEvidenceLinksWithSql(sql, this.table, items);
+    }
     const out: Row[] = [];
     for (const item of items) out.push(await this.create(item));
     return out;
@@ -311,6 +319,24 @@ export class EntityRepo {
     )) as unknown as Row[];
     return { deleted: res[0]?.n ?? 0 };
   }
+}
+
+export async function bulkCreateEvidenceLinksWithSql(db: any, table: string, items: Row[]): Promise<Row[]> {
+  if (!items.length) return [];
+  if (items.length > 500 || items.some((item) => typeof item.id !== 'string' || !item.id) ||
+      new Set(items.map((item) => item.id)).size !== items.length) throw new Error('Invalid stable evidence batch');
+  const payloads = items.map((item) => {
+    const { system, data } = splitSystem(item);
+    return { id: system.id, created_by: system.created_by ?? null, created_date: system.created_date || null, updated_date: system.updated_date || null, data };
+  });
+  const rows = await db.unsafe(`
+    INSERT INTO ${q(table)} (id,created_by,created_date,updated_date,data)
+    SELECT id,created_by,coalesce(created_date,now()),coalesce(updated_date,now()),data
+    FROM jsonb_to_recordset($1::jsonb) AS x(id text,created_by text,created_date timestamptz,updated_date timestamptz,data jsonb)
+    ON CONFLICT(id) DO UPDATE SET data=${q(table)}.data || EXCLUDED.data,updated_date=now()
+    RETURNING *`, [JSON.stringify(payloads)]) as Row[];
+  const byId = new Map(rows.map((row) => [row.id, mapRow(row)]));
+  return items.map((item) => byId.get(item.id)!);
 }
 
 const INTENT_FIELDS = [
