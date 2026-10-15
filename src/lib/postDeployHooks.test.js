@@ -15,6 +15,7 @@ test('deploy does not automatically trigger campaign recovery or bid reconciliat
   assert.match(recovery, /^\s+workflow_dispatch:/m);
   assert.doesNotMatch(reconciliation, /^\s+workflow_run:/m);
   assert.match(reconciliation, /^\s+workflow_dispatch:/m);
+  assert.doesNotMatch(reconciliation, /github\.event\.workflow_run/);
 });
 
 test('campaign budget cap retains its schedule without a deploy hook', () => {
