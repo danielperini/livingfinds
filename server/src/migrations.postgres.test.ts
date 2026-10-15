@@ -17,7 +17,7 @@ Deno.test({
       const created = await bulkCreateEvidenceLinksWithSql(db,table,batch);
       if (calls !== 1 || created.length !== 250 || created[249].id !== 'link-249') throw new Error('Evidence batch was not one ordered query');
       const replayed = await bulkCreateEvidenceLinksWithSql(db,table,batch.map((r) => ({id:r.id,confirmed:true,created_by:'changed'})));
-      if (calls !== 2 || replayed[0].created_by !== 'original' || replayed[0].source_record_id !== 'source-0' || replayed[0].confirmed !== true || new Date(replayed[0].created_date).toISOString() !== '2026-10-14T00:00:00.000Z') throw new Error('Replay altered evidence history');
+      if (Number(calls) !== 2 || replayed[0].created_by !== 'original' || replayed[0].source_record_id !== 'source-0' || replayed[0].confirmed !== true || new Date(replayed[0].created_date).toISOString() !== '2026-10-14T00:00:00.000Z') throw new Error('Replay altered evidence history');
       const rows = await client.unsafe(`select count(*)::int AS n from "${table}"`);
       if (rows[0].n !== 250) throw new Error('Replay duplicated evidence');
     } finally {
