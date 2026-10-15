@@ -1,4 +1,4 @@
-import { v6siaSnapshotQuery, v6siaOperationalScope } from './v6siaSnapshotScope.ts';
+import { v6siaSnapshotQuery, v6siaOperationalScope, readFreshOperationalSnapshots } from './v6siaSnapshotScope.ts';
 
 Deno.test('snapshot supervision is scoped to account and real last 24 hours, excluding old and future records', () => {
   const now = Date.parse('2026-10-15T13:00:00Z');
@@ -25,4 +25,20 @@ Deno.test('old unresolved actions remain visible while event history is scoped a
   if (!decisions.$or[1].status.$in.includes('remote_unknown') || !decisions.$or[0].updated_date.$gte) throw new Error('Lost uncertain remote action or recent decisions');
   if (!(v6siaOperationalScope('CampaignBidHistory','a').query as any).updated_date.$gte) throw new Error('Unbounded event scan');
   if (JSON.stringify(v6siaOperationalScope('Product','a').query) !== '{"amazon_account_id":"a"}') throw new Error('Dropped unchanged current product state');
+});
+
+Deno.test('fresh snapshot consumer paginates only the account and requested run without accepting partial evidence', async () => {
+  const now = Date.parse('2026-10-15T13:00:00Z');
+  const offsets: number[] = [];
+  const entity = { filter: async (query: any, sort: string, limit: number, offset: number) => {
+    if (query.amazon_account_id !== 'a' || query.run_id !== 'run-a' || query.captured_at.$gte !== '2026-10-14T13:00:00.000Z' || sort !== '-captured_at' || limit !== 1000) throw new Error('Unscoped snapshot read');
+    offsets.push(offset);
+    return offset ? [{ id: 'last' }] : Array.from({ length: 1000 }, (_, i) => ({ id: String(i) }));
+  } };
+  const rows = await readFreshOperationalSnapshots(entity, 'a', 'run-a', now);
+  if (rows.length !== 1001 || offsets.join(',') !== '0,1000') throw new Error('Fresh snapshot pages were truncated');
+  let rejected = false;
+  try { await readFreshOperationalSnapshots({ filter: async () => { throw new Error('timeout'); } }, 'a', undefined, now); }
+  catch (error) { rejected = String(error).includes('collection incomplete'); }
+  if (!rejected) throw new Error('Incomplete snapshot evidence accepted for a financial decision');
 });

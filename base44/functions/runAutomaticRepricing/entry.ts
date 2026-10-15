@@ -1,4 +1,5 @@
 import { adsEconomicsStatus, calculateAdsUnitEconomics } from '../../shared/adsUnitEconomics.ts';
+import { readFreshOperationalSnapshots } from '../../shared/v6siaSnapshotScope.ts';
 /**
  * Motor único de repricing.
  *
@@ -1213,10 +1214,11 @@ async function evaluateAccount(
         "-created_at",
         5000,
       ).catch(() => []),
-      base44.asServiceRole.entities.RepricingSnapshot.filter(
-        { amazon_account_id: account.id },
-        '-created_at', 5000,
-      ).catch(() => []),
+      // Only the canonical path consumes this evidence. Other pricing operations
+      // previously loaded thousands of snapshots that they never used.
+      options._canonical_orchestrator === 'runUnifiedDecisionEngine'
+        ? readFreshOperationalSnapshots(base44.asServiceRole.entities.RepricingSnapshot, account.id, options.snapshot_run_id)
+        : Promise.resolve([]),
     ]);
   const salesMap = groupSales(
     salesRows.filter((row: any) => !row.date || row.date >= cutoff),
