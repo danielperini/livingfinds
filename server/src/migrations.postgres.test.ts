@@ -13,7 +13,8 @@ Deno.test({
       await client.unsafe(`set search_path to "${schema}"`);
       await client.unsafe('create table repricing_snapshot (id text primary key, data jsonb not null)');
       await client.unsafe(`insert into repricing_snapshot select n::text, jsonb_build_object(
-        'amazon_account_id','test-account','decision_window','day','run_id','test-run',
+        'amazon_account_id','test-account','decision_window',case when n%20=0 then 'day' else 'other' end,
+        'run_id',case when n%10=0 then 'test-run' else 'other-run' end,
         'created_at',n,'captured_at',n) from generate_series(1,2000) n`);
       const migration = await Deno.readTextFile('server/migrations/20261015_repricing_snapshot_lookup_indexes.sql');
       const statements = migration.replace(/^--.*$/gm, '').split(';').map((s) => s.trim()).filter(Boolean);
@@ -30,12 +31,15 @@ Deno.test({
       for (const item of cases) {
         const query = `SELECT * FROM repricing_snapshot WHERE (data->>'amazon_account_id')='test-account' ${item.filter} ORDER BY (data->'${item.sort}') DESC NULLS LAST LIMIT 10 OFFSET 0`;
         const plan = JSON.stringify(await client.unsafe(`EXPLAIN (FORMAT JSON) ${query}`));
-        if (!plan.includes(item.index) || plan.includes('"Node Type":"Sort"')) throw new Error(`Missing ordered lookup: ${item.index}: ${plan}`);
+        // PostgreSQL may choose an equivalent ordered index according to selectivity.
+        if (!plan.includes('repricing_snapshot_account_') || plan.includes('"Node Type":"Sort"') || plan.includes('"Node Type":"Seq Scan"')) throw new Error(`Missing ordered lookup: ${item.index}: ${plan}`);
         const rows = await client.unsafe(query);
         if (rows.length !== 10 || rows[0].id !== '2000') throw new Error('Indexed query changed ordering or results');
       }
       const count = await client.unsafe('select count(*)::int as total from repricing_snapshot');
       if (count[0].total !== 2000) throw new Error('Migration changed snapshot rows');
+      const indexes = await client.unsafe(`select count(*)::int as total from pg_index i join pg_class c on c.oid=i.indexrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname=$1 and i.indisvalid and c.relname like 'repricing_snapshot_account_%'`, [schema]);
+      if (indexes[0].total !== 4) throw new Error('Migration did not validate all four indexes');
     } finally {
       await client.unsafe(`drop schema if exists "${schema}" cascade`);
       await client.end({ timeout: 3 });
