@@ -4,20 +4,18 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      run_post_deploy_amazon_automation:
-        description: Executar rotinas Amazon mutáveis após o deploy
-        required: false
-        default: false
-        type: boolean
 
 concurrency:
   group: deploy-vps
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout do código
         uses: actions/checkout@v4
@@ -26,469 +24,220 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '24'
-          cache: 'npm'
+          cache: npm
 
       - name: Instalar dependências
         run: npm ci
 
-      - name: Testar projeção probabilística de lucro
+      - name: Testes de segurança da projeção
         run: node --test src/lib/profitProjectionMath.test.js src/lib/performanceSettingsNormalization.test.js
 
       - name: Build do frontend
         run: npm run build
 
-      - name: Preparar chave SSH
+      - name: Preparar conexão SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          test -n "${{ secrets.VPS_HOST }}"
+          test -n "$VPS_HOST"
           for attempt in 1 2 3 4 5; do
-            if ssh-keyscan -T 10 -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null; then
-              break
-            fi
-            if [ "$attempt" = "5" ]; then
-              echo "Aviso: ssh-keyscan não respondeu; seguindo com StrictHostKeyChecking=no."
-            fi
+            if ssh-keyscan -T 10 -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null; then break; fi
+            if [ "$attempt" = 5 ]; then exit 1; fi
             sleep 5
           done
 
-      - name: Empacotar e enviar para a VPS
+      - name: Empacotar e enviar
         env:
-          SSHOPTS: -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no
-          TARGET: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PATH: ${{ secrets.VPS_PATH }}
+          SSHOPTS: -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o ConnectTimeout=30
         run: |
           tar czf /tmp/deploy.tar.gz base44 server dist
-          scp $SSHOPTS /tmp/deploy.tar.gz "$TARGET:/tmp/deploy.tar.gz"
+          scp $SSHOPTS /tmp/deploy.tar.gz "$VPS_USER@$VPS_HOST:/tmp/deploy.tar.gz"
 
-      - name: Aplicar, rebuildar e verificar na VPS
+      - name: Backup, migrar e implantar sem executar rotinas comerciais
         env:
-          SSHOPTS: -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no
-          TARGET: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PATH: ${{ secrets.VPS_PATH }}
-          RUN_POST_DEPLOY_AMAZON_AUTOMATION: ${{ github.event_name == 'workflow_dispatch' && inputs.run_post_deploy_amazon_automation }}
+          RELEASE_SHA: ${{ github.sha }}
+          SSHOPTS: -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o ConnectTimeout=30
         run: |
-          ssh $SSHOPTS "$TARGET" "bash -s" <<EOF
-            set -e
+          VPS_PATH_B64="$(printf '%s' "$VPS_PATH" | base64 -w0)"
+          ssh $SSHOPTS "$VPS_USER@$VPS_HOST" "VPS_PATH_B64=$VPS_PATH_B64 RELEASE_SHA=$RELEASE_SHA bash -s" <<'REMOTE'
+            set -Eeuo pipefail
+            VPS_PATH="$(printf '%s' "$VPS_PATH_B64" | base64 -d)"
+            case "$RELEASE_SHA" in (*[!0-9a-f]*) echo 'SHA de release inválido' >&2; exit 2;; esac
+            test -d "$VPS_PATH"
             cd "$VPS_PATH"
-            rm -rf base44 dist
-            tar xzf /tmp/deploy.tar.gz -C "$VPS_PATH"
-            test -f dist/index.html
-            rm -f .dockerignore
-            docker compose -f server/docker-compose.yml up -d --build app
-            echo '--- aguardando backend ficar pronto ---'
-            ready=0
-            for attempt in \$(seq 1 30); do
-              if curl -sf http://localhost:8000/health >/dev/null; then
-                ready=1
-                break
+
+            compose_file="$VPS_PATH/server/docker-compose.yml"
+            stage="$VPS_PATH/.deploy/releases/$RELEASE_SHA"
+            rollback="$VPS_PATH/.deploy/rollback-$RELEASE_SHA"
+            backups="$VPS_PATH/.deploy/backups"
+            mkdir -p "$stage" "$backups" "$VPS_PATH/.deploy"
+            chmod 700 "$VPS_PATH/.deploy" "$backups"
+            tar xzf /tmp/deploy.tar.gz -C "$stage"
+            test -f "$stage/dist/index.html"
+            test -f "$stage/server/migrations/20261015_optimization_decision_idempotency_preflight.sql"
+            test -f "$stage/server/migrations/20261015_optimization_decision_idempotency_unique.sql"
+
+            previous_scheduler="$(docker compose -f "$compose_file" --project-directory "$VPS_PATH" exec -T app sh -lc 'printf %s "${ENABLE_SCHEDULER:-true}"')"
+            case "$previous_scheduler" in true|false) ;; *) echo 'Estado anterior do scheduler não pôde ser confirmado.' >&2; exit 3;; esac
+            previous_motor_worker="$(docker compose -f "$compose_file" --project-directory "$VPS_PATH" exec -T app sh -lc 'printf %s "${ENABLE_MOTOR_RUN_WORKER:-true}"')"
+            case "$previous_motor_worker" in true|false) ;; *) echo 'Estado anterior do worker não pôde ser confirmado.' >&2; exit 3;; esac
+            paused=0
+            release_applied=0
+            restored=0
+            restore_automation() {
+              if [ "$paused" = 1 ] && [ "$restored" = 0 ]; then
+                set +e
+                if [ "$release_applied" = 1 ] && [ -d "$rollback/base44" ]; then
+                  echo '--- falha após troca de código; revertendo pacote para a versão anterior ---' >&2
+                  rm -rf "$VPS_PATH/base44" "$VPS_PATH/dist" "$VPS_PATH/server/src"
+                  cp -a "$rollback/base44" "$VPS_PATH/"
+                  cp -a "$rollback/dist" "$VPS_PATH/"
+                  cp -a "$rollback/server/src" "$VPS_PATH/server/"
+                  cp -a "$rollback/server/deno.json" "$rollback/server/Dockerfile" "$rollback/server/docker-compose.yml" "$VPS_PATH/server/"
+                  restore_compose="$VPS_PATH/server/docker-compose.yml"
+                  docker compose -f "$restore_compose" --project-directory "$VPS_PATH" up -d --build app >/dev/null 2>&1
+                else
+                  restore_compose="$VPS_PATH/server/docker-compose.yml"
+                  [ -f "$restore_compose" ] || restore_compose="$VPS_PATH/server/docker-compose.deploy.yml"
+                  ENABLE_SCHEDULER="$previous_scheduler" ENABLE_MOTOR_RUN_WORKER="$previous_motor_worker" \
+                    docker compose -f "$restore_compose" --project-directory "$VPS_PATH" up -d app >/dev/null 2>&1
+                fi
+                if [ "$release_applied" = 1 ]; then
+                  for attempt in $(seq 1 30); do
+                    if curl -sf http://127.0.0.1:8000/health >/dev/null; then break; fi
+                    sleep 2
+                  done
+                fi
+                restored=1
+                set -e
               fi
+            }
+            trap restore_automation EXIT
+
+            echo '--- aguardando tarefas do scheduler terminarem antes da janela de manutenção ---'
+            drained=0
+            for attempt in $(seq 1 60); do
+              health="$(curl -fsS http://127.0.0.1:8000/health)"
+              running="$(printf '%s' "$health" | sed -n 's/.*"running_jobs":\([0-9][0-9]*\).*/\1/p')"
+              test -n "$running"
+              if [ "$running" = 0 ]; then drained=1; break; fi
+              sleep 10
+            done
+            if [ "$drained" != 1 ]; then echo 'Scheduler não drenou em 10 minutos; implantação cancelada sem reiniciar o app.' >&2; exit 4; fi
+            extra_engine_processes="$(docker compose -f "$compose_file" --project-directory "$VPS_PATH" exec -T app sh -lc '
+              n=0
+              for f in /proc/[0-9]*/cmdline; do
+                [ -r "$f" ] || continue
+                c=$(tr "\\000" " " < "$f" 2>/dev/null || true)
+                case "$c" in *deno*eval*runUnifiedDecisionEngine*|*deno*eval*executeApprovedDecisionQueue*|*deno*eval*confirmExecutedDecisions*) n=$((n+1));; esac
+              done
+              printf %s "$n"
+            ')"
+            if [ "$extra_engine_processes" != 0 ]; then echo 'Motor ad hoc ainda ativo no VPS; implantação suspensa para não interromper uma ação incerta.' >&2; exit 5; fi
+
+            cp "$stage/server/docker-compose.yml" "$VPS_PATH/server/docker-compose.deploy.yml"
+            chmod 600 "$VPS_PATH/server/docker-compose.deploy.yml"
+            compose_candidate="$VPS_PATH/server/docker-compose.deploy.yml"
+            pause_config="$(ENABLE_SCHEDULER=false ENABLE_MOTOR_RUN_WORKER=false docker compose -f "$compose_candidate" --project-directory "$VPS_PATH" config)"
+            printf '%s\n' "$pause_config" | grep -Eq 'ENABLE_SCHEDULER: "?false"?'
+            printf '%s\n' "$pause_config" | grep -Eq 'ENABLE_MOTOR_RUN_WORKER: "?false"?'
+            unset pause_config
+            ENABLE_SCHEDULER=false ENABLE_MOTOR_RUN_WORKER=false \
+              docker compose -f "$compose_candidate" --project-directory "$VPS_PATH" up -d app
+            paused=1
+            echo '--- verificando pausa de scheduler e worker ---'
+            for attempt in $(seq 1 30); do
+              if curl -sf http://127.0.0.1:8000/health > /dev/null; then break; fi
               sleep 2
             done
-            if [ "\$ready" -ne 1 ]; then
-              docker compose -f server/docker-compose.yml logs --tail=120 app
-              exit 1
+            docker compose -f "$compose_candidate" --project-directory "$VPS_PATH" exec -T app deno eval '
+              const response = await fetch("http://127.0.0.1:8000/health");
+              const health = await response.json();
+              if (!response.ok || health.scheduler?.enabled !== false || health.motor_worker?.enabled !== false) Deno.exit(1);
+              console.log("AUTOMATION_PAUSE=confirmed");
+            '
+
+            echo '--- backup verificável do PostgreSQL ---'
+            backup_file="$backups/livingfinds-$RELEASE_SHA.dump"
+            docker compose -f "$compose_candidate" --project-directory "$VPS_PATH" exec -T db pg_dump -U livingfinds -d livingfinds -Fc > "$backup_file"
+            test -s "$backup_file"
+            docker compose -f "$compose_candidate" --project-directory "$VPS_PATH" exec -T db pg_restore --list < "$backup_file" > /dev/null
+            sha256sum "$backup_file" > "$backup_file.sha256"
+            chmod 600 "$backup_file" "$backup_file.sha256"
+            echo "DATABASE_BACKUP=verified|sha256=$(cut -d' ' -f1 "$backup_file.sha256")"
+
+            echo '--- preflight: arquivar snapshots duplicados sem remover decisões ---'
+            report_file="$backups/idempotency-preflight-$RELEASE_SHA.txt"
+            docker compose -f "$compose_candidate" --project-directory "$VPS_PATH" exec -T db psql -v ON_ERROR_STOP=1 -U livingfinds -d livingfinds -f - \
+              < "$stage/server/migrations/20261015_optimization_decision_idempotency_preflight.sql" > "$report_file"
+            chmod 600 "$report_file"
+            duplicate_groups="$(docker compose -f "$compose_candidate" --project-directory "$VPS_PATH" exec -T db psql -v ON_ERROR_STOP=1 -U livingfinds -d livingfinds -Atc "SELECT (SELECT count(*) FROM (SELECT data->>'amazon_account_id',data->>'idempotency_key' FROM optimization_decision WHERE coalesce(data->>'amazon_account_id','')<>'' AND coalesce(data->>'idempotency_key','')<>'' GROUP BY 1,2 HAVING count(*)>1) d)::text || '|' || (SELECT count(*) FROM (SELECT data->>'amazon_account_id',data->>'logical_key' FROM optimization_decision WHERE coalesce(data->>'amazon_account_id','')<>'' AND coalesce(data->>'logical_key','')<>'' GROUP BY 1,2 HAVING count(*)>1) l)::text")"
+            if [ "$duplicate_groups" != '0|0' ]; then
+              echo "MIGRATION_BLOCKED=duplicate_decisions|groups=$duplicate_groups|snapshots=$report_file"
+              exit 6
             fi
-            curl -sf http://localhost:8000/health && echo ' — deploy OK'
-            echo '--- verificando funções críticas carregadas ---'
-            functions_json="\$(curl -fsS http://localhost:8000/functions)"
-            echo "\$functions_json" | grep -q 'runAutomaticRepricing'
-            echo "\$functions_json" | grep -q 'runUnifiedDecisionEngine'
-            echo "\$functions_json" | grep -q 'runServingCampaignGrowthObjective'
-            echo "\$functions_json" | grep -q 'buildCanonicalMarketplaceSnapshots'
-            echo "\$functions_json" | grep -q 'classifyMarketplaceCampaignJourneys'
-            echo "\$functions_json" | grep -q 'importProductEconomics'
-            echo "\$functions_json" | grep -q 'enrollStockedProductsInRepricing'
-            echo "\$functions_json" | grep -q 'scrapeAmazonKeywords'
-            echo "\$functions_json" | grep -q 'reconcileOperationalQueues'
-            echo '--- reconciliando estados operacionais de fila sem mutação Amazon ---'
-            docker compose -f server/docker-compose.yml exec -T app deno eval '
-              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-              const response = await fetch("http://127.0.0.1:8000/functions/reconcileOperationalQueues", {
-                method: "POST",
-                headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({ _service_role: true, dry_run: false, trigger_type: "deploy_queue_reconciliation" })
-              });
-              const data = await response.json().catch(() => ({}));
-              console.log("QUEUE_RECONCILIATION_HTTP=" + response.status + "|OK=" + data.ok + "|TOTALS=" + JSON.stringify(data.totals || {}));
-              if (!response.ok || data.ok === false) throw new Error(data.error || "queue reconciliation failed");
-            ' </dev/null
-            echo '--- migrando dayparting para regras canônicas apenas de bid ---'
-            docker compose -f server/docker-compose.yml exec -T app deno eval '
-              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-              const response = await fetch("http://127.0.0.1:8000/functions/syncDaypartingConfiguration", {
-                method: "POST",
-                headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({ _service_role: true, bootstrap_default_rules: true, migrate_canonical_rules: true })
-              });
-              const data = await response.json().catch(() => ({}));
-              console.log("DAYPART_MIGRATION_HTTP=" + response.status + "|OK=" + data.ok + "|DATA=" + JSON.stringify(data.results || []).slice(0, 4000));
-              if (!response.ok || data.ok === false) throw new Error(data.error || "daypart migration failed");
-            ' </dev/null
-            if [ "${RUN_POST_DEPLOY_AMAZON_AUTOMATION}" != "true" ]; then
-              echo '--- rotinas Amazon pós-deploy ignoradas; exigem workflow_dispatch explícito ---'
-              exit 0
-            fi
-            # O deploy nunca executa especialistas de Ads diretamente. Isso
-            # duplicava decisões de bid/orçamento com o ciclo permanente e
-            # permitia que uma publicação alterasse a Amazon fora da política
-            # central. Toda ação mutável passa pelo único orquestrador.
-            echo '--- ciclo Amazon pós-deploy: somente motor unificado ---'
-            docker compose -f server/docker-compose.yml exec -T app deno eval '
-              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-              const response = await fetch("http://127.0.0.1:8000/functions/runUnifiedDecisionEngine", {
-                method: "POST",
-                headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({
-                  _service_role: true,
-                  bootstrap: true,
-                  daily_close: true,
-                  full_repricing_evaluation: true,
-                  dry_run: false,
-                  trigger_type: "deploy_canonical_engine_only"
-                })
-              });
-              const data = await response.json().catch(() => ({}));
-              console.log("CANONICAL_POST_DEPLOY_HTTP=" + response.status + "|OK=" + data.ok + "|SNAPSHOT_RUN=" + (data.snapshot_run_id || "unknown"));
-              if (!response.ok || data.ok === false) throw new Error(data.error || "canonical post-deploy engine failed");
-            ' </dev/null
-            # Os blocos legados abaixo são mantidos apenas para histórico do
-            # workflow e não podem disparar ações concorrentes.
-            exit 0
-            # Mantém o agrupamento original das verificações e rotinas seguintes.
-            if true; then
-            echo '--- validar credencial e extração Zyte sem revelar o segredo ---'
-            docker compose -f server/docker-compose.yml exec -T app deno eval '
-              const key = Deno.env.get("ZYTE_API_KEY") || "";
-              if (!key) throw new Error("ZYTE_API_KEY ausente no container app");
-              const response = await fetch("https://api.zyte.com/v1/extract", {
-                method: "POST",
-                headers: {
-                  Authorization: "Basic " + btoa(key + ":"),
-                  "content-type": "application/json"
-                },
-                body: JSON.stringify({
-                  url: "https://www.amazon.com.br/robots.txt",
-                  httpResponseBody: true,
-                  tags: { application: "livingfinds", operation: "deploy_healthcheck" }
-                }),
-                signal: AbortSignal.timeout(60000)
-              });
-              const payload = await response.json().catch(() => ({}));
-              const bodyBytes = typeof payload.httpResponseBody === "string" ? payload.httpResponseBody.length : 0;
-              console.log("ZYTE_HTTP=" + response.status + "|BODY_BASE64_BYTES=" + bodyBytes);
-              const detail = String(payload.detail || payload.title || payload.message || payload.error || "sem detalhe").replace(/\r|\n/g, " ").slice(0, 240);
-              if (response.status === 429) {
-                console.log("::warning title=Zyte limitada::HTTP 429 — " + detail);
-                Deno.exit(0);
-              }
-              if (!response.ok) {
-                console.log("::error title=Zyte HTTP " + response.status + "::" + detail);
-                throw new Error("Zyte HTTP " + response.status);
-              }
-              if (bodyBytes < 1) throw new Error("Zyte respondeu sem corpo para a consulta de controle");
-            ' </dev/null
-            echo 'FUNCTION_REGISTRY=runAutomaticRepricing,importProductEconomics,scrapeAmazonKeywords — OK'
+            echo '--- aplicando restrições únicas aditivas ---'
+            docker compose -f "$compose_candidate" --project-directory "$VPS_PATH" exec -T db psql -v ON_ERROR_STOP=1 -U livingfinds -d livingfinds -f - \
+              < "$stage/server/migrations/20261015_optimization_decision_idempotency_unique.sql"
 
-            echo '--- validar merchant e perfil Amazon Ads antes de qualquer mutacao ---'
-            docker compose -f server/docker-compose.yml exec -T app deno eval '
-              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-              const response = await fetch("http://127.0.0.1:8000/functions/validateAmazonAdsProfileIdentity", {
-                method: "POST", headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({ _service_role: true, expected_seller_id: "A2K44HX7DX77LN" })
-              });
-              const data = await response.json().catch(() => ({}));
-              console.log("ADS_PROFILE_IDENTITY_HTTP=" + response.status + "|OK=" + data.ok + "|SELLER=" + (data.expected_seller_id || "unknown") + "|PREVIOUS=" + (data.previous_profile_id || "none") + "|SELECTED=" + (data.selected_profile_id || "none") + "|CHANGED=" + (data.profile_changed ?? "unknown"));
-              if (!response.ok || data.ok === false) throw new Error(data.error || "Perfil Amazon Ads nao corresponde ao merchant esperado");
-            ' </dev/null
+            echo '--- preservando código anterior para reversão compatível ---'
+            mkdir -p "$rollback/server"
+            cp -a base44 dist "$rollback/"
+            cp -a server/src server/deno.json server/Dockerfile server/docker-compose.yml "$rollback/server/"
+            chmod -R go-rwx "$rollback"
 
-            echo '--- corrigir disponibilidade e inscrever SKUs estocados no repricing seguro ---'
-            docker compose -f server/docker-compose.yml exec -T app deno eval '
-              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-              const headers = { "content-type": "application/json", "x-api-token": token };
-              const skus = ["FBA-0008P", "FBA-0008V", "FBA-0076A", "FBA-0076C", "FBA-0087b", "FBA-0087c", "FBA-0100", "SKU-002314A", "SKU-002314V", "W9-OL7U-LRW5"];
-              const call = async (name, payload, allowLocked = false) => {
-                const response = await fetch("http://127.0.0.1:8000/functions/" + name, {
-                  method: "POST", headers, body: JSON.stringify({ _service_role: true, ...payload })
-                });
-                const data = await response.json().catch(() => ({}));
-                console.log("REPRICING_" + name.toUpperCase() + "_HTTP=" + response.status + "|OK=" + data.ok + "|DATA=" + JSON.stringify(data).slice(0, 12000));
-                const onlyLocked = Array.isArray(data.results) && data.results.length > 0 && data.results.every((row) => row.locked === true);
-                if (!response.ok || (data.ok === false && !(allowLocked && onlyLocked))) throw new Error(data.error || (name + " failed"));
-                if (allowLocked && onlyLocked) console.log("REPRICING_EVALUATION_DEFERRED=existing_cycle_lock|SAFE=true");
-                return data;
-              };
-              await call("syncAmazonOfferAvailability", { skus, max_products: skus.length });
-              const enrollment = await call("enrollStockedProductsInRepricing", { skus });
-              const enrolled = (enrollment.results || []).reduce((sum, row) => sum + Number(row.enrolled || 0), 0);
-              if (enrolled < skus.length) throw new Error("Nem todos os 10 SKUs estocados entraram na gestao: " + enrolled);
-              await call("runAutomaticRepricing", {
-                operation: "full_evaluation", recommendation_only: true,
-                force_all_decisions: true, max_products: 200,
-                changed_by: "deploy_stocked_sku_management"
-              }, true);
-            ' </dev/null
+            echo '--- instalando a release e verificando backend ---'
+            rm -rf base44 dist server/src
+            tar xzf /tmp/deploy.tar.gz -C "$VPS_PATH"
+            release_applied=1
+            rm -f server/docker-compose.deploy.yml .dockerignore
+            ENABLE_SCHEDULER=false ENABLE_MOTOR_RUN_WORKER=false \
+              docker compose -f "$compose_file" --project-directory "$VPS_PATH" up -d --build app
+            ready=0
+            for attempt in $(seq 1 30); do
+              if curl -sf http://127.0.0.1:8000/health >/dev/null; then ready=1; break; fi
+              sleep 2
+            done
+            if [ "$ready" != 1 ]; then docker compose -f "$compose_file" --project-directory "$VPS_PATH" logs --tail=120 app; exit 7; fi
+            docker compose -f "$compose_file" --project-directory "$VPS_PATH" exec -T app deno eval '
+              const response = await fetch("http://127.0.0.1:8000/health");
+              const health = await response.json();
+              if (!response.ok || !health.db || health.scheduler?.enabled !== false || health.motor_worker?.enabled !== false) Deno.exit(1);
+              console.log("RELEASE_HEALTH=ok|functions=" + health.functions + "|scheduler=paused|motor_worker=paused");
+            '
+            functions_json="$(curl -fsS http://127.0.0.1:8000/functions)"
+            for required in runUnifiedDecisionEngine executeApprovedDecisionQueue startMotorExecution getMotorExecutionRun listMotorExecutions createOptimizationDecisionIdempotent; do
+              printf '%s' "$functions_json" | grep -q "$required"
+            done
+            index_count="$(docker compose -f "$compose_file" --project-directory "$VPS_PATH" exec -T db psql -U livingfinds -d livingfinds -Atc "SELECT count(*) FROM pg_indexes WHERE schemaname='public' AND indexname IN ('optimization_decision_idempotency_unique','optimization_decision_logical_key_unique')")"
+            if [ "$index_count" != 2 ]; then echo 'MIGRATION_VERIFY=failed' >&2; exit 8; fi
 
-            echo '--- ativacao imediata de campanhas para SKUs com estoque confirmado ---'
-            docker compose -f server/docker-compose.yml exec -T app deno eval '
-              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-              const response = await fetch("http://127.0.0.1:8000/functions/ensureActiveProductCampaignCoverage", {
-                method: "POST",
-                headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({ _service_role: true, dry_run: false, fast_mode: true, require_actions: true, max_products: 25, run_harvest: false, trigger_type: "deploy_immediate_campaign_activation" })
-              });
-              const data = await response.json().catch(() => ({}));
-              console.log("IMMEDIATE_CAMPAIGN_ACTIVATION_HTTP=" + response.status + "|OK=" + data.ok + "|FAILED=" + (data.failed ?? "unknown") + "|DATA=" + JSON.stringify(data).slice(0, 12000));
-              if (!response.ok || data.ok === false) throw new Error(data.error || "immediate campaign activation failed");
-            ' </dev/null
-
-            echo '--- estrategia AUTO de baixo risco para produtos com vendas pequenas ---'
-            docker compose -f server/docker-compose.yml exec -T app deno eval '
-              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-              const response = await fetch("http://127.0.0.1:8000/functions/enforceLowVolumeProductAdsStrategy", {
-                method: "POST",
-                headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({ _service_role: true, dry_run: false, trigger_type: "deploy_low_volume_profit_guard" })
-              });
-              const data = await response.json().catch(() => ({}));
-              console.log("LOW_VOLUME_ADS_HTTP=" + response.status + "|OK=" + data.ok + "|PROCESSED=" + (data.processed ?? 0) + "|ENABLED=" + (data.campaigns_enabled ?? 0) + "|BUDGETS_REDUCED=" + (data.budgets_reduced ?? 0) + "|BIDS_REDUCED=" + (data.bids_reduced ?? 0) + "|DATA=" + JSON.stringify(data.results || []).slice(0, 16000));
-              if (!response.ok || data.ok === false) throw new Error(data.error || "low volume ads strategy failed");
-            ' </dev/null
-
-            if [ "${RUN_POST_DEPLOY_AMAZON_AUTOMATION}" = "true" ]; then
-            echo '--- bootstrap do motor unificado: histórico, snapshots e jornada ---'
-            docker compose -f server/docker-compose.yml exec -T app deno eval '
-              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-              const response = await fetch("http://127.0.0.1:8000/functions/runUnifiedDecisionEngine", {
-                method: "POST",
-                headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({
-                  _service_role: true,
-                  bootstrap: true,
-                  daily_close: true,
-                  full_repricing_evaluation: true,
-                  dry_run: false,
-                  trigger_type: "deploy_unified_marketplace_bootstrap"
-                })
-              });
-              const data = await response.json().catch(() => ({}));
-              console.log("UNIFIED_BOOTSTRAP_HTTP=" + response.status + "|OK=" + data.ok + "|SNAPSHOT_RUN=" + (data.snapshot_run_id || "unknown") + "|DATA=" + JSON.stringify(data).slice(0, 12000));
-              if (!response.ok || data.ok === false) throw new Error(data.error || "unified marketplace bootstrap failed");
-            ' </dev/null
-            fi
-
-            echo '--- autocorreção diária dos relatórios ---'
-            docker compose -f server/docker-compose.yml exec -T app deno eval '
-              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-              const response = await fetch("http://127.0.0.1:8000/functions/ensureDailyReportsCurrent", {
-                method: "POST", headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({ _service_role: true })
-              });
-              const data = await response.json().catch(() => ({}));
-              const detail = Array.isArray(data.details) ? data.details[0] : {};
-              console.log("REPORT_SELF_HEAL_HTTP=" + response.status + "|OK=" + data.ok + "|TARGET=" + (data.target_date || "unknown") + "|TRIGGERED=" + (data.triggered_count ?? 0) + "|CORE=" + (detail?.completion_percent ?? 0) + "|EXTENDED=" + (detail?.extended_completion_percent ?? 0));
-            ' </dev/null
-
-            echo '--- aferição econômica e relatório semanal móvel ---'
-            docker compose -f server/docker-compose.yml exec -T app deno eval '
-              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-              const headers = { "content-type": "application/json", "x-api-token": token };
-              const assessmentResponse = await fetch("http://127.0.0.1:8000/functions/runDailyEconomicAssessment", {
-                method: "POST", headers,
-                body: JSON.stringify({ _service_role: true, force: true })
-              });
-              const assessment = await assessmentResponse.json().catch(() => ({}));
-              console.log("ECONOMIC_ASSESSMENT_HTTP=" + assessmentResponse.status + "|OK=" + assessment.ok + "|DATE=" + (assessment.assessment_date || "unknown") + "|PRODUCTS=" + (assessment.products_assessed ?? assessment.records_processed ?? 0));
-              if (!assessmentResponse.ok || assessment.ok === false) throw new Error(assessment.error || "daily economic assessment failed");
-
-              const weeklyResponse = await fetch("http://127.0.0.1:8000/functions/runWeeklyAdsPerformanceReport", {
-                method: "POST", headers,
-                body: JSON.stringify({ _service_role: true, force: true })
-              });
-              const weekly = await weeklyResponse.json().catch(() => ({}));
-              console.log("WEEKLY_REPORT_HTTP=" + weeklyResponse.status + "|OK=" + weekly.ok + "|START=" + (weekly.week_start || "unknown") + "|END=" + (weekly.week_end || "unknown") + "|COVERAGE=" + (weekly.data_coverage_percent ?? 0) + "|PRODUCTS=" + (weekly.products_analyzed ?? 0));
-              if (!weeklyResponse.ok || weekly.ok === false) throw new Error(weekly.error || "weekly report failed");
-            ' </dev/null
-
-            echo '--- retroativo Campaign Factory e métricas horárias ---'
-            docker compose -f server/docker-compose.yml exec -T app deno eval '
-              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-              const headers = { "content-type": "application/json", "x-api-token": token };
-              const call = async (name, payload = {}) => {
-                const response = await fetch("http://127.0.0.1:8000/functions/" + name, {
-                  method: "POST", headers,
-                  body: JSON.stringify({ _service_role: true, ...payload })
-                });
-                const data = await response.json().catch(() => ({}));
-                console.log(name.toUpperCase() + "_HTTP=" + response.status + "|OK=" + data.ok + "|DATA=" + JSON.stringify(data).slice(0, 2000));
-                if (!response.ok || data.ok === false) throw new Error(data.error || (name + " failed"));
-                return data;
-              };
-              const callOptional = async (name, payload = {}) => {
-                try {
-                  return await call(name, payload);
-                } catch (error) {
-                  console.log(name.toUpperCase() + "_OPTIONAL_ERROR=" + String(error?.message || error));
-                  return null;
-                }
-              };
-              await call("syncFinanceEventsFromSpApi");
-              await call("updateTermBankFromAutomaticCampaigns");
-              await call("runCampaignFactory");
-              await call("scheduleWeeklyCampaignFactoryLaunches", { max_campaigns: 10, trigger_type: "deploy_initial_rule_activation" });
-              await callOptional("monitorZeroSalesReactivation");
-              await callOptional("runMotorImediato", { force: false });
-              await callOptional("syncUnifiedAdsReportsHourly", { days: 14, force: true });
-              await call("rebuildHourlyMetricsFromReports", { full: true, lookback_days: 30 });
-              await call("syncDaypartingConfiguration", { bootstrap_default_rules: true, migrate_canonical_rules: true });
-            ' </dev/null
-
-            echo '--- proteção econômica por SKU ---'
-            docker compose -f server/docker-compose.yml exec -T app deno eval '
-              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-              const response = await fetch("http://127.0.0.1:8000/functions/enforceSkuProfitProtection", {
-                method: "POST", headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({ _service_role: true })
-              });
-              const data = await response.json().catch(() => ({}));
-              const actions = (data.results || []).flatMap((row) => row.actions || []);
-              console.log("SKU_PROTECTION_HTTP=" + response.status + "|OK=" + data.ok + "|ACTIONS=" + actions.length);
-              for (const action of actions) console.log("SKU_ACTION=" + action.sku + "|" + action.action + "|" + (action.campaign_id || action.keyword_id || "unknown"));
-              if (!response.ok || data.ok === false) console.log("SKU_PROTECTION_ERROR=" + (data.error || "unknown"));
-            ' </dev/null
-
-            echo '--- diagnostico de campanhas sem clique + resgate seguro de bid ---'
-            docker compose -f server/docker-compose.yml exec -T app deno eval '
-              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-              const targets = [
-                { asin: "B0H59FPPKS", name: "SP | MANUAL | EXACT | B0H59FPPKS | lixeira sensor banheiro" },
-                { asin: "B0GNW1Q6V3", name: "SP | MANUAL | EXACT | B0GNW1Q6V3 | headset gamer com fio usb" },
-                { asin: "B0GNW1Q6V3", name: "SP | MANUAL | EXACT | B0GNW1Q6V3 | headset vermelho com microfone" },
-                { asin: "B0GNY7NYRN", name: "SP | MANUAL | EXACT | B0GNY7NYRN | headset gamer 71 surround" },
-                { asin: "B0GNY7NYRN", name: "SP | MANUAL | EXACT | B0GNY7NYRN | headset profissional azul usb fio 18m" },
-                { asin: "B0FCYR3VBD", name: "SP | MANUAL | EXACT | B0FCYR3VBD | kit completo organizador bagagem viagem" },
-                { asin: "B0H59FPPKS", name: "SP | MANUAL | EXACT | B0H59FPPKS | cesto de lixo para banheiro" },
-                { asin: "B0H59FPPKS", name: "SP | MANUAL | EXACT | B0H59FPPKS | lixeira para banheiro" },
-                { asin: "B0GNW1Q6V3", name: "SP | MANUAL | EXACT | B0GNW1Q6V3 | headset 71" },
-                { asin: "B0GR6GXS1B", name: "SP | MANUAL | EXACT | B0GR6GXS1B | fechadura eletrônica biométrica wi-fi co" },
-                { asin: "B0GR6GXS1B", name: "SP | MANUAL | EXACT | B0GR6GXS1B | fechadura eletronica digital" },
-                { asin: "B0H59FPPKS", name: "SP | MANUAL | EXACT | B0H59FPPKS | lixeira antiodor bebe" }
-              ];
-              const repairResponse = await fetch("http://127.0.0.1:8000/functions/repairPriorityManualCampaigns", {
-                method: "POST", headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({ _service_role: true, targets })
-              });
-              const repair = await repairResponse.json().catch(() => ({}));
-              console.log("PRIORITY_REPAIR_HTTP=" + repairResponse.status + "|OK=" + repair.ok + "|CHECKED=" + (repair.checked || 0) + "|VERIFIED=" + (repair.verified || 0) + "|FAILED=" + (repair.failed || 0));
-              for (const row of repair.results || []) {
-                console.log("PRIORITY_REPAIR_ITEM=" + row.asin + "|" + row.campaign_name + "|" + row.status + "|" + (row.campaign_id || "") + "|" + (row.details?.error || ""));
-              }
-
-              const response = await fetch("http://127.0.0.1:8000/functions/runManualZeroDeliveryBootstrap", {
-                method: "POST", headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({
-                  _service_role: true,
-                  target_asins: ["B0H59FPPKS", "B0GNW1Q6V3", "B0GNY7NYRN", "B0FCYR3VBD", "B0GR6GXS1B"],
-                  max_age_days: 45
-                })
-              });
-              const data = await response.json().catch(() => ({}));
-              const rows = Array.isArray(data.results) ? data.results : [];
-              const counts = {};
-              for (const row of rows) {
-                const key = row.action === "increase_bid"
-                  ? (row.execution?.ok === false ? "bid_failed" : "bid_increased")
-                  : (row.status || row.reason || "unchanged");
-                counts[key] = (counts[key] || 0) + 1;
-              }
-              console.log("ZERO_DELIVERY_HTTP=" + response.status + "|OK=" + data.ok + "|CHECKED=" + rows.length + "|COUNTS=" + JSON.stringify(counts));
-              console.log("ZERO_DELIVERY_STRUCTURE=" + JSON.stringify(data.structure_reports || []).slice(0, 6000));
-              for (const row of rows.filter((r) => r.action === "increase_bid" || ["amazon_entity_not_enabled","out_of_stock","listing_ineligible","replacement_review_required","incomplete_structure"].includes(r.status))) {
-                console.log("ZERO_DELIVERY_ITEM=" + (row.asin || "") + "|" + (row.campaign_name || row.campaign_id) + "|" + (row.keyword_text || row.keyword_id) + "|" + row.action + "|" + (row.status || row.reason || "") + "|" + (row.bid?.bid || ""));
-              }
-              if (!response.ok || data.ok === false) throw new Error(data.error || "zero delivery bootstrap failed");
-            ' </dev/null
-
-            else
-              echo '--- rotinas Amazon pós-deploy ignoradas; exigem workflow_dispatch explícito ---'
-            fi
-
-            echo '--- trava remota: reduzir bids acima do teto salvo em Configurações ---'
-            docker compose -f server/docker-compose.yml exec -T app deno eval '
-              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-              const response = await fetch("http://127.0.0.1:8000/functions/bulkSetAllBids", {
-                method: "POST", headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({ _service_role: true })
-              });
-              const data = await response.json().catch(() => ({}));
-              console.log("BID_CEILING_HTTP=" + response.status + "|OK=" + data.ok + "|KEYWORDS=" + JSON.stringify(data.keywords || {}) + "|WINNER_EXCEPTIONS=" + JSON.stringify(data.winner_keyword_exceptions || {}) + "|AD_GROUPS=" + JSON.stringify(data.ad_groups || {}) + "|TARGETS=" + JSON.stringify(data.targets || {}));
-              if (!response.ok || data.ok === false) throw new Error("Falha ao limitar bids: " + JSON.stringify(data).slice(0, 3000));
-            ' </dev/null
-
-            echo '--- motor intradiario: agir agora sobre gasto acelerado por termo ---'
-            docker compose -f server/docker-compose.yml exec -T app deno eval '
-              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-              const response = await fetch("http://127.0.0.1:8000/functions/enforceSkuProfitProtection", {
-                method: "POST", headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({ _service_role: true, dry_run: false, trigger_type: "deploy_immediate_intraday_bid_guard" })
-              });
-              const data = await response.json().catch(() => ({}));
-              const summaries = (data.results || []).map((row) => row.summary || {});
-              console.log("INTRADAY_BID_GUARD_HTTP=" + response.status + "|OK=" + data.ok + "|POLICY=" + data.policy_version + "|SUMMARIES=" + JSON.stringify(summaries));
-              if (!response.ok || data.ok === false) throw new Error("Falha no motor intradiario: " + JSON.stringify(data).slice(0, 3000));
-            ' </dev/null
-
-            echo '--- garantia FINAL remota: cobertura AUTO sem piso artificial de campanhas MANUAIS ---'
-            docker compose -f server/docker-compose.yml exec -T app deno eval '
-              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-              const response = await fetch("http://127.0.0.1:8000/functions/ensureSkuCampaignFloor", {
-                method: "POST", headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({ _service_role: true, manual_floor: 0, trigger_type: "deploy_verify_auto_coverage_without_manual_floor" })
-              });
-              const data = await response.json().catch(() => ({}));
-              console.log("SKU_CAMPAIGN_RESTORE_HTTP=" + response.status + "|OK=" + data.ok + "|DEFICITS=" + (data.deficits_count ?? "unknown"));
-              if (!response.ok || data.ok === false) throw new Error("Falha ao verificar cobertura AUTO: " + JSON.stringify(data.deficits || []).slice(0, 5000));
-            ' </dev/null
-            echo '--- reconciliar AUTO canonica apos restauracao do piso ---'
-            docker compose -f server/docker-compose.yml exec -T app deno eval '
-              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-              const response = await fetch("http://127.0.0.1:8000/functions/enforceLowVolumeProductAdsStrategy", {
-                method: "POST", headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({ _service_role: true, dry_run: false, trigger_type: "deploy_final_auto_reconciliation" })
-              });
-              const data = await response.json().catch(() => ({}));
-              console.log("FINAL_LOW_VOLUME_ADS_HTTP=" + response.status + "|OK=" + data.ok + "|PROCESSED=" + (data.processed ?? 0) + "|ENABLED=" + (data.campaigns_enabled ?? 0) + "|BUDGETS_REDUCED=" + (data.budgets_reduced ?? 0) + "|BIDS_REDUCED=" + (data.bids_reduced ?? 0));
-              if (!response.ok || data.ok === false) throw new Error(data.error || "final low volume reconciliation failed");
-            ' </dev/null
-            docker compose -f server/docker-compose.yml exec -T app deno eval '
-              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-              const response = await fetch("http://127.0.0.1:8000/functions/verifyRemoteSkuCampaignFloor", {
-                method: "POST",
-                headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({ _service_role: true, manual_floor: 0 })
-              });
-              const data = await response.json().catch(() => ({}));
-              console.log("SKU_AUTO_COVERAGE_HTTP=" + response.status + "|OK=" + data.ok + "|PRODUCTS=" + (data.products ?? 0) + "|COMPLIANT=" + (data.compliant ?? 0) + "|DEFICITS=" + (data.deficits_count ?? "unknown") + "|DATA=" + JSON.stringify(data).slice(0, 20000));
-              if (!response.ok || data.ok === false) throw new Error("Cobertura AUTO remota nao confirmada: " + JSON.stringify(data.deficits || []).slice(0, 5000));
-            ' </dev/null
-
-            echo '--- verificação do frontend publicado ---'
-            printf 'APP_ASSET='
-            curl -fsS http://127.0.0.1:8000/ | grep -oE 'assets/index-[^\" ]+\.js' | head -1 || true
-            docker compose -f server/docker-compose.yml exec -T app deno eval '
-              const base = Deno.env.get("APP_BASE_URL");
-              if (!base) console.log("PUBLIC_ASSET=app_base_url_unset");
-              else {
-                try {
-                  const html = await (await fetch(base)).text();
-                  console.log("PUBLIC_ASSET=" + (html.match(/assets\/index-[^\" ]+\.js/)?.[0] || "not_found"));
-                } catch { console.log("PUBLIC_ASSET=unreachable"); }
-              }
-            ' </dev/null
-
-            printf 'SCHEDULER='
-            docker compose -f server/docker-compose.yml exec -T app sh -lc 'echo \${ENABLE_SCHEDULER:-unset}' </dev/null
-            docker compose -f server/docker-compose.yml exec -T db psql -U livingfinds -d livingfinds -Atc "select coalesce(data->>'end_date','sem_data'), coalesce(data->>'status','sem_status'), count(*) from amazon_ads_report_job group by 1,2 order by 1 desc,2 limit 12;" </dev/null || true
-            docker compose -f server/docker-compose.yml exec -T db psql -U livingfinds -d livingfinds -Atc "select 'METRICS_MAX=' || coalesce(max(data->>'date'),'sem_data') || '|ROWS=' || count(*) from campaign_metrics_daily;" </dev/null || true
-            docker compose -f server/docker-compose.yml exec -T db psql -U livingfinds -d livingfinds -Atc "select 'SKU_RULE_EXECUTIONS=' || count(*) from rule_execution where data->>'rule_key' in ('sku_profit_hard_pause','sku_daily_order_cap','sku_low_margin_bid_reduction');" </dev/null || true
-          EOF
+            echo '--- restaurando scheduler e ativando worker durável ---'
+            ENABLE_SCHEDULER="$previous_scheduler" ENABLE_MOTOR_RUN_WORKER="$previous_motor_worker" \
+              docker compose -f "$compose_file" --project-directory "$VPS_PATH" up -d app
+            for attempt in $(seq 1 30); do
+              if curl -sf http://127.0.0.1:8000/health >/dev/null; then break; fi
+              sleep 2
+            done
+            docker compose -f "$compose_file" --project-directory "$VPS_PATH" exec -T app deno eval '
+              const response = await fetch("http://127.0.0.1:8000/health");
+              const health = await response.json();
+              if (!response.ok || !health.db || health.scheduler?.enabled !== true || health.motor_worker?.enabled !== true) Deno.exit(1);
+              console.log("AUTOMATION_RESTORED=confirmed|scheduler=" + health.scheduler.enabled + "|motor_worker=" + health.motor_worker.enabled);
+            '
+            restored=1
+            paused=0
+            trap - EXIT
+            echo "DEPLOY_VERIFIED_SHA=$RELEASE_SHA"
+            echo 'POST_DEPLOY_AMAZON_MUTATIONS=none'
+          REMOTE

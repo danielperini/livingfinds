@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import PerformanceSettingsHistoryTable from '@/components/strategy/PerformanceSettingsHistoryTable';
 import VisibilityScoreChart from '@/components/strategy/VisibilityScoreChart';
+import { useDurableMotorRun } from '@/hooks/useDurableMotorRun';
 
 function fmtBRL(v) { return v == null || isNaN(v) ? '—' : `R$${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`; }
 function fmtPct(v) { return v == null || isNaN(v) ? '—' : `${Number(v).toFixed(1)}%`; }
@@ -221,6 +222,17 @@ export default function EstrategiasTab({ account }) {
   const [activeView, setActiveView] = useState('strategic');
   const [economics, setEconomics] = useState([]);
   const [lastEngineResult, setLastEngineResult] = useState(null);
+  const { run: durableRun, error: durableError, start: startDurableRun } = useDurableMotorRun(account?.id);
+
+  useEffect(() => {
+    if (!durableRun || !['completed', 'partial', 'failed', 'interrupted', 'remote_unknown'].includes(durableRun.status)) return;
+    setRunning(false);
+    if (durableRun.result_summary?.decisions_generated != null) {
+      setResult(durableRun.result_summary);
+      setLastEngineResult(durableRun.result_summary);
+      void loadData();
+    }
+  }, [durableRun?.status]);
 
   const loadData = useCallback(async () => {
     if (!account) return;
@@ -250,13 +262,8 @@ export default function EstrategiasTab({ account }) {
     if (!account || running) return;
     setRunning(true); setResult(null); setError(null);
     try {
-      const res = await base44.functions.invoke('runUnifiedDecisionEngine', { amazon_account_id: account.id });
-      const data = res?.data || null;
-      setResult(data);
-      setLastEngineResult(data);
-      await loadData();
-    } catch (e) { setError(e.message); }
-    finally { setRunning(false); }
+      await startDurableRun('runUnifiedDecisionEngine', { amazon_account_id: account.id });
+    } catch (e) { setError(e.message); setRunning(false); }
   };
 
   const toggleExpand = (id) => {
@@ -329,10 +336,10 @@ export default function EstrategiasTab({ account }) {
           <button onClick={loadData} disabled={loading} className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
           </button>
-          <button onClick={runEngine} disabled={running || !account}
+          <button onClick={runEngine} disabled={running || ['queued', 'running'].includes(durableRun?.status) || !account}
             className="flex items-center gap-2 px-4 py-2 bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 text-sm font-semibold rounded-lg disabled:opacity-50 transition-colors">
             {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-            {running ? 'Executando Motor...' : 'Executar Motor'}
+            {running ? 'Enfileirando...' : durableRun?.status === 'running' ? 'Motor em execução' : 'Executar Motor'}
           </button>
         </div>
       </div>
@@ -340,6 +347,17 @@ export default function EstrategiasTab({ account }) {
       {error ? (
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3 flex items-center gap-2 text-xs text-red-400">
           <AlertTriangle className="w-4 h-4 flex-shrink-0" /> {error}
+        </div>
+      ) : null}
+
+      {durableRun ? (
+        <div className="rounded-xl border border-surface-2 bg-surface-1 px-4 py-3 text-xs text-slate-300 space-y-1">
+          <p className="font-semibold text-white">Execução durável: {durableRun.status}</p>
+          <p>Etapa: {durableRun.current_stage || 'aguardando worker'} · Atualizado: {durableRun.last_activity_at ? new Date(durableRun.last_activity_at).toLocaleString('pt-BR') : '—'}</p>
+          <p className="font-mono text-[10px] text-slate-500">run_id: {durableRun.id}</p>
+          {durableError && <p className="text-amber-300">{durableError}</p>}
+          {durableRun.errors?.length > 0 && <p className="text-red-300">{durableRun.errors.at(-1)?.message || 'A execução registrou erro; consulte o histórico do run.'}</p>}
+          {durableRun.remote_outcome === 'unknown' && <p className="text-amber-300">Resultado remoto incerto. O sistema não repetirá a ação sem reconciliação.</p>}
         </div>
       ) : null}
 

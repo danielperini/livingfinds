@@ -6,6 +6,7 @@ import {
   Bot, Database, Cpu, Send, RotateCcw, Eye, Activity
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { listDurableMotorExecutions } from '@/lib/durableMotorExecution';
 
 // ── Fases do pipeline ─────────────────────────────────────────────────────────
 const PHASES = [
@@ -148,8 +149,27 @@ export default function MotorExecutionPanel({ account }) {
   const [loading, setLoading] = useState(true);
   const [skuCoverage, setSkuCoverage] = useState(null);
   const [isCanonicalCycle, setIsCanonicalCycle] = useState(false);
+  const [durableRuns, setDurableRuns] = useState([]);
+  const [durableLoadError, setDurableLoadError] = useState(null);
 
   const aid = account?.id;
+
+  const loadDurableRuns = useCallback(async () => {
+    if (!aid) return;
+    try {
+      const runs = await listDurableMotorExecutions(base44, aid, 5);
+      setDurableRuns(runs);
+      setDurableLoadError(null);
+    } catch (error) {
+      setDurableLoadError(error.message);
+    }
+  }, [aid]);
+
+  useEffect(() => { void loadDurableRuns(); }, [loadDurableRuns]);
+  useEffect(() => {
+    const timer = setInterval(() => { void loadDurableRuns(); }, 10_000);
+    return () => clearInterval(timer);
+  }, [loadDurableRuns]);
 
   const load = useCallback(async () => {
     if (!aid) return;
@@ -313,13 +333,42 @@ export default function MotorExecutionPanel({ account }) {
           <span className="text-[10px] text-slate-500">Auditoria de cobertura e sincronizações intradia a cada 15 min</span>
         </div>
         <button
-          onClick={load}
+          onClick={() => { void load(); void loadDurableRuns(); }}
           disabled={loading}
           className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white text-xs rounded-lg transition-colors disabled:opacity-50"
         >
           <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
           Atualizar
         </button>
+      </div>
+
+      <div className="bg-surface-1 border border-surface-2 rounded-xl p-4 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-white">Execuções consultáveis</h3>
+            <p className="text-[10px] text-slate-500">Estado salvo no backend; atualizar a página não perde o acompanhamento.</p>
+          </div>
+          <button onClick={loadDurableRuns} className="text-[10px] text-cyan hover:text-white">Atualizar estado</button>
+        </div>
+        {durableLoadError ? <p className="text-xs text-amber-300">Não foi possível consultar o ledger: {durableLoadError}</p> : null}
+        {!durableRuns.length && !durableLoadError ? <p className="text-xs text-slate-500">Nenhuma execução durável registrada para esta conta.</p> : null}
+        {durableRuns.map((run) => {
+          const statusLabels = { queued: 'Na fila', running: 'Em andamento', completed: 'Concluída', partial: 'Parcial', failed: 'Falhou', interrupted: 'Interrompida', remote_unknown: 'Resultado remoto incerto' };
+          const lastActivity = run.last_activity_at ? new Date(run.last_activity_at) : null;
+          const staleMinutes = lastActivity ? Math.floor((Date.now() - lastActivity.getTime()) / 60_000) : null;
+          return (
+            <div key={run.id} className="rounded-lg border border-surface-2 bg-surface-0/40 px-3 py-2 text-xs space-y-1">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-slate-200">{statusLabels[run.status] || run.status} · {run.function_name}</span>
+                <span className="text-[10px] text-slate-500">{lastActivity ? `Última atividade ${lastActivity.toLocaleString('pt-BR')}` : 'Atividade não informada'}</span>
+              </div>
+              <p className="text-slate-400">Etapa: {run.current_stage || (run.status === 'queued' ? 'aguardando worker' : 'sem etapa informada')} · Ações remotas: {run.remote_outcome || 'não informado'}</p>
+              {run.status === 'running' && staleMinutes >= 5 ? <p className="text-amber-300">Sem atualização há {staleMinutes} min; a execução segue registrada e precisa de diagnóstico.</p> : null}
+              {run.errors?.length > 0 ? <p className="text-red-300">{run.errors.at(-1)?.message || 'Há erro registrado nesta execução.'}</p> : null}
+              <p className="font-mono text-[9px] text-slate-600">run_id: {run.id}</p>
+            </div>
+          );
+        })}
       </div>
 
       {/* ── KPI Cards ────────────────────────────────────────────────────── */}

@@ -19,6 +19,23 @@ const finite = (value: unknown) => Number.isFinite(Number(value)) ? Number(value
 const campaignId = (row: any) => String(row.amazon_campaign_id || row.campaign_id || row.id || '');
 const isAuto = (row: any) => upper(row.targeting_type) === 'AUTO' || upper(row.name || row.campaign_name).startsWith('AUTO |');
 
+async function createIdempotentDecision(base44: any, input: Record<string, unknown>) {
+  const result = await invoke(base44, 'createOptimizationDecisionIdempotent', {
+    _service_role: true,
+    decision: input,
+  });
+  if (result?.ok !== true || (!result.decision && !result.conflict)) {
+    throw new Error(`Criação idempotente da decisão não confirmada: ${String(result?.error || 'resposta inválida').slice(0, 240)}`);
+  }
+  return {
+    decision: result.decision,
+    created: result.created === true,
+    reused: result.reused === true,
+    conflict: result.conflict || null,
+    diagnostic: result.diagnostic || null,
+  };
+}
+
 function daysOld(value: unknown) {
   const time = new Date(String(value || '')).getTime();
   if (!Number.isFinite(time)) return 0;
@@ -178,6 +195,7 @@ Deno.serve(async (request) => {
       });
 
       const retirementDecisions: any[] = [];
+      const decisionCycle = brazilReportDate();
       for (const campaign of campaigns) {
         if (!active(campaign.state || campaign.status)) continue;
         const id = campaignId(campaign);
@@ -188,14 +206,16 @@ Deno.serve(async (request) => {
         const eligibility = productAdsEligibility(product);
         if (!eligibility.eligible) {
           const reasonCode = eligibility.reason;
-          const key = `CAMPAIGN_PRODUCT_ELIGIBILITY|${accountId}|${id}|${reasonCode}`;
+          const key = `CAMPAIGN_PRODUCT_ELIGIBILITY|${accountId}|${id}|${reasonCode}|${decisionCycle}`;
           if (priorDecisions.some((row: any) => row.idempotency_key === key && !['failed', 'rejected', 'cancelled', 'expired'].includes(String(row.status || '')))) continue;
           if (body.dry_run === true) {
             retirementDecisions.push({ campaign_id: id, asin, reason_code: reasonCode, dry_run: true });
             continue;
           }
-          const { decision } = await createOrLoadOptimizationDecision(base44.asServiceRole.entities.OptimizationDecision, {
+          const created = await createOrLoadOptimizationDecision(base44.asServiceRole.entities.OptimizationDecision, {
             amazon_account_id: accountId,
+            correlation_id: common.decision_engine_correlation_id,
+            decision_engine_correlation_id: common.decision_engine_correlation_id,
             decision_type: 'product_ads_eligibility',
             entity_type: 'campaign',
             entity_id: id,
@@ -212,6 +232,7 @@ Deno.serve(async (request) => {
                 : 'Produto não elegível para Ads no catálogo canônico: campanha retirada da operação até regularização.',
             rule_key: reasonCode,
             reason_code: reasonCode,
+            cycle_key: decisionCycle,
             value_before: 'ENABLED',
             value_after: 'PAUSED',
             confidence: 1,
@@ -231,8 +252,12 @@ Deno.serve(async (request) => {
             data_used: JSON.stringify({ asin, sku: product?.sku || null, product_status_signals: eligibility.statusSignals, stock: eligibility.stock, eligibility_reason: reasonCode }),
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
-          });
-          retirementDecisions.push({ campaign_id: id, asin, reason_code: reasonCode, decision_id: decision.id });
+          }, { createIdempotent: (input) => createIdempotentDecision(base44, input) });
+          if (created.conflict) {
+            retirementDecisions.push({ campaign_id: id, asin, reason_code: reasonCode, logical_key: key, correlation_id: common.decision_engine_correlation_id, outcome: 'idempotency_conflict', conflict: created.conflict, diagnostic: created.diagnostic });
+            continue;
+          }
+          retirementDecisions.push({ campaign_id: id, asin, reason_code: reasonCode, decision_id: created.decision?.id, outcome: created.created ? 'created' : 'reused' });
           continue;
         }
 
@@ -246,14 +271,16 @@ Deno.serve(async (request) => {
           structurallyComplete: campaign.incomplete !== true,
         });
         if (!retire) continue;
-        const key = `AUTO_LIFECYCLE_RETIRE|${accountId}|${id}|30D_3D_NO_SALES`;
+        const key = `AUTO_LIFECYCLE_RETIRE|${accountId}|${id}|30D_3D_NO_SALES|${decisionCycle}`;
         if (priorDecisions.some((row: any) => row.idempotency_key === key && !['failed', 'rejected', 'cancelled'].includes(String(row.status || '')))) continue;
         if (body.dry_run === true) {
           retirementDecisions.push({ campaign_id: id, asin, reason_code: 'AUTO_30D_3D_NO_SALES_RETIRE', dry_run: true });
           continue;
         }
-        const { decision } = await createOrLoadOptimizationDecision(base44.asServiceRole.entities.OptimizationDecision, {
+        const created = await createOrLoadOptimizationDecision(base44.asServiceRole.entities.OptimizationDecision, {
           amazon_account_id: accountId,
+          correlation_id: common.decision_engine_correlation_id,
+          decision_engine_correlation_id: common.decision_engine_correlation_id,
           decision_type: 'automatic_campaign_lifecycle',
           entity_type: 'campaign',
           entity_id: id,
@@ -264,6 +291,7 @@ Deno.serve(async (request) => {
           rationale: 'AUTO com pelo menos 30 dias e 3 dias consecutivos sem vendas após garimpo final de termos.',
           rule_key: 'AUTO_30D_3D_NO_SALES_RETIRE',
           reason_code: 'AUTO_30D_3D_NO_SALES_RETIRE',
+          cycle_key: decisionCycle,
           value_before: 'ENABLED',
           value_after: 'PAUSED',
           confidence: 1,
@@ -282,18 +310,32 @@ Deno.serve(async (request) => {
           data_used: JSON.stringify({ age_days: daysOld(campaign.created_at || campaign.created_date), last_3d_orders: metrics.orders, last_3d_sales: metrics.sales, asin, final_harvest_stage: harvesting?.ok !== false }),
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
-        });
-        retirementDecisions.push({ campaign_id: id, asin, reason_code: 'AUTO_30D_3D_NO_SALES_RETIRE', decision_id: decision.id });
+        }, { createIdempotent: (input) => createIdempotentDecision(base44, input) });
+        if (created.conflict) {
+          retirementDecisions.push({ campaign_id: id, asin, reason_code: 'AUTO_30D_3D_NO_SALES_RETIRE', logical_key: key, correlation_id: common.decision_engine_correlation_id, outcome: 'idempotency_conflict', conflict: created.conflict, diagnostic: created.diagnostic });
+          continue;
+        }
+        retirementDecisions.push({ campaign_id: id, asin, reason_code: 'AUTO_30D_3D_NO_SALES_RETIRE', decision_id: created.decision?.id, outcome: created.created ? 'created' : 'reused' });
       }
 
       await base44.asServiceRole.entities.SyncExecutionLog.create({
         amazon_account_id: accountId,
+        correlation_id: common.decision_engine_correlation_id,
+        decision_engine_correlation_id: common.decision_engine_correlation_id,
         sync_type: 'canonical_campaign_lifecycle',
-        status: [kickoff, harvesting, promotionReconciliation, autoDedup, wasteGuard, manualBidGuard, budget].some((stage: any) => stage?.ok === false) ? 'partial' : 'completed',
+        status: [kickoff, harvesting, promotionReconciliation, autoDedup, wasteGuard, manualBidGuard, budget].some((stage: any) => stage?.ok === false) || retirementDecisions.some((item) => item.outcome === 'idempotency_conflict') ? 'partial' : 'completed',
         source_function: 'runCanonicalCampaignLifecycleLayer',
         records_processed: campaigns.length,
-        records_imported: retirementDecisions.length,
-        message: `Ciclo centralizado: ${eligibleAsins.length} ASIN(s) ativos com estoque; ${retirementDecisions.length} campanha(s) em retirada/encerramento; target ACoS ${targetAcos}%; budget global ${globalBudget}.`,
+        records_imported: retirementDecisions.filter((item) => item.outcome === 'created').length,
+        message: `Ciclo centralizado: ${eligibleAsins.length} ASIN(s) ativos com estoque; ${retirementDecisions.filter((item) => item.outcome === 'created').length} decisão(ões) criada(s), ${retirementDecisions.filter((item) => item.outcome === 'reused').length} reutilizada(s), ${retirementDecisions.filter((item) => item.outcome === 'idempotency_conflict').length} conflito(s); target ACoS ${targetAcos}%; budget global ${globalBudget}.`,
+        decision_diagnostics: retirementDecisions.filter((item) => item.outcome === 'idempotency_conflict').map((item) => ({
+          account_id: accountId,
+          campaign_id: item.campaign_id,
+          rule: item.reason_code,
+          logical_key: item.logical_key,
+          constraint: item.conflict?.constraint,
+          conflicting_fields: item.conflict?.fields,
+        })),
         started_at: new Date().toISOString(),
         completed_at: new Date().toISOString(),
       }).catch(() => {});
@@ -304,11 +346,12 @@ Deno.serve(async (request) => {
         product_eligibility: { active_in_stock_asins: eligibleAsins.length, policy: 'active_and_in_stock_only' },
         stages: { kickoff, harvesting, promotionReconciliation, autoDedup, wasteGuard, manualBidGuard, budget },
         retirement_decisions: retirementDecisions,
+        idempotency_conflicts: retirementDecisions.filter((item) => item.outcome === 'idempotency_conflict').length,
       });
     }
 
     return Response.json({
-      ok: results.every((row) => Object.values(row.stages).every((stage: any) => stage?.ok !== false)),
+      ok: results.every((row) => row.idempotency_conflicts === 0 && Object.values(row.stages).every((stage: any) => stage?.ok !== false)),
       engine: CAMPAIGN_LIFECYCLE_VERSION,
       schedule_owner: 'runUnifiedDecisionEngine',
       interval_hours: 3,

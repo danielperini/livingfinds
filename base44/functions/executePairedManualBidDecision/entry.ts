@@ -1,5 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 import { clampBidToConfiguredPolicy, loadConfiguredBidPolicy } from '../../shared/configuredBidPolicy.ts';
+import { finishDecisionExecutionClaim, renewDecisionExecutionClaim, reserveDecisionExecution } from '../../shared/decisionExecutionClaims.ts';
 
 const BID_ACTIONS = new Set(['reduce_bid', 'increase_bid', 'update_bid', 'set_bid']);
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -30,19 +31,19 @@ function message(data: any) {
   return String(data?.errors?.[0]?.message || data?.message || data?.error || 'Resposta Amazon inválida').slice(0, 500);
 }
 
-async function markDecision(base44: any, decision: any, ok: boolean, detail: any) {
+async function markDecision(base44: any, decision: any, ok: boolean, detail: any, remoteUnknown = false) {
   const now = new Date().toISOString();
   const requestIds = Array.isArray(detail?.request_ids) ? detail.request_ids.filter(Boolean) : [];
   await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-    status: ok ? 'confirming' : 'failed',
-    queue_status: ok ? 'completed' : 'failed',
+    status: ok ? 'confirming' : remoteUnknown ? 'conflict_reconciling' : 'failed',
+    queue_status: ok ? 'completed' : remoteUnknown ? 'remote_unknown' : 'failed',
     queue_processed_at: now,
     executed_at: ok ? now : null,
     last_attempt_at: now,
     confirmation_required: ok,
     confirmation_status: ok ? 'pending' : 'not_applicable',
-    confirmation_error: null,
-    error_message: ok ? null : message(detail),
+    confirmation_error: remoteUnknown ? 'Resultado remoto incerto; reconciliar na Amazon antes de tentar novamente.' : null,
+    error_message: ok ? null : remoteUnknown ? `Resultado remoto incerto: ${message(detail)}` : message(detail),
     campaign_id: detail?.campaign_id || decision.campaign_id || null,
     ad_group_id: detail?.ad_group_id || decision.ad_group_id || null,
     keyword_id: detail?.keyword_id || decision.keyword_id || null,
@@ -60,7 +61,7 @@ async function checkIdempotency(base44: any, decision: any) {
   const matches = await base44.asServiceRole.entities.OptimizationDecision.filter({
     amazon_account_id: decision.amazon_account_id,
     idempotency_key: decision.idempotency_key,
-  }, 'created_at', 50).catch(() => []);
+  }, '-created_at', 50, 0);
   const others = matches.filter((row: any) => row.id !== decision.id);
 
   const executed = others.find((row: any) => ['executed', 'confirming', 'completed'].includes(String(row.status || '')));
@@ -76,7 +77,7 @@ async function checkIdempotency(base44: any, decision: any) {
   return { blocked: false };
 }
 
-async function executeOne(base44: any, decision: any) {
+async function executeOne(base44: any, decision: any, onRemoteMutationAttempt: () => Promise<void>) {
   const accountId = decision.amazon_account_id;
   const requestedTargetBid = Number(decision.value_after ?? decision.proposed_value);
   if (!Number.isFinite(requestedTargetBid) || requestedTargetBid <= 0) throw new Error('Bid de destino inválido');
@@ -154,12 +155,14 @@ async function executeOne(base44: any, decision: any) {
   }
   if (!resolvedKeywordId) throw new Error('Keyword não encontrada na Amazon para sincronização do bid');
 
+  await onRemoteMutationAttempt();
   const groupUpdate = await ads(base44, accountId, 'pairedBidUpdateAdGroup', 'PUT', '/sp/adGroups', {
     adGroups: [{ adGroupId, defaultBid: targetBid }],
   }, 'application/vnd.spAdGroup.v3+json');
   if (!groupUpdate?.ok) throw new Error(`Falha ao atualizar bid do grupo: ${message(groupUpdate)}`);
 
   await wait(1200);
+  await onRemoteMutationAttempt();
   const keywordUpdate = await ads(base44, accountId, 'pairedBidUpdateKeyword', 'PUT', '/sp/keywords', {
     keywords: [{ keywordId: resolvedKeywordId, bid: targetBid }],
   }, 'application/vnd.spKeyword.v3+json');
@@ -248,13 +251,13 @@ Deno.serve(async (request) => {
     const results: any[] = [];
 
     for (const id of ids) {
-      const rows = await base44.asServiceRole.entities.OptimizationDecision.filter({ id }, null, 1).catch(() => []);
+      const rows = await base44.asServiceRole.entities.OptimizationDecision.filter({ id }, undefined, 1).catch(() => []);
       const decision = rows[0];
       if (!decision || !BID_ACTIONS.has(decision.action)) {
         results.push({ id, ok: false, skipped: true, reason: 'Decisão inexistente ou não é ajuste de bid' });
         continue;
       }
-      if (!['approved', 'executing'].includes(decision.status)) {
+      if (decision.status !== 'approved' && decision.status !== 'executing') {
         results.push({ id, ok: false, skipped: true, reason: `status ${decision.status}` });
         continue;
       }
@@ -274,21 +277,43 @@ Deno.serve(async (request) => {
         continue;
       }
 
-      await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-        status: 'executing',
-        queue_status: 'processing',
-        last_attempt_at: new Date().toISOString(),
-        attempt_count: Number(decision.attempt_count || 0) + 1,
-      });
-
+      let claim: Awaited<ReturnType<typeof reserveDecisionExecution>>;
       try {
-        const result = await executeOne(base44, decision);
+        claim = await reserveDecisionExecution(String(decision.id), String(decision.amazon_account_id || ''));
+      } catch (error) {
+        results.push({ id, ok: false, blocked: true, reason: `Não foi possível reservar atomicamente a decisão; nenhuma ação enviada. ${String((error as Error)?.message || error).slice(0, 180)}` });
+        continue;
+      }
+      if (!claim.authorized || !claim.ownerId || !Number.isFinite(Number(claim.version))) {
+        results.push({ id, ok: false, skipped: true, reason: claim.reason || 'decisão já reservada; nenhuma ação enviada' });
+        continue;
+      }
+
+      let remoteMutationAttempted = false;
+      let claimVersion = Number(claim.version);
+      try {
+        const result = await executeOne(base44, decision, async () => {
+          const renewed = await renewDecisionExecutionClaim({ decisionId: String(decision.id), ownerId: claim.ownerId!, version: claimVersion });
+          if (!renewed.renewed || !Number.isFinite(Number(renewed.version))) throw new Error('Posse da decisão perdida; ação remota interrompida antes do próximo envio.');
+          claimVersion = Number(renewed.version);
+          remoteMutationAttempted = true;
+        });
+        const finalized = await finishDecisionExecutionClaim({ decisionId: String(decision.id), ownerId: claim.ownerId, version: claimVersion, status: 'remote_acknowledged' });
+        if (finalized.ok !== true) {
+          results.push({ id, ok: false, status: 'remote_unknown', reason: 'A Amazon respondeu, mas o worker perdeu a posse antes de persistir o resultado; reconciliação necessária.' });
+          continue;
+        }
         await markDecision(base44, decision, true, result);
         results.push(result);
       } catch (error: any) {
         const detail = { ok: false, error: error?.message || String(error) };
-        await markDecision(base44, decision, false, detail);
-        results.push({ id, ...detail, status: 'failed' });
+        const claimStatus = remoteMutationAttempted ? 'remote_unknown' : 'failed_before_send';
+        const finalized = await finishDecisionExecutionClaim({ decisionId: String(decision.id), ownerId: claim.ownerId, version: claimVersion, status: claimStatus }).catch((finishError) => {
+          console.error('[paired-bid] não foi possível persistir o resultado da reserva:', String((finishError as Error)?.message || finishError));
+          return { ok: false };
+        });
+        if (finalized.ok === true) await markDecision(base44, decision, false, detail, remoteMutationAttempted);
+        results.push({ id, ...detail, status: finalized.ok === true ? remoteMutationAttempted ? 'remote_unknown' : 'failed' : 'remote_unknown', reason: finalized.ok === true ? undefined : 'Posse perdida; decisão preservada para reconciliação.' });
       }
     }
 

@@ -33,7 +33,7 @@ jobs:
       - name: Test daily growth cycle recovery contract
         run: node --test src/lib/proactiveGrowthCycle.test.js
       - name: Test interface navigation, operational queue and overlay contracts
-        run: node --test src/lib/navigation.test.js src/lib/operationalQueueHealth.test.js src/lib/pagination.test.js src/lib/toastPointerEvents.test.js
+        run: node --test src/lib/navigation.test.js src/lib/operationalQueueHealth.test.js src/lib/pagination.test.js src/lib/toastPointerEvents.test.js src/lib/durableMotorExecution.test.js src/lib/proactiveGrowthCycle.test.js
       - name: Typecheck
         run: npm run typecheck
         continue-on-error: true
@@ -173,6 +173,37 @@ jobs:
         run: deno check --node-modules-dir=auto server/src/scheduler.ts server/src/main.ts
       - name: Test environment status secret redaction
         run: deno test server/src/environmentStatus.test.ts
+
+  reliability-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: livingfinds_test
+          POSTGRES_PASSWORD: livingfinds_test
+          POSTGRES_DB: livingfinds_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U livingfinds_test -d livingfinds_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgres://livingfinds_test:livingfinds_test@localhost:5432/livingfinds_test
+      LIVINGFINDS_TEST_DATABASE_URL: postgres://livingfinds_test:livingfinds_test@localhost:5432/livingfinds_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Run durable decision and executor integration tests against isolated PostgreSQL
+        run: >-
+          deno test --allow-env
+          --allow-net=localhost,127.0.0.1 --allow-read=server/migrations
+          --node-modules-dir=auto server/src/reliability.postgres.test.ts
+          server/src/migrations.postgres.test.ts
 
   agents-sdk:
     runs-on: ubuntu-latest
