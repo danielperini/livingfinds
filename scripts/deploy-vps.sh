@@ -23,6 +23,16 @@ case "$previous_scheduler" in true|false) ;; *) echo 'Estado anterior do schedul
 previous_motor_worker="$(docker compose -f "$compose_file" --project-directory "$VPS_PATH/server" exec -T app sh -lc 'printf %s "${ENABLE_MOTOR_RUN_WORKER:-true}"')"
 case "$previous_motor_worker" in true|false) ;; *) echo 'Estado anterior do worker não pôde ser confirmado.' >&2; exit 3;; esac
 previous_release="$(docker compose -f "$compose_file" --project-directory "$VPS_PATH/server" exec -T app sh -lc 'printf %s "${LIVINGFINDS_RELEASE_SHA:-unknown}"')"
+# A previous interrupted deployment may have already paused the old container.
+# Keep the pre-maintenance state across retries instead of making that pause permanent.
+automation_state_file="$VPS_PATH/.deploy/automation-before-maintenance"
+if [ -f "$automation_state_file" ]; then
+  read -r previous_scheduler previous_motor_worker previous_release < "$automation_state_file"
+else
+  printf '%s %s %s\n' "$previous_scheduler" "$previous_motor_worker" "$previous_release" > "$automation_state_file"
+  chmod 600 "$automation_state_file"
+fi
+case "$previous_scheduler/$previous_motor_worker" in true/true|true/false|false/true|false/false) ;; *) echo 'Invalid saved automation state' >&2; exit 3;; esac
 paused=0
 release_applied=0
 restored=0
@@ -60,7 +70,11 @@ trap restore_automation EXIT
 echo '--- aguardando tarefas do scheduler terminarem antes da janela de manutenção ---'
 drained=0
 for attempt in $(seq 1 60); do
-  health="$(curl --max-time 20 -fsS http://127.0.0.1:8000/health)"
+  if ! health="$(curl --max-time 10 -fsS http://127.0.0.1:8000/health)"; then
+    echo "DRAIN_WAIT=health_unavailable|attempt=$attempt"
+    sleep 10
+    continue
+  fi
   running="$(printf '%s' "$health" | sed -n 's/.*"running_jobs":\([0-9][0-9]*\).*/\1/p')"
   test -n "$running"
   if [ "$running" = 0 ]; then drained=1; break; fi
@@ -181,5 +195,6 @@ docker compose -f "$compose_file" --project-directory "$VPS_PATH/server" exec -T
 restored=1
 paused=0
 trap - EXIT
+rm -f "$automation_state_file"
 echo "DEPLOY_VERIFIED_SHA=$RELEASE_SHA"
 echo 'POST_DEPLOY_AMAZON_MUTATIONS=none'

@@ -76,6 +76,10 @@ test('remote script parses and workflow requires both SSH success and receipt', 
   assert.match(workflow, /bash \$remote_script" <\/dev\/null \| tee/);
   assert.match(workflow, /node scripts\/verify-deploy-receipt.mjs/);
   assert.doesNotMatch(workflow, /bash -s" <<'REMOTE'/);
+  const script = readFileSync(remote, 'utf8');
+  assert.match(script, /read -r previous_scheduler previous_motor_worker previous_release < "\$automation_state_file"/);
+  assert.match(script, /DRAIN_WAIT=health_unavailable/);
+  assert.doesNotMatch(script, /retain_repricing_snapshots_manual/);
 });
 
 test('file execution preserves a real failure and does not emit a receipt', () => {

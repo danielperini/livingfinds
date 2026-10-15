@@ -78,6 +78,7 @@ jobs:
             base44/shared/v6siaFailurePolicy.test.ts \
             base44/shared/v6siaReviewEvidence.test.ts \
             base44/shared/v6siaEvidencePaging.test.ts \
+            base44/shared/v6siaSnapshotScope.test.ts \
             base44/shared/v6siaLifecycle.e2e.test.ts \
             base44/shared/metricsToAmazonMutation.e2e.test.ts \
             base44/shared/autoCampaignRepairPolicy.test.ts \

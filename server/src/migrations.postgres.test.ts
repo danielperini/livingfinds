@@ -3,6 +3,33 @@ import postgres from 'npm:postgres';
 const databaseUrl = Deno.env.get('LIVINGFINDS_TEST_DATABASE_URL');
 
 Deno.test({
+  name: 'Manual snapshot retention removes only old unreferenced rows and is safe to repeat',
+  ignore: !databaseUrl,
+  fn: async () => {
+    const client = postgres(databaseUrl!, { max: 1, connect_timeout: 8, idle_timeout: 5 });
+    const schema = `lf_retention_${crypto.randomUUID().replaceAll('-', '')}`;
+    try {
+      await client.unsafe(`create schema "${schema}"`);
+      await client.unsafe(`set search_path to "${schema}"`);
+      await client.unsafe('create table repricing_snapshot(id text primary key, created_date timestamptz not null, data jsonb)');
+      await client.unsafe('create table optimization_decision(data jsonb); create table v6_sia_evidence_link(data jsonb)');
+      await client.unsafe(`insert into repricing_snapshot values ('expired',now()-interval '40 days','{}'),('decision-source',now()-interval '40 days','{}'),('ai-source',now()-interval '40 days','{}'),('fresh',now(),'{}')`);
+      await client.unsafe(`insert into optimization_decision values ('{"snapshot_id":"decision-source"}'); insert into v6_sia_evidence_link values ('{"source_table":"RepricingSnapshot","source_record_id":"ai-source"}')`);
+      const script = await Deno.readTextFile('server/migrations/retain_repricing_snapshots_manual.sql');
+      await client.unsafe(script);
+      await client.unsafe(script);
+      const rows = await client.unsafe('select id from repricing_snapshot order by id');
+      if (JSON.stringify(rows.map((r) => r.id)) !== JSON.stringify(['ai-source','decision-source','fresh'])) throw new Error('Retention removed current or referenced evidence');
+      const audit = await client.unsafe('select removed_count from snapshot_retention_audit order by id');
+      if (Number(audit[0].removed_count) !== 1 || Number(audit[1].removed_count) !== 0) throw new Error('Retention reprocessing is not idempotent');
+    } finally {
+      await client.unsafe(`drop schema if exists "${schema}" cascade`);
+      await client.end({ timeout: 3 });
+    }
+  },
+});
+
+Deno.test({
   name: 'PostgreSQL snapshot lookup indexes preserve rows and cover the observed slow query shapes',
   ignore: !databaseUrl,
   fn: async () => {
