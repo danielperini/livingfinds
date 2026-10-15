@@ -4,6 +4,7 @@ VPS_PATH="$(printf '%s' "$VPS_PATH_B64" | base64 -d)"
 case "$RELEASE_SHA" in (""|*[!0-9a-f]*) echo 'SHA de release inválido' >&2; exit 2;; esac
 export LIVINGFINDS_RELEASE_SHA="$RELEASE_SHA"
 test -d "$VPS_PATH"
+test "$(realpath -- "$VPS_PATH")" != /
 cd "$VPS_PATH"
 
 compose_file="$VPS_PATH/server/docker-compose.yml"
@@ -21,6 +22,7 @@ previous_scheduler="$(docker compose -f "$compose_file" --project-directory "$VP
 case "$previous_scheduler" in true|false) ;; *) echo 'Estado anterior do scheduler não pôde ser confirmado.' >&2; exit 3;; esac
 previous_motor_worker="$(docker compose -f "$compose_file" --project-directory "$VPS_PATH/server" exec -T app sh -lc 'printf %s "${ENABLE_MOTOR_RUN_WORKER:-true}"')"
 case "$previous_motor_worker" in true|false) ;; *) echo 'Estado anterior do worker não pôde ser confirmado.' >&2; exit 3;; esac
+previous_release="$(docker compose -f "$compose_file" --project-directory "$VPS_PATH/server" exec -T app sh -lc 'printf %s "${LIVINGFINDS_RELEASE_SHA:-unknown}"')"
 paused=0
 release_applied=0
 restored=0
@@ -35,11 +37,12 @@ restore_automation() {
       cp -a "$rollback/server/src" "$VPS_PATH/server/"
       cp -a "$rollback/server/deno.json" "$rollback/server/Dockerfile" "$rollback/server/docker-compose.yml" "$VPS_PATH/server/"
       restore_compose="$VPS_PATH/server/docker-compose.yml"
-      docker compose -f "$restore_compose" --project-directory "$VPS_PATH/server" up -d --build app >/dev/null 2>&1
+      LIVINGFINDS_RELEASE_SHA="$previous_release" ENABLE_SCHEDULER="$previous_scheduler" ENABLE_MOTOR_RUN_WORKER="$previous_motor_worker" \
+        docker compose -f "$restore_compose" --project-directory "$VPS_PATH/server" up -d --build app >/dev/null 2>&1
     else
       restore_compose="$VPS_PATH/server/docker-compose.yml"
       [ -f "$restore_compose" ] || restore_compose="$VPS_PATH/server/docker-compose.deploy.yml"
-      ENABLE_SCHEDULER="$previous_scheduler" ENABLE_MOTOR_RUN_WORKER="$previous_motor_worker" \
+      LIVINGFINDS_RELEASE_SHA="$previous_release" ENABLE_SCHEDULER="$previous_scheduler" ENABLE_MOTOR_RUN_WORKER="$previous_motor_worker" \
         docker compose -f "$restore_compose" --project-directory "$VPS_PATH/server" up -d app >/dev/null 2>&1
     fi
     if [ "$release_applied" = 1 ]; then
@@ -84,9 +87,9 @@ pause_config="$(ENABLE_SCHEDULER=false ENABLE_MOTOR_RUN_WORKER=false docker comp
 printf '%s\n' "$pause_config" | grep -Eq 'ENABLE_SCHEDULER: "?false"?'
 printf '%s\n' "$pause_config" | grep -Eq 'ENABLE_MOTOR_RUN_WORKER: "?false"?'
 unset pause_config
+paused=1
 ENABLE_SCHEDULER=false ENABLE_MOTOR_RUN_WORKER=false \
   docker compose -f "$compose_candidate" --project-directory "$VPS_PATH/server" up -d app
-paused=1
 echo '--- verificando pausa de scheduler e worker ---'
 for attempt in $(seq 1 30); do
   if curl --max-time 20 -sf http://127.0.0.1:8000/health > /dev/null; then break; fi
@@ -137,9 +140,9 @@ cp -a server/src server/deno.json server/Dockerfile server/docker-compose.yml "$
 chmod -R go-rwx "$rollback"
 
 echo '--- instalando a release e verificando backend ---'
+release_applied=1
 rm -rf base44 dist server/src
 tar xzf /tmp/deploy.tar.gz -C "$VPS_PATH"
-release_applied=1
 rm -f server/docker-compose.deploy.yml .dockerignore
 ENABLE_SCHEDULER=false ENABLE_MOTOR_RUN_WORKER=false \
   docker compose -f "$compose_file" --project-directory "$VPS_PATH/server" up -d --build app
