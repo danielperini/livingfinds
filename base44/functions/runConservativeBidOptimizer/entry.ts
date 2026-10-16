@@ -1,3 +1,4 @@
+import { getDecisionKeywordText } from '../../shared/decisionKeywordText.js';
 /**
  * runConservativeBidOptimizer — Motor de decisão imediato com dados reais dos últimos 4 dias.
  *
@@ -207,7 +208,7 @@ Deno.serve(async (req) => {
             keyword_db_id: kw.id,
             campaign_id: cid,
             campaign_name: camp.campaign_name || camp.name,
-            keyword_text: kw.keyword_text || kw.keyword,
+            keyword_text: getDecisionKeywordText(kw),
             current_bid: currentBid,
             new_bid: newBid,
             action,
@@ -286,6 +287,7 @@ Deno.serve(async (req) => {
               entity_id: b.keywordId,
               campaign_id: b._meta.campaign_id,
               keyword_id: b.keywordId,
+              keyword_text: b._meta.keyword_text,
               asin: b._meta.asin,
               action: b._meta.action,
               rationale: b._meta.rationale,

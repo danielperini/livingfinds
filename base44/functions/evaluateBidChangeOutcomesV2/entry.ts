@@ -1,3 +1,4 @@
+import { getDecisionKeywordText } from '../../shared/decisionKeywordText.js';
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { getBrazilDate } from '../../shared/amazonDateTime.ts';
 
@@ -26,7 +27,7 @@ Deno.serve(async(req)=>{
       const before=stats(m.filter(x=>x.date>=start&&x.date<day)),after=stats(m.filter(x=>x.date>=day&&x.date<end));
       const [outcome,next]=verdict(before,after);
       await base44.asServiceRole.entities.BidHistory.update(item.id,{evaluation_period_days:7,evaluation_start_at:day,evaluation_end_at:end,impressions_before:before.impressions,clicks_before:before.clicks,spend_before:before.spend,sales_before:before.sales,orders_before:before.orders,acos_before:before.acos,roas_before:before.roas,conversion_rate_before:before.conversion_rate,impressions_after:after.impressions,clicks_after:after.clicks,spend_after:after.spend,sales_after:after.sales,orders_after:after.orders,acos_after:after.acos,roas_after:after.roas,conversion_rate_after:after.conversion_rate,performance_change_pct:change(before.roas,after.roas),outcome,recommended_next_action:next,ml_learning_status:'learned',evaluated_at:new Date().toISOString()});
-      await base44.asServiceRole.entities.LearningEvent.create({amazon_account_id:body.amazon_account_id,event_type:'bid_change_evaluated',entity_type:item.entity_type||'keyword',entity_id:item.entity_id||item.keyword_id||campaignId,asin:d.asin||item.asin||null,keyword:d.keyword_text||item.entity_name||null,outcome,source:'bid_history_ml',metadata:JSON.stringify({bid_before:item.bid_before??item.old_bid??null,bid_after:item.bid_after??item.new_bid??null,change_pct:item.change_pct??null,campaign_id:campaignId,before,after,recommended_next_action:next})}).catch(()=>{});
+      await base44.asServiceRole.entities.LearningEvent.create({amazon_account_id:body.amazon_account_id,event_type:'bid_change_evaluated',entity_type:item.entity_type||'keyword',entity_id:item.entity_id||item.keyword_id||campaignId,asin:d.asin||item.asin||null,keyword:getDecisionKeywordText(d)||getDecisionKeywordText(item),outcome,source:'bid_history_ml',metadata:JSON.stringify({bid_before:item.bid_before??item.old_bid??null,bid_after:item.bid_after??item.new_bid??null,change_pct:item.change_pct??null,campaign_id:campaignId,before,after,recommended_next_action:next})}).catch(()=>{});
       evaluated++;
     }
     return Response.json({ok:true,evaluated,skipped,total:rows.length});

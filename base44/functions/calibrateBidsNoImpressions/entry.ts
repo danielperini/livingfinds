@@ -1,3 +1,4 @@
+import { getDecisionKeywordText, getKeywordLabel } from '../../shared/decisionKeywordText.js';
 /**
  * Calibra keywords com zero de impressoes confirmado por relatorio diario.
  * Ausencia de metrica, campanha incompleta, economia pendente e produto
@@ -145,7 +146,8 @@ async function updateKeywordBid(
     entity_type: 'keyword',
     entity_id: keyword.keyword_id,
     keyword_id: keyword.keyword_id,
-    keyword: keyword.keyword_text || keyword.keyword || '',
+    keyword_text: getDecisionKeywordText(keyword),
+    keyword: getDecisionKeywordText(keyword),
     campaign_id: keyword.campaign_id || '',
     asin: resolvedAsin || keyword.asin || '',
     old_bid: currentBid,
@@ -449,7 +451,7 @@ Deno.serve(async (request) => {
             }
           }
 
-          const alertMessage = `Keyword "${keyword.keyword_text || keyword.keyword || keywordId}" (bid atual: R$${resultingBid.toFixed(2)}) teve zero impressoes confirmado por dados diarios de targeting nas ultimas 48h.`;
+          const alertMessage = `Keyword "${getKeywordLabel(keyword)}" (bid atual: R$${resultingBid.toFixed(2)}) teve zero impressoes confirmado por dados diarios de targeting nas ultimas 48h.`;
           if (keeperAlert) {
             alertUpdates.set(keeperAlert.id, {
               id: keeperAlert.id,

@@ -1,3 +1,4 @@
+import { prepareKeywordPersistence, getDecisionKeywordText } from '../../../base44/shared/decisionKeywordText.js';
 /**
  * Camada de Entidades — reimplementa `base44.entities.<Entity>.<método>` sobre Postgres.
  *
@@ -57,10 +58,11 @@ function mapRow(row: Row): Row {
       data = {};
     }
   }
-  return { id, created_date, updated_date, created_by, ...(data ?? {}) };
+  return prepareKeywordPersistence({ id, created_date, updated_date, created_by, ...(data ?? {}) });
 }
 
 function splitSystem(payload: Row): { system: Row; data: Row } {
+  payload = prepareKeywordPersistence(payload);
   const system: Row = {};
   const data: Row = {};
   for (const [k, v] of Object.entries(payload ?? {})) {
@@ -175,6 +177,15 @@ export class EntityRepo {
   }
 
   async create(payload: Row = {}): Promise<Row> {
+    if (['OptimizationDecision', 'AdsBidChangeLog', 'BidHistory', 'AmazonActionQueue'].includes(this.entity) &&
+        payload.amazon_account_id && payload.keyword_id && !getDecisionKeywordText(payload)) {
+      const keywords = await new EntityRepo('Keyword').filter({
+        amazon_account_id: payload.amazon_account_id, keyword_id: String(payload.keyword_id),
+      }, null, 2);
+      if (keywords.length === 1) {
+        payload = { ...payload, keyword_text: getDecisionKeywordText(keywords[0]) };
+      }
+    }
     await ensureTable(this.table);
     const { system, data } = splitSystem(payload);
     const id = system.id ?? crypto.randomUUID();
@@ -203,6 +214,9 @@ export class EntityRepo {
   }
 
   async update(id: string, patch: Row = {}): Promise<Row | null> {
+    if (['keyword_text', 'keywordText', 'keyword', 'term', 'normalized_term', 'search_term', 'searchTerm', 'keyword_id', 'keywordId'].some(field => Object.hasOwn(patch, field))) {
+      patch = prepareKeywordPersistence(patch, await this.get(id) || {});
+    }
     await ensureTable(this.table);
     const { system, data } = splitSystem(patch);
     const rows = (await sql.unsafe(

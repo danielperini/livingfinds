@@ -4,6 +4,7 @@
  * Seguro: não apaga registros originais, impede duplicatas via legacy_id.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { getDecisionKeywordText } from '../../shared/decisionKeywordText.js';
 
 Deno.serve(async (req) => {
   try {
@@ -39,8 +40,8 @@ Deno.serve(async (req) => {
           entity_type: d.entity_type || 'keyword',
           entity_id: d.entity_id,
           campaign_id: d.campaign_id || d.run_id,
-          keyword_id: d.entity_id,
-          keyword_text: d.entity_name,
+          keyword_id: !d.entity_type || d.entity_type === 'keyword' ? (d.keyword_id || d.entity_id) : null,
+          keyword_text: !d.entity_type || d.entity_type === 'keyword' ? getDecisionKeywordText({ ...d, keyword_text: d.keyword_text || d.entity_name }) : null,
           action: d.action,
           value_before: d.current_value,
           value_after: d.new_value,

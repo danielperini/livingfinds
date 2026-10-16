@@ -1,3 +1,4 @@
+import { getDecisionKeywordText } from '../../shared/decisionKeywordText.js';
 /**
  * boostBidsNoSpend24h — Aumentar bids de keywords sem gasto nas últimas 24h
  *
@@ -202,7 +203,8 @@ Deno.serve(async (req) => {
               return {
                 amazon_account_id: account.id,
                 keyword_id: kw.keyword_id,
-                keyword: kw.keyword_text || kw.keyword || '',
+                keyword_text: getDecisionKeywordText(kw),
+    keyword: getDecisionKeywordText(kw),
                 campaign_id: kw.campaign_id || '',
                 asin: kw.asin || '',
                 old_bid: oldBid,
@@ -221,7 +223,7 @@ Deno.serve(async (req) => {
 
             summary.keywords_boosted += batch.length;
             summary.boosted_details.push(...batch.map(kw => ({
-              keyword: kw.keyword_text || kw.keyword,
+              keyword: getDecisionKeywordText(kw),
               old_bid: kw.current_bid || kw.bid,
               new_bid: calcNewBid(kw.current_bid || kw.bid || 0.25),
             })));

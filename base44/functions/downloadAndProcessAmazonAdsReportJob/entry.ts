@@ -1,3 +1,4 @@
+import { getDecisionKeywordText, getSearchTermText } from '../../shared/decisionKeywordText.js';
 /**
  * downloadAndProcessAmazonAdsReportJob
  *
@@ -265,7 +266,7 @@ Deno.serve(async (req) => {
         const campaignId = String(row.campaignId || '');
         const adGroupId = String(row.adGroupId || '');
         const keywordId = String(row.keywordId || '');
-        const term = String(row.searchTerm || '').trim();
+        const term = getSearchTermText(row) || '';
         const normalizedTerm = normalizeSearchTerm(term);
         const campaign = campaignById.get(campaignId);
         const campaignType = campaignTypeOf(campaign);
@@ -291,7 +292,7 @@ Deno.serve(async (req) => {
           ad_group_id: adGroupId,
           ad_group_name: row.adGroupName || '',
           keyword_id: keywordId,
-          keyword_text: row.keyword || row.keywordText || '',
+          keyword_text: getDecisionKeywordText(row),
           keyword_type: row.keywordType || '',
           match_type: normalizedMatchType,
           search_term: term,
@@ -372,7 +373,7 @@ Deno.serve(async (req) => {
         const keywordId = String(row.keywordId || '');
         const purchasedAsin = String(row.purchasedAsin || '');
         const placement = String(row.placementClassification || '');
-        const searchTerm = String(row.searchTerm || '');
+        const searchTerm = getSearchTermText(row) || '';
         return {
           amazon_account_id: accountId,
           report_job_id: job.id,
@@ -385,7 +386,7 @@ Deno.serve(async (req) => {
           ad_group_id: adGroupId,
           ad_group_name: row.adGroupName || '',
           keyword_id: keywordId,
-          keyword_text: row.keyword || '',
+          keyword_text: getDecisionKeywordText(row),
           targeting_id: targetId,
           targeting_expression: row.targetingExpression || row.targetingText || '',
           match_type: String(row.matchType || '').toLowerCase(),
@@ -497,7 +498,7 @@ Deno.serve(async (req) => {
       const isProductTarget = isTargetingReport && (targetingExpr.startsWith('asin=') || targetingExpr.startsWith('similar-product'));
 
       const keywordId = String(row.targetingId || row.keywordId || '');
-      const keywordText = row.targetingText || row.keyword || '';
+      const keywordText = getDecisionKeywordText({ ...row, keyword_text: row.targetingText, keyword_id: keywordId });
       const bid = Number(row.bid || row.keywordBid) || 0;
       const matchType = (row.matchType || '').toLowerCase();
 

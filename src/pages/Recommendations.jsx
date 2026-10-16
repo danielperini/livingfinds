@@ -1,3 +1,4 @@
+import { deriveMotorDecisionTitle } from '@/lib/motorDecisionTitle';
 import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
@@ -332,7 +333,7 @@ export default function Recommendations() {
       // Normalizar campos para compatibilidade com DecisionRow
       const normalize = d => ({
         ...d,
-        entity_name: d.keyword_text || d.entity_id || d.entity_name,
+        entity_name: deriveMotorDecisionTitle(d),
         current_value: d.value_before ?? d.current_value,
         proposed_value: d.value_after ?? d.proposed_value,
         decision_type: d.action || d.decision_type,

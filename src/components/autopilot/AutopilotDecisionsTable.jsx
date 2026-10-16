@@ -1,3 +1,4 @@
+import { getKeywordLabel } from '../../../base44/shared/decisionKeywordText.js';
 import { useState } from 'react';
 import { base44 } from '@/api/base44Client';
 import { CheckCircle, XCircle, Loader2, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Play } from 'lucide-react';
@@ -80,7 +81,7 @@ function DecisionRow({ d, onUpdate }) {
   };
 
   const execute = async () => {
-    if (isCritical && !window.confirm(`Confirma executar "${DECISION_LABELS[d.decision_type]}" — ${d.keyword_text || d.entity_id}?`)) return;
+    if (isCritical && !window.confirm(`Confirma executar "${DECISION_LABELS[d.decision_type]}" — ${getKeywordLabel(d)}?`)) return;
     setLoading(true);
     const res = await base44.functions.invoke('executeAutopilotDecision', { decision_ids: [d.id] });
     const status = res.data?.results?.[0]?.ok ? 'executed' : 'failed';
@@ -92,7 +93,7 @@ function DecisionRow({ d, onUpdate }) {
     <>
       <tr className="border-b border-surface-2/40 hover:bg-surface-2/50 transition-colors">
         <td className="px-4 py-3">
-          <div className="text-xs font-semibold text-white truncate max-w-[180px]">{d.keyword_text || d.entity_id || '—'}</div>
+          <div className="text-xs font-semibold text-white truncate max-w-[180px]">{getKeywordLabel(d)}</div>
           <div className="text-xs text-slate-500 mt-0.5">{DECISION_LABELS[d.decision_type] || d.decision_type} · {ACTION_LABELS[d.action] || d.action}</div>
           {d.asin && <div className="text-[10px] font-mono text-cyan mt-0.5">{d.asin}</div>}
         </td>

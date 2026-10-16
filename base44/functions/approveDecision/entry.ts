@@ -1,3 +1,4 @@
+import { getDecisionKeywordText } from '../../shared/decisionKeywordText.js';
 /**
  * approveDecision — Aprova, rejeita ou aplica regras automáticas em decisões do Learner Engine.
  * Quando aprovada com action='approve' e execute=true, também tenta aplicar via Amazon Ads API.
@@ -61,8 +62,9 @@ async function applyToAmazon(decision) {
       payload = [{ campaignId: decision.entity_id, state: 'enabled' }];
       break;
     case 'negate_keyword':
+      if (!getDecisionKeywordText(decision)) return { ok: false, skipped: true, reason: 'keyword_text_unavailable' };
       endpoint = `${base}/v2/sp/negativeKeywords`;
-      payload = [{ campaignId: decision.entity_id, keywordText: decision.entity_name?.split(' (')[0], matchType: 'negativeExact', state: 'enabled' }];
+      payload = [{ campaignId: decision.entity_id, keywordText: getDecisionKeywordText(decision), matchType: 'negativeExact', state: 'enabled' }];
       break;
     default:
       return { ok: false, skipped: true, reason: `action ${decision.decision_type} not mapped` };

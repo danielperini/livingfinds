@@ -1,3 +1,4 @@
+import { deriveMotorDecisionTitle } from '@/lib/motorDecisionTitle';
 import React, { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import { loadAllCampaigns, getAutopilotEligible } from '@/lib/campaignUtils';
@@ -274,10 +275,9 @@ export default function AdsAutopilot() {
         .map(d => new Date(d).getTime()).filter(t => !isNaN(t));
       if (dates.length) setLastUpdate(new Date(Math.max(...dates)).toISOString());
 
-      const campNameMap = new Map(cams.map(c => [c.campaign_id, c.name || c.campaign_name]));
       const normalize = d => ({
         ...d,
-        entity_name: d.keyword_text || (d.campaign_id && campNameMap.get(d.campaign_id)) || d.campaign_name || d.entity_name || (d.entity_id && String(d.entity_id).length > 10 ? `ID …${String(d.entity_id).slice(-6)}` : d.entity_id) || '—',
+        entity_name: deriveMotorDecisionTitle(d),
         current_value: d.value_before ?? d.current_value,
         proposed_value: d.value_after ?? d.proposed_value,
         decision_type: d.action || d.decision_type,

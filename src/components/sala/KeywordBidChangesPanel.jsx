@@ -1,3 +1,4 @@
+import { getKeywordLabel, getDecisionKeywordText } from '../../../base44/shared/decisionKeywordText.js';
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
@@ -181,7 +182,7 @@ function DetailModal({ decision, bidHistory, ruleExecution, onClose, products })
         <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 border-b border-surface-2 bg-[#111827]">
           <div>
             <p className="text-sm font-bold text-white">Detalhe da Alteração de Bid</p>
-            <p className="text-xs text-slate-500 mt-0.5">{decision.keyword_text || decision.entity_id || '—'}</p>
+            <p className="text-xs text-slate-500 mt-0.5">{getKeywordLabel(decision)}</p>
           </div>
           <div className="flex items-center gap-3">
             <StatusBadge decision={decision} />
@@ -407,7 +408,7 @@ function bidLogToDecision(log) {
     campaign_name: log.campaign_name,
     ad_group_id: log.ad_group_id,
     keyword_id: log.keyword_id || (log.entity_type === 'keyword' ? log.entity_id : null),
-    keyword_text: log.keyword_text || log.keyword,
+    keyword_text: getDecisionKeywordText(log),
     target_id: log.target_id,
     asin: log.asin,
     action: log.action || (after > before ? 'increase_bid' : after < before ? 'decrease_bid' : 'bid_change'),
@@ -441,7 +442,7 @@ function mergeDecisionSources(decisionRows, bidLogs) {
         value_before: linked.value_before ?? linked.current_value ?? log.old_bid ?? log.bid_before,
         value_after: linked.value_after ?? linked.proposed_value ?? log.new_bid ?? log.bid_after,
         keyword_id: linked.keyword_id || log.keyword_id,
-        keyword_text: linked.keyword_text || log.keyword_text || log.keyword,
+        keyword_text: getDecisionKeywordText(linked) || getDecisionKeywordText(log),
         asin: linked.asin || log.asin,
         amazon_response: linked.amazon_response || log.amazon_response,
         executed_at: linked.executed_at || (log.status === 'executed' ? log.created_at : null),
@@ -583,10 +584,10 @@ export default function KeywordBidChangesPanel({ account }) {
       const statusKey = resolveStatus(d);
       const q = search.toLowerCase();
       if (q && !(
-        (d.keyword_text || '').toLowerCase().includes(q) ||
+        (getDecisionKeywordText(d) || '').toLowerCase().includes(q) ||
         (d.asin || '').toLowerCase().includes(q) ||
         (d.campaign_id || '').toLowerCase().includes(q) ||
-        (d.keyword_id || '').toLowerCase().includes(q)
+        String(d.keyword_id || '').toLowerCase().includes(q)
       )) return false;
 
       if (filterStatus !== 'all' && statusKey !== filterStatus) return false;
@@ -736,7 +737,7 @@ export default function KeywordBidChangesPanel({ account }) {
           <p className="text-[10px] text-slate-500 mb-1">Última confirmada</p>
           {summary.lastConfirmed ? (
             <>
-              <p className="text-xs font-bold text-emerald-400 truncate">{summary.lastConfirmed.keyword_text || summary.lastConfirmed.entity_id || '—'}</p>
+              <p className="text-xs font-bold text-emerald-400 truncate">{getKeywordLabel(summary.lastConfirmed)}</p>
               <p className="text-[10px] text-slate-500">{fmtDate(summary.lastConfirmed.executed_at || summary.lastConfirmed.created_at)}</p>
             </>
           ) : (
@@ -877,7 +878,7 @@ export default function KeywordBidChangesPanel({ account }) {
                       </td>
                       {/* Keyword */}
                       <td className="px-3 py-2.5 max-w-[140px]">
-                        <p className="text-white truncate font-semibold" title={d.keyword_text}>{d.keyword_text || '—'}</p>
+                        <p className="text-white truncate font-semibold" title={d.keyword_text}>{getKeywordLabel(d)}</p>
                       </td>
                       {/* Match */}
                       <td className="px-3 py-2.5">

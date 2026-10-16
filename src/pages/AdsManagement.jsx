@@ -1,3 +1,4 @@
+import { getKeywordLabel } from '../../base44/shared/decisionKeywordText.js';
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
 import { loadAllCampaigns, classifyCampaigns, campaignState } from '@/lib/campaignUtils';
@@ -1630,7 +1631,7 @@ export default function AdsManagement() {
                                   </div> :
                           <span className="text-[10px] text-slate-600 font-mono">{kw.asin || selectedCampaign?.asin || '—'}</span>}
                               </td>
-                              <td className="px-4 py-2.5 font-medium text-white max-w-[200px] truncate">{kw.keyword_text || '—'}</td>
+                              <td className="px-4 py-2.5 font-medium text-white max-w-[200px] truncate">{getKeywordLabel(kw)}</td>
                               <td className="px-4 py-2.5"><span className="text-xs px-2 py-0.5 bg-surface-3 text-slate-400 rounded">{kw.match_type || '—'}</span></td>
                               <td className="px-4 py-2.5"><StatusBadge status={kw.state || 'enabled'} size="xs" /></td>
                               <td className="px-4 py-2.5">{renderBestHour()}</td>

@@ -1,3 +1,4 @@
+import { getKeywordLabel } from '../../../base44/shared/decisionKeywordText.js';
 import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
@@ -40,7 +41,7 @@ function DecisionRow({ d }) {
         </span>
 
         <span className="text-xs text-white font-medium truncate flex-1">
-          {d.keyword_text || d.action || d.entity_id || '—'}
+          {getKeywordLabel(d)}
         </span>
 
         <div className="flex items-center gap-3 flex-shrink-0 text-[10px] text-slate-500">

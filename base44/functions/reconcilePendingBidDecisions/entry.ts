@@ -1,3 +1,4 @@
+import { getDecisionKeywordText } from '../../shared/decisionKeywordText.js';
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 function brazilHour(){const parts=new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',hour:'2-digit',hour12:false}).formatToParts(new Date());return Number(parts.find((part)=>part.type==='hour')?.value||0);}
@@ -33,11 +34,11 @@ Deno.serve(async(request)=>{try{
   const eligible=aiMode==='LOW_RISK_AUTO'&&autonomy>=2&&confidence>=minimumConfidence&&risk==='low';
   if(eligible){
    await base44.asServiceRole.entities.OptimizationDecision.update(decision.id,{status:'approved',queue_status:'scheduled',queue_hour:queueHour,queue_window:queueWindow,queued_at:new Date().toISOString(),pending_reason:null,error_message:null});
-   results.push({id:decision.id,keyword:decision.keyword_text||decision.entity_name,confidence,eligible:true,queued:true,queue_window:queueWindow,policy:isExpansion?'expansion':'protection'});
+   results.push({id:decision.id,keyword:getDecisionKeywordText(decision),confidence,eligible:true,queued:true,queue_window:queueWindow,policy:isExpansion?'expansion':'protection'});
   }else{
    const reasons=[];if(aiMode!=='LOW_RISK_AUTO')reasons.push(`modo de IA ${aiMode} exige aprovação humana`);if(autonomy<2)reasons.push(`autonomia ${autonomy} exige aprovação humana`);if(confidence<minimumConfidence)reasons.push(`confiança ${confidence}% abaixo do mínimo ${minimumConfidence}% para ${isExpansion?'expansão':'proteção'}`);if(risk!=='low')reasons.push(`risco ${risk} fora do modo automático de baixo risco`);
    await base44.asServiceRole.entities.OptimizationDecision.update(decision.id,{queue_status:'awaiting_approval',pending_reason:reasons.join('; '),error_message:null});
-   results.push({id:decision.id,keyword:decision.keyword_text||decision.entity_name,confidence,eligible:false,queued:false,reason:reasons.join('; '),policy:isExpansion?'expansion':'protection'});
+   results.push({id:decision.id,keyword:getDecisionKeywordText(decision),confidence,eligible:false,queued:false,reason:reasons.join('; '),policy:isExpansion?'expansion':'protection'});
   }
  }
  return Response.json({ok:true,checked:bidDecisions.length,unique:newestByKey.size,queued:results.filter((item:any)=>item.queued).length,awaiting_approval:results.filter((item:any)=>!item.queued).length,superseded:bidDecisions.length-newestByKey.size,ai_mode:aiMode,protection_confidence:protectionConfidence,expansion_confidence:expansionConfidence,autonomy_level:autonomy,queue_window:queueWindow,results});

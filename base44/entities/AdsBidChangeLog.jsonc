@@ -13,9 +13,9 @@
       "enum": ["keyword", "ad_group", "product_target", "campaign"]
     },
     "entity_id": { "type": "string" },
-    "keyword_id": { "type": "string" },
+    "keyword_id": { "type": "string", "description": "Identificador técnico da Amazon Ads; nunca é texto de keyword." },
     "keyword": { "type": "string" },
-    "keyword_text": { "type": "string" },
+    "keyword_text": { "type": "string", "description": "Texto humano real da keyword, quando disponível; nunca preencher com keyword_id." },
     "target_id": { "type": "string" },
     "asin": { "type": "string" },
     "old_bid": { "type": "number" },

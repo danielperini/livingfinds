@@ -1,3 +1,4 @@
+import { getDecisionKeywordText } from '../../shared/decisionKeywordText.js';
 /**
  * executeStockBidRules — Executa ações de bid pendentes geradas pelo motor determinístico.
  *
@@ -181,7 +182,8 @@ Deno.serve(async (req) => {
             amazon_account_id: aid,
             date: now.slice(0, 10),
             keyword_id: keywordId,
-            keyword: action.keyword_text || '',
+            keyword_text: getDecisionKeywordText(action),
+    keyword: getDecisionKeywordText(action),
             campaign_id: action.campaign_id || '',
             asin: action.asin || '',
             old_bid: oldBid,

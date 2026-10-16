@@ -1,3 +1,4 @@
+import { deriveMotorDecisionTitle } from '@/lib/motorDecisionTitle';
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { base44 } from '@/api/base44Client';
@@ -1439,7 +1440,7 @@ export default function SalaDeComando() {
                     {decisions.filter(d => d.status === 'pending').map(d => (
                       <div key={d.id} className="px-5 py-3 flex items-center justify-between gap-3">
                         <div className="min-w-0">
-                          <p className="text-xs font-semibold text-white truncate">{d.keyword_text || d.entity_name || d.decision_type || '—'}</p>
+                          <p className="text-xs font-semibold text-white truncate">{deriveMotorDecisionTitle(d)}</p>
                           <p className="text-[10px] text-slate-500 mt-0.5 truncate">{d.rationale?.slice(0, 80) || d.action}</p>
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">

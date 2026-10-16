@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { getDecisionKeywordText } from '../../shared/decisionKeywordText.js';
 import { clampBidToConfiguredPolicy, loadConfiguredBidPolicy } from '../../shared/configuredBidPolicy.ts';
 
 function evaluationDays(action: string) {
@@ -226,10 +227,11 @@ Deno.serve(async (request) => {
         normalized = normalizeV3Response(raw, 'keywords');
 
       } else if (['negative_exact', 'negative_keyword'].includes(decision.action)) {
+        if (!getDecisionKeywordText(decision)) throw new Error('keyword_text_unavailable');
         const raw = await ads(base44, decision.amazon_account_id, 'createNegativeKeyword', 'POST', '/sp/negativeKeywords', {
           negativeKeywords: [{
             campaignId: String(decision.campaign_id),
-            keywordText: decision.keyword_text,
+            keywordText: getDecisionKeywordText(decision),
             matchType: 'NEGATIVE_EXACT',
             state: 'ENABLED',
           }],
@@ -248,10 +250,11 @@ Deno.serve(async (request) => {
         normalized = { ok: d.ok === true, success: [], errors: d.ok ? [] : [{ message: d.error || 'Falha dayparting' }], request_id: null };
 
       } else if (decision.action === 'create_keyword') {
+        if (!getDecisionKeywordText(decision)) throw new Error('keyword_text_unavailable');
         const delegated = await base44.asServiceRole.functions.invoke('harvestConvertedSearchTerms', {
           amazon_account_id: decision.amazon_account_id,
           single_decision_id: decision.id,
-          keyword_text: decision.keyword_text,
+          keyword_text: getDecisionKeywordText(decision),
           campaign_id: decision.campaign_id,
           ad_group_id: decision.ad_group_id,
           bid: decision.value_after,
@@ -359,7 +362,7 @@ Deno.serve(async (request) => {
           amazon_account_id: decision.amazon_account_id,
           entity_type: decision.entity_type,
           entity_id: decision.entity_id || decision.keyword_id,
-          entity_name: decision.keyword_text || decision.campaign_id,
+          entity_name: getDecisionKeywordText(decision) || decision.campaign_name || null,
           campaign_id: decision.campaign_id || null,
           bid_before: decision.action.includes('bid') ? decision.value_before : null,
           bid_after: decision.action.includes('bid') ? decision.value_after : null,
@@ -386,7 +389,7 @@ Deno.serve(async (request) => {
           entity_type: decision.entity_type,
           entity_id: decision.entity_id || decision.keyword_id || decision.target_id,
           keyword_id: decision.entity_type === 'keyword' ? decision.entity_id : null,
-          keyword_text: decision.keyword_text || decision.entity_name || null,
+          keyword_text: decision.entity_type === 'keyword' ? getDecisionKeywordText(decision) : null,
           target_id: decision.entity_type === 'product_target' ? decision.entity_id : null,
           asin: decision.asin || null,
           old_bid: decision.action.includes('bid') ? Number(decision.value_before) : null,

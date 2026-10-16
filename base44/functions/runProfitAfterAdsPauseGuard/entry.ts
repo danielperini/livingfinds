@@ -1,3 +1,4 @@
+import { getKeywordLabel } from '../../shared/decisionKeywordText.js';
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 
 /**
@@ -68,7 +69,7 @@ async function reduceMostCostlyKeyword(base44: any, aid: string, asin: string, c
     campaign_id: worst.campaignId, ad_group_id: worst.keyword.ad_group_id, keyword_id: worst.keywordId,
     keyword_text: worst.keyword.keyword_text || worst.keyword.keyword, asin, sku: product?.sku || null,
     action: `Reduzir bid da keyword de maior custo em ${Math.round(BID_REDUCTION_PCT * 100)}%`,
-    rationale: `Primeira ação contra prejuízo: ${worst.keyword.keyword_text || worst.keyword.keyword || worst.keywordId} consumiu R$${worst.spend.toFixed(2)} com ${worst.orders} pedido(s).`,
+    rationale: `Primeira ação contra prejuízo: ${getKeywordLabel(worst.keyword)} consumiu R$${worst.spend.toFixed(2)} com ${worst.orders} pedido(s).`,
     current_value: worst.bid, proposed_value: newBid, value_before: worst.bid, value_after: newBid, change_pct: -BID_REDUCTION_PCT * 100,
     confidence: 85, risk: 'low', requires_approval: false, status: executed ? 'executed' : 'failed',
     execution_error: executed ? null : String(data?.error || 'Amazon Ads não confirmou o ajuste'), source_function: 'runProfitAfterAdsPauseGuard',

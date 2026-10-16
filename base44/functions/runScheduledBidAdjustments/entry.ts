@@ -1,3 +1,4 @@
+import { getDecisionKeywordText } from '../../shared/decisionKeywordText.js';
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { clamp, numberValue, roundMoney } from '../../shared/profitGuardPolicy.ts';
 
@@ -72,6 +73,7 @@ async function createRestore(base44: any, params: {
     entity_type: 'keyword',
     entity_id: params.keywordId,
     keyword_id: params.keywordId,
+    keyword_text: getDecisionKeywordText({ ...params.payload, keyword_id: params.keywordId }) || getDecisionKeywordText(params.action),
     campaign_id: params.campaignId,
     payload: {
       bid: roundMoney(restoreBid),
@@ -222,7 +224,8 @@ Deno.serve(async (req) => {
         amazon_account_id: aid,
         keyword_id: keywordId,
         campaign_id: action.campaign_id || payload.campaign_id || keyword?.campaign_id || '',
-        keyword: keyword?.keyword_text || keyword?.keyword || payload.keyword_text || payload.keyword || '',
+        keyword_text: getDecisionKeywordText(keyword) || getDecisionKeywordText({ ...payload, keyword_id: keywordId }) || getDecisionKeywordText(action),
+        keyword: getDecisionKeywordText(keyword) || getDecisionKeywordText({ ...payload, keyword_id: keywordId }) || getDecisionKeywordText(action),
         asin: action.asin || payload.asin || keyword?.asin || '',
         old_bid: currentBid,
         new_bid: boundedBid,
@@ -240,7 +243,7 @@ Deno.serve(async (req) => {
         action,
         keywordId,
         campaignId: String(action.campaign_id || keyword?.campaign_id || ''),
-        payload,
+        payload: { ...payload, keyword_text: getDecisionKeywordText(keyword) || getDecisionKeywordText({ ...payload, keyword_id: keywordId }) || getDecisionKeywordText(action) },
         appliedBid: boundedBid,
       });
       if (restoreCreated) stats.restores_created++;
