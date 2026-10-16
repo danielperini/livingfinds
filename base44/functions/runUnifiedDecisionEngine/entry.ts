@@ -140,6 +140,7 @@ Deno.serve(async (request) => {
     const journeyAudit = await invoke(base44, 'classifyMarketplaceCampaignJourneys', common);
     const manualStructureAudit = await invoke(base44, 'enforceCanonicalManualCampaigns', {
       ...common,
+      audit_only: true,
       trigger_type: dailyClose ? 'unified_daily_manual_structure_audit' : 'unified_intraday_manual_structure_audit',
     });
 

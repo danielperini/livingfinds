@@ -353,6 +353,7 @@ Deno.serve(async (request) => {
   try {
     const base44 = createClientFromRequest(request);
     const body = await request.json().catch(() => ({}));
+    const auditOnly = body.audit_only === true || body.dry_run === true;
     if (!body._service_role) return Response.json({ ok: false, error: 'Uso interno' }, { status: 403 });
 
     const accounts = body.amazon_account_id
@@ -369,7 +370,7 @@ Deno.serve(async (request) => {
       base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, null, 2000).catch(() => []),
     ]);
 
-    const productByAsin = new Map(products.filter((p: any) => p.asin).map((p: any) => [String(p.asin).toUpperCase(), p]));
+    const productByAsin = new Map<string, any>(products.filter((p: any) => p.asin).map((p: any) => [String(p.asin).toUpperCase(), p]));
 
     const kwByCampaign = new Map<string, any[]>();
     for (const kw of keywords) {
@@ -434,7 +435,7 @@ Deno.serve(async (request) => {
     }
 
     // ── Auditar via Amazon API campanhas suspeitas ────────────────────────────
-    for (const item of auditViaApi.slice(0, 5)) {
+    for (const item of (auditOnly ? [] : auditViaApi.slice(0, 5))) {
       const apiKws = await fetchKeywordsFromAmazon(base44, accountId, item.cid);
       const exactApiKws = apiKws.filter((k: any) =>
         String(k.matchType || k.match_type || '').toLowerCase() === 'exact' &&
@@ -476,6 +477,17 @@ Deno.serve(async (request) => {
       started_at: startedAt,
       canonical_rule: '1_campaign_1_asin_1_adgroup_1_productad_1_exact_keyword',
     };
+
+    // The decision cycle audits structure locally. Long migrations have their own
+    // explicit invocation; never block the decision engine on a remote restructure.
+    if (auditOnly) {
+      return Response.json({
+        ...report, audit_only: true, dry_run: body.dry_run === true,
+        mutations_created: 0, api_audit_deferred: auditViaApi.length,
+        migration_required: multiKeywordCampaigns.length > 0 || auditViaApi.length > 0,
+        completed_at: new Date().toISOString(),
+      });
+    }
 
     await processRetryQueue(base44, accountId, campaigns, report);
 
