@@ -108,6 +108,7 @@ test('scheduler drain SQL uses the exact scheduler lock keys and deduplicates by
     { function: 'confirmExecutedDecisions', payload: {} },
   ] };
   assert.deepEqual(schedulerLockKeys(schedule), [
+    'livingfinds:deploy-maintenance',
     'livingfinds:scheduler:confirmExecutedDecisions|all-accounts',
     'livingfinds:scheduler:runSalesMode|acct-a',
   ]);
@@ -115,6 +116,7 @@ test('scheduler drain SQL uses the exact scheduler lock keys and deduplicates by
   assert.match(sql, /pg_try_advisory_lock\(hashtextextended\(key, 0\)\)/);
   assert.match(sql, /pg_advisory_unlock\(hashtextextended\(key, 0\)\)/);
   assert.match(sql, /SCHEDULER_DRAIN_LOCKS_ACQUIRED/);
+  assert.match(sql, /livingfinds:deploy-maintenance/);
   assert.match(sql, /pg_sleep\(86400\)/);
 });
 
