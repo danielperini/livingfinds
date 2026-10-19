@@ -39,7 +39,13 @@ release_applied=0
 restored=0
 drain_lock_pid=""
 drain_lock_output=""
+drain_lock_backend_pid=""
 release_scheduler_drain_locks() {
+  if [ -n "$drain_lock_backend_pid" ] && [[ "$drain_lock_backend_pid" =~ ^[0-9]+$ ]]; then
+    docker compose -f "$drain_lock_compose" --project-directory "$VPS_PATH/server" exec -T db \
+      psql -U livingfinds -d livingfinds -Atc "SELECT pg_terminate_backend($drain_lock_backend_pid)" >/dev/null 2>&1 || true
+    drain_lock_backend_pid=""
+  fi
   if [ -n "$drain_lock_pid" ]; then
     kill "$drain_lock_pid" 2>/dev/null || true
     wait "$drain_lock_pid" 2>/dev/null || true
@@ -96,9 +102,12 @@ docker compose -f "$drain_lock_compose" --project-directory "$VPS_PATH/server" e
 drain_lock_pid=$!
 locks_acquired=0
 for attempt in $(seq 1 60); do
-  if grep -q 'SCHEDULER_DRAIN_LOCKS_ACQUIRED' "$drain_lock_output" 2>/dev/null; then
-    locks_acquired=1
-    break
+  if grep -q 'SCHEDULER_DRAIN_LOCKS_ACQUIRED|' "$drain_lock_output" 2>/dev/null; then
+    drain_lock_backend_pid="$(sed -n 's/^SCHEDULER_DRAIN_LOCKS_ACQUIRED|\\([0-9][0-9]*\\)$/\\1/p' "$drain_lock_output" | tail -n 1)"
+    if [[ "$drain_lock_backend_pid" =~ ^[0-9]+$ ]] && kill -0 "$drain_lock_pid" 2>/dev/null; then
+      locks_acquired=1
+      break
+    fi
   fi
   if ! kill -0 "$drain_lock_pid" 2>/dev/null; then
     cat "$drain_lock_output" >&2 || true
