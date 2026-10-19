@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { verifyDeployReceipt } from './verify-deploy-receipt.mjs';
 import { verifyPublicDeploy, requiredFunctions } from './verify-public-deploy.mjs';
+import { schedulerLockKeys, buildSchedulerDrainSql } from './scheduler-drain-locks.mjs';
 
 const bash = process.env.BASH_TEST_PATH || (process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash');
 const sha = 'a'.repeat(40);
@@ -78,8 +79,13 @@ test('remote script parses and workflow requires both SSH success and receipt', 
   assert.doesNotMatch(workflow, /bash -s" <<'REMOTE'/);
   const script = readFileSync(remote, 'utf8');
   assert.match(script, /read -r previous_scheduler previous_motor_worker previous_release < "\$automation_state_file"/);
-  assert.match(script, /DRAIN_WAIT=health_unavailable/);
+  assert.match(script, /SCHEDULER_DRAIN=locks_acquired/);
+  assert.match(script, /motor_execution_runs WHERE status='running'/);
+  assert.match(script, /motor_decision_execution_claims WHERE status='authorized'/);
+  assert.match(script, /release_scheduler_drain_locks/);
+  assert.doesNotMatch(script, /DRAIN_WAIT=health_unavailable/);
   assert.doesNotMatch(script, /retain_repricing_snapshots_manual/);
+  assert.match(workflow, /node scripts\/scheduler-drain-locks\.mjs > server\/\.scheduler-drain-locks\.sql/);
 });
 
 test('file execution preserves a real failure and does not emit a receipt', () => {
@@ -93,4 +99,26 @@ test('file execution preserves a real failure and does not emit a receipt', () =
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('scheduler drain SQL uses the exact scheduler lock keys and deduplicates by function/account', () => {
+  const schedule = { jobs: [
+    { function: 'runSalesMode', payload: { amazon_account_id: 'acct-a' } },
+    { function: 'runSalesMode', payload: { amazon_account_id: 'acct-a' } },
+    { function: 'confirmExecutedDecisions', payload: {} },
+  ] };
+  assert.deepEqual(schedulerLockKeys(schedule), [
+    'livingfinds:scheduler:confirmExecutedDecisions|all-accounts',
+    'livingfinds:scheduler:runSalesMode|acct-a',
+  ]);
+  const sql = buildSchedulerDrainSql(schedule);
+  assert.match(sql, /pg_try_advisory_lock\(hashtextextended\(key, 0\)\)/);
+  assert.match(sql, /pg_advisory_unlock\(hashtextextended\(key, 0\)\)/);
+  assert.match(sql, /SCHEDULER_DRAIN_LOCKS_ACQUIRED/);
+  assert.match(sql, /pg_sleep\(86400\)/);
+});
+
+test('scheduler lock builder rejects an empty or malformed schedule', () => {
+  assert.throws(() => schedulerLockKeys({ jobs: [] }), /at least one job/);
+  assert.throws(() => schedulerLockKeys({ jobs: [{ function: 'bad;select' }] }), /invalid function/);
 });
