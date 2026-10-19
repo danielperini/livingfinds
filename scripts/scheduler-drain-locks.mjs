@@ -53,7 +53,7 @@ BEGIN
 END
 $drain$;
 RESET statement_timeout;
-SELECT 'SCHEDULER_DRAIN_LOCKS_ACQUIRED';
+SELECT 'SCHEDULER_DRAIN_LOCKS_ACQUIRED|' || pg_backend_pid()::text;
 SELECT pg_sleep(86400);
 `;
 }
