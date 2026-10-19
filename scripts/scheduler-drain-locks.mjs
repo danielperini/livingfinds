@@ -14,6 +14,8 @@ export function schedulerLockKeys(schedule) {
     const account = String(job.payload?.amazon_account_id || 'all-accounts');
     keys.add(`livingfinds:scheduler:${job.function}|${account}`);
   }
+  // This transaction lock prevents the durable worker from claiming new queued runs during deploy.
+  keys.add('livingfinds:deploy-maintenance');
   return [...keys].sort();
 }
 
