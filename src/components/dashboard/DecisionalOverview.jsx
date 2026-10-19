@@ -179,6 +179,24 @@ export default function DecisionalOverview({
   decisions = [], bidChanges = [], onRefresh,
 }) {
   const [refreshing, setRefreshing] = useState(false);
+  const [motorHealth, setMotorHealth] = useState({ loading: true, data: null, error: null, checkedAt: null });
+
+  useEffect(() => {
+    let active = true;
+    const loadMotorHealth = async () => {
+      try {
+        const response = await fetch('/health', { cache: 'no-store' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        if (active) setMotorHealth({ loading: false, data, error: null, checkedAt: new Date().toISOString() });
+      } catch (error) {
+        if (active) setMotorHealth({ loading: false, data: null, error: error?.message || 'health_unavailable', checkedAt: new Date().toISOString() });
+      }
+    };
+    void loadMotorHealth();
+    const timer = window.setInterval(loadMotorHealth, 30_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
 
   const snapshot30 = useMemo(() => {
     const { start, end } = lastXDaysRange(30);
@@ -318,7 +336,7 @@ export default function DecisionalOverview({
           <h2 className="text-sm font-bold text-theme-primary">O que o Motor está fazendo agora</h2>
           <p className="text-[11px] text-theme-muted hidden sm:block">Toque na seta para abrir o colóquio da decisão.</p>
         </div>
-        <MotorDecisionFeed decisions={decisions} bidChanges={bidChanges} accountId={account?.id} />
+        <MotorDecisionFeed decisions={decisions} bidChanges={bidChanges} accountId={account?.id} motorHealth={motorHealth} />
       </div>
     </div>
   );
