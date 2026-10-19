@@ -16,7 +16,7 @@ function compactStage(stage: any) {
     'ok','reviewed','campaigns_reviewed','products_reviewed','decisions_created','created',
     'updated','blocked','warnings','errors','error','reason','skipped','proposed','executed',
     'candidates','count','records_processed','spend','sales','acos','roas','tacos','cpc','ctr',
-    'conversion_rate','orders','clicks','impressions',
+    'conversion_rate','orders','clicks','impressions','failed_stages',
   ];
   const out: Record<string, unknown> = {};
   for (const key of keys) {
@@ -26,7 +26,7 @@ function compactStage(stage: any) {
     else if (Array.isArray(value)) out[key] = value.slice(0, 8).map((item: any) =>
       typeof item === 'string' ? item.slice(0, 200) :
       (item && typeof item === 'object' ? Object.fromEntries(
-        ['action','status','reason','error','campaign_id','asin','count','spend','sales','acos','roas','tacos']
+        ['stage','account_id','action','status','reason','error','campaign_id','asin','count','spend','sales','acos','roas','tacos']
           .filter((name) => item[name] !== undefined)
           .map((name) => [name, typeof item[name] === 'string' ? item[name].slice(0, 200) : item[name]])
       ) : item));

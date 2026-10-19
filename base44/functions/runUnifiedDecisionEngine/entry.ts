@@ -1,5 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { inventoryDecisionPreflight } from '../../shared/inventorySyncPolicy.ts';
+import { collectDetailedStageFailures } from "../../shared/canonicalCyclePolicy.ts";
 import { reportDurableMotorRunProgress } from '../../shared/durableMotorRunProgress.ts';
 
 const invoke = async (base44: any, name: string, payload: Record<string, unknown>) => {
@@ -280,17 +281,7 @@ Deno.serve(async (request) => {
       servingGrowth, deliveryHealth, daypartConfiguration, daypartBudgetRestore,
       scheduledCampaignState, scheduledBidDaypart, repricing, scopeAfter,
     };
-    const failedStages = Object.entries(stages)
-      .filter(([, stage]: [string, any]) => stage?.ok === false)
-      .map(([name, stage]: [string, any]) => ({
-        stage: name,
-        error: String(stage?.error || stage?.reason || 'stage_returned_ok_false')
-          .replace(/Bearer\s+[A-Za-z0-9._~+\/-]+=*/gi, 'Bearer [REDACTED]')
-          .replace(/(refresh_token|client_secret|access_token)[=:]\s*[^\s,}]+/gi, '$1=[REDACTED]')
-          .replace(/[\r\n\t]+/g, ' ')
-          .slice(0, 300),
-      }))
-      .slice(0, 12);
+    const failedStages = collectDetailedStageFailures(stages);
     return Response.json({
       ok: failedStages.length === 0,
       failed_stages: failedStages,
