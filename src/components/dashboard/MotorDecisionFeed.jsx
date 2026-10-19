@@ -123,6 +123,24 @@ function buildHistoryCsv(items) {
   return `\uFEFF${[header, ...rows].join('\n')}`;
 }
 
+function DailyCycleStatus({ notice }) {
+  if (!notice) return null;
+  const tone = {
+    danger: 'border-red-200 bg-red-50 text-red-800',
+    warning: 'border-amber-200 bg-amber-50 text-amber-800',
+    info: 'border-blue-200 bg-blue-50 text-blue-800',
+    success: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+    neutral: 'border-[var(--border-color)] bg-theme-card-2 text-theme-secondary',
+  }[notice.tone] || 'border-[var(--border-color)] bg-theme-card-2 text-theme-secondary';
+  return (
+    <div role={notice.tone === 'danger' ? 'alert' : 'status'} className={`mb-3 rounded-xl border px-3 py-2.5 ${tone}`}>
+      <p className="text-xs font-semibold">{notice.title}</p>
+      <p className="mt-1 text-[11px] leading-relaxed">{notice.message}</p>
+      {notice.checkedAt && <p className="mt-1 text-[10px] opacity-75">Verificado {new Date(notice.checkedAt).toLocaleTimeString('pt-BR')}</p>}
+    </div>
+  );
+}
+
 function ConfirmationPill({ status }) {
   const tones = {
     green: 'bg-emerald-50 text-emerald-700 border-emerald-200',
@@ -219,12 +237,12 @@ function AccordionItem({ item, isOpen, onToggle }) {
  * antes de qualquer envio à Amazon ficam preservadas no histórico/CSV para
  * auditoria, sem poluir o painel operacional.
  */
-export default function MotorDecisionFeed({ decisions, bidChanges, accountId }) {
+export default function MotorDecisionFeed({ decisions, bidChanges, accountId, motorHealth }) {
   const [page, setPage] = useState(1);
   const [openSet, setOpenSet] = useState(() => new Set());
   const [showHistory, setShowHistory] = useState(false);
   const [cleaning, setCleaning] = useState(false);
-  const [historyMessage, setHistoryMessage] = useState('');
+  const [historyMessage, setHistoryMessage] = useState('');\n  const cycleNotice = useMemo(() => dailyMotorNotice(motorHealth, motorHealth?.checkedAt), [motorHealth]);
 
   const merged = useMemo(() => {
     const out = [];
@@ -370,9 +388,10 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId }) 
   if (totalItems === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-8 text-center">
+        <DailyCycleStatus notice={cycleNotice} />
         <Bot className="w-7 h-7 text-theme-muted mb-2" />
-        <p className="text-sm text-theme-secondary font-medium">Motor em repouso nas últimas 24h</p>
-        <p className="text-xs text-theme-muted mt-1">Nenhuma decisão nova exige execução agora. Bloqueios locais continuam disponíveis no histórico para auditoria.</p>
+        <p className="text-sm text-theme-secondary font-medium">Nenhuma decisão operacional aparece neste recorte de 24h</p>
+        <p className="text-xs text-theme-muted mt-1">O estado do ciclo diário está indicado acima; decisões bloqueadas ficam no histórico para auditoria.</p>
         {merged.length > 0 && (
           <>
             <button type="button" onClick={toggleHistory} className="mt-3 text-xs font-semibold text-blue-600 hover:text-blue-700">
@@ -388,6 +407,7 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId }) 
 
   return (
     <div className="space-y-4">
+      <DailyCycleStatus notice={cycleNotice} />
       <div className="flex items-start justify-between gap-3 px-1 flex-wrap">
         <div>
           <p className="text-[11px] text-theme-muted">
