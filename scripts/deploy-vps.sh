@@ -17,6 +17,7 @@ tar xzf /tmp/deploy.tar.gz -C "$stage"
 test -f "$stage/dist/index.html"
 test -f "$stage/server/migrations/20261015_optimization_decision_idempotency_preflight.sql"
 test -f "$stage/server/migrations/20261015_optimization_decision_idempotency_unique.sql"
+test -s "$stage/server/.scheduler-drain-locks.sql"
 
 previous_scheduler="$(docker compose -f "$compose_file" --project-directory "$VPS_PATH/server" exec -T app sh -lc 'printf %s "${ENABLE_SCHEDULER:-true}"')"
 case "$previous_scheduler" in true|false) ;; *) echo 'Estado anterior do scheduler não pôde ser confirmado.' >&2; exit 3;; esac
@@ -36,6 +37,25 @@ case "$previous_scheduler/$previous_motor_worker" in true/true|true/false|false/
 paused=0
 release_applied=0
 restored=0
+drain_lock_pid=""
+drain_lock_output=""
+drain_lock_backend_pid=""
+release_scheduler_drain_locks() {
+  if [ -n "$drain_lock_backend_pid" ] && [[ "$drain_lock_backend_pid" =~ ^[0-9]+$ ]]; then
+    docker compose -f "$drain_lock_compose" --project-directory "$VPS_PATH/server" exec -T db \
+      psql -U livingfinds -d livingfinds -Atc "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid=$drain_lock_backend_pid AND application_name='livingfinds-deploy-drain-$RELEASE_SHA'" >/dev/null 2>&1 || true
+    drain_lock_backend_pid=""
+  fi
+  if [ -n "$drain_lock_pid" ]; then
+    kill "$drain_lock_pid" 2>/dev/null || true
+    wait "$drain_lock_pid" 2>/dev/null || true
+    drain_lock_pid=""
+  fi
+  if [ -n "$drain_lock_output" ]; then
+    rm -f "$drain_lock_output"
+    drain_lock_output=""
+  fi
+}
 restore_automation() {
   if [ "$paused" = 1 ] && [ "$restored" = 0 ]; then
     set +e
@@ -64,23 +84,59 @@ restore_automation() {
     restored=1
     set -e
   fi
+  release_scheduler_drain_locks
 }
 trap restore_automation EXIT
 
-echo '--- aguardando tarefas do scheduler terminarem antes da janela de manutenção ---'
-drained=0
+echo '--- bloqueando novas entradas do scheduler e aguardando a drenagem ---'
+drain_lock_output="$VPS_PATH/.deploy/scheduler-drain-$RELEASE_SHA.log"
+drain_lock_compose="$compose_file"
+if ! docker compose -f "$drain_lock_compose" --project-directory "$VPS_PATH/server" ps --services --status running | grep -qx 'db'; then
+  drain_lock_compose="$VPS_PATH/server/docker-compose.deploy.yml"
+  cp "$stage/server/docker-compose.yml" "$drain_lock_compose"
+  chmod 600 "$drain_lock_compose"
+fi
+docker compose -f "$drain_lock_compose" --project-directory "$VPS_PATH/server" exec -e "PGAPPNAME=livingfinds-deploy-drain-$RELEASE_SHA" -T db \
+  psql -v ON_ERROR_STOP=1 -U livingfinds -d livingfinds \
+  < "$stage/server/.scheduler-drain-locks.sql" > "$drain_lock_output" 2>&1 &
+drain_lock_pid=$!
+locks_acquired=0
 for attempt in $(seq 1 60); do
-  if ! health="$(curl --max-time 10 -fsS http://127.0.0.1:8000/health)"; then
-    echo "DRAIN_WAIT=health_unavailable|attempt=$attempt"
-    sleep 10
-    continue
+  if grep -q 'SCHEDULER_DRAIN_LOCKS_ACQUIRED|' "$drain_lock_output" 2>/dev/null; then
+    drain_lock_backend_pid="$(sed -n 's/^SCHEDULER_DRAIN_LOCKS_ACQUIRED|\\([0-9][0-9]*\\)$/\\1/p' "$drain_lock_output" | tail -n 1)"
+    if [[ "$drain_lock_backend_pid" =~ ^[0-9]+$ ]] && kill -0 "$drain_lock_pid" 2>/dev/null; then
+      locks_acquired=1
+      break
+    fi
   fi
-  running="$(printf '%s' "$health" | sed -n 's/.*"running_jobs":\([0-9][0-9]*\).*/\1/p')"
-  test -n "$running"
-  if [ "$running" = 0 ]; then drained=1; break; fi
+  if ! kill -0 "$drain_lock_pid" 2>/dev/null; then
+    cat "$drain_lock_output" >&2 || true
+    echo 'Não foi possível adquirir os locks distribuídos; deploy cancelado sem reiniciar o app.' >&2
+    exit 4
+  fi
   sleep 10
 done
-if [ "$drained" != 1 ]; then echo 'Scheduler não drenou em 10 minutos; implantação cancelada sem reiniciar o app.' >&2; exit 4; fi
+if [ "$locks_acquired" != 1 ]; then
+  echo 'Scheduler não drenou em 10 minutos; deploy cancelado sem reiniciar o app.' >&2
+  exit 4
+fi
+echo 'SCHEDULER_DRAIN=locks_acquired'
+
+# The health counter is process-local and can be stale. Confirm durable work directly.
+drained=0
+for attempt in $(seq 1 60); do
+  active_runs="$(docker compose -f "$drain_lock_compose" --project-directory "$VPS_PATH/server" exec -T db psql -U livingfinds -d livingfinds -Atc \
+    "SELECT count(*) FROM motor_execution_runs WHERE status='running'")"
+  queued_runs="$(docker compose -f "$drain_lock_compose" --project-directory "$VPS_PATH/server" exec -T db psql -U livingfinds -d livingfinds -Atc \
+    "SELECT count(*) FROM motor_execution_runs WHERE status='queued'")"
+  active_claims="$(docker compose -f "$drain_lock_compose" --project-directory "$VPS_PATH/server" exec -T db psql -U livingfinds -d livingfinds -Atc \
+    "SELECT count(*) FROM motor_decision_execution_claims WHERE status='authorized' AND lease_expires_at > now()")"
+  case "$active_runs/$queued_runs/$active_claims" in (*[!0-9/]*) echo 'Estado persistente de execuções não pôde ser validado.' >&2; exit 4;; esac
+  echo "DRAIN_WAIT=durable_work|attempt=$attempt|running=$active_runs|queued=$queued_runs|authorized_claims=$active_claims"
+  if [ "$active_runs" = 0 ] && [ "$queued_runs" = 0 ] && [ "$active_claims" = 0 ]; then drained=1; break; fi
+  sleep 10
+done
+if [ "$drained" != 1 ]; then echo 'Tarefas persistentes ou autorizações ainda ativas; deploy cancelado sem reiniciar o app.' >&2; exit 4; fi
 extra_engine_processes="$(docker compose -f "$compose_file" --project-directory "$VPS_PATH/server" exec -T app sh -lc '
   n=0
   for f in /proc/[0-9]*/cmdline; do
@@ -170,7 +226,7 @@ echo '--- instalando a release e verificando backend ---'
 release_applied=1
 rm -rf base44 dist server/src
 tar xzf /tmp/deploy.tar.gz -C "$VPS_PATH"
-rm -f server/docker-compose.deploy.yml .dockerignore
+rm -f server/docker-compose.deploy.yml server/.scheduler-drain-locks.sql .dockerignore
 ENABLE_SCHEDULER=false ENABLE_MOTOR_RUN_WORKER=false \
   docker compose -f "$compose_file" --project-directory "$VPS_PATH/server" up -d --build app
 ready=0
@@ -207,6 +263,7 @@ docker compose -f "$compose_file" --project-directory "$VPS_PATH/server" exec -T
 '
 restored=1
 paused=0
+release_scheduler_drain_locks
 trap - EXIT
 rm -f "$automation_state_file"
 echo "DEPLOY_VERIFIED_SHA=$RELEASE_SHA"

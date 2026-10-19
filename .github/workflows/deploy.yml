@@ -57,6 +57,7 @@ jobs:
           VPS_PATH: ${{ secrets.VPS_PATH }}
           SSHOPTS: -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o ConnectTimeout=30
         run: |
+          node scripts/scheduler-drain-locks.mjs > server/.scheduler-drain-locks.sql
           tar czf /tmp/deploy.tar.gz base44 server dist
           scp $SSHOPTS /tmp/deploy.tar.gz "$VPS_USER@$VPS_HOST:/tmp/deploy.tar.gz"
 

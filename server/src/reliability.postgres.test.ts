@@ -333,6 +333,23 @@ Deno.test({
         connect_timeout: 8,
         idle_timeout: 5,
       });
+      const deployGate = await client.reserve();
+      try {
+        await deployGate.unsafe(
+          "select pg_advisory_lock(hashtextextended($1, 0))",
+          ['livingfinds:deploy-maintenance'],
+        );
+        const blockedDuringDeploy = await claimNextRunWithSql(restartedQueueWorker, runTable);
+        if (blockedDuringDeploy !== null) {
+          throw new Error('Worker claimou uma tarefa durante a janela de manutenção.');
+        }
+      } finally {
+        await deployGate.unsafe(
+          "select pg_advisory_unlock(hashtextextended($1, 0))",
+          ['livingfinds:deploy-maintenance'],
+        ).catch(() => {});
+        await deployGate.release();
+      }
       const resumed = await claimNextRunWithSql(restartedQueueWorker, runTable);
       if (
         resumed?.id !== 'queued-1' || resumed.status !== 'running' ||
