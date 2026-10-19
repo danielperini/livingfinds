@@ -81,6 +81,7 @@ test('remote script parses and workflow requires both SSH success and receipt', 
   assert.match(script, /read -r previous_scheduler previous_motor_worker previous_release < "\$automation_state_file"/);
   assert.match(script, /SCHEDULER_DRAIN=locks_acquired/);
   assert.match(script, /motor_execution_runs WHERE status='running'/);
+  assert.match(script, /motor_execution_runs WHERE status='queued'/);
   assert.match(script, /motor_decision_execution_claims WHERE status='authorized'/);
   assert.match(script, /release_scheduler_drain_locks/);
   assert.doesNotMatch(script, /DRAIN_WAIT=health_unavailable/);
