@@ -51,7 +51,6 @@ release_scheduler_drain_locks() {
   fi
 }
 restore_automation() {
-  release_scheduler_drain_locks
   if [ "$paused" = 1 ] && [ "$restored" = 0 ]; then
     set +e
     if [ "$release_applied" = 1 ] && [ -d "$rollback/base44" ]; then
@@ -79,6 +78,7 @@ restore_automation() {
     restored=1
     set -e
   fi
+  release_scheduler_drain_locks
 }
 trap restore_automation EXIT
 
