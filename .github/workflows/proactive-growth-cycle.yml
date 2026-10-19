@@ -41,6 +41,10 @@ jobs:
             const startRun = async (functionName, requestKey, payload) => {
               const accepted = await post(\"/api/motor-runs\", { function_name: functionName, request_key: requestKey, account_id: payload.amazon_account_id || null, payload });
               if (!accepted.run_id) throw new Error(\"O endpoint durável não devolveu run_id.\");
+              if (accepted.blocked_by_existing) {
+                console.log(\"MOTOR_RUN_BLOCKED=\" + JSON.stringify({ run_id: accepted.run_id, status: accepted.status, reason: \"account_scope_has_unreconciled_run\" }));
+                throw new Error(\"Execução bloqueada por run anterior ainda não reconciliado: \" + accepted.run_id + \" (\" + accepted.status + \"). Nenhuma nova tarefa foi iniciada.\");
+              }
               console.log(\"MOTOR_RUN_ACCEPTED=\" + JSON.stringify({ run_id: accepted.run_id, status: accepted.status, reused: accepted.reused }));
               return accepted.run_id;
             };
