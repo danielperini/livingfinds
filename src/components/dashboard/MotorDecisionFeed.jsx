@@ -243,7 +243,8 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId, mo
   const [openSet, setOpenSet] = useState(() => new Set());
   const [showHistory, setShowHistory] = useState(false);
   const [cleaning, setCleaning] = useState(false);
-  const [historyMessage, setHistoryMessage] = useState('');\n  const cycleNotice = useMemo(() => dailyMotorNotice(motorHealth, motorHealth?.checkedAt), [motorHealth]);
+  const [historyMessage, setHistoryMessage] = useState('');
+  const cycleNotice = useMemo(() => dailyMotorNotice(motorHealth, motorHealth?.checkedAt), [motorHealth]);
 
   const merged = useMemo(() => {
     const out = [];
