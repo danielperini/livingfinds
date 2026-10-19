@@ -82,3 +82,42 @@ export function resolveCanonicalCycleOutcome(
     partial: coreOk && !supervisionOk,
   };
 }
+
+/** Preserve bounded, secret-safe details from nested decision-engine failures. */
+export function collectDetailedStageFailures(
+  stages: Record<string, unknown>,
+  limit = 12,
+): Array<{ stage: string; error: string; account_id?: string }> {
+  const failures: Array<{ stage: string; error: string; account_id?: string }> = [];
+  const safeError = (value: unknown) => String(value || 'stage_returned_ok_false')
+    .replace(/Bearer\s+[A-Za-z0-9._~+\/-]+=*/gi, 'Bearer [REDACTED]')
+    .replace(/(refresh_token|client_secret|access_token)[=:]\s*[^\s,}]+/gi, '$1=[REDACTED]')
+    .replace(/[\r\n\t]+/g, ' ')
+    .slice(0, 300);
+  for (const [name, raw] of Object.entries(stages)) {
+    if (!raw || typeof raw !== 'object' || (raw as Record<string, unknown>).ok !== false) continue;
+    const result = raw as Record<string, any>;
+    let nestedFailure = false;
+    if (Array.isArray(result.results)) for (const row of result.results) {
+      if (!row || typeof row !== 'object' || !row.stages || typeof row.stages !== 'object') continue;
+      for (const [childName, child] of Object.entries(row.stages) as Array<[string, any]>) {
+        if (child?.ok !== false) continue;
+        nestedFailure = true;
+        failures.push({
+          stage: (name + '.' + childName).slice(0, 160),
+          error: safeError(child.error || child.reason),
+          ...(row.amazon_account_id || row.account_id
+            ? { account_id: String(row.amazon_account_id || row.account_id).slice(0, 100) }
+            : {}),
+        });
+        if (failures.length >= limit) return failures;
+      }
+    }
+    if (!nestedFailure) failures.push({
+      stage: name.slice(0, 160),
+      error: safeError(result.error || result.reason),
+    });
+    if (failures.length >= limit) return failures;
+  }
+  return failures;
+}

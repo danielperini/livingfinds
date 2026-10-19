@@ -1,6 +1,6 @@
 import { assertEquals } from 'jsr:@std/assert@1';
 import { campaignCoverageAsin, campaignCoverageProductEligible } from './campaignCoverageEligibility.ts';
-import { collectUnconfirmedCycleStages, describeUnconfirmedCycleStage, isConfirmedCycleStage, resolveCanonicalCycleOutcome, isDecisionExecutionConfirmed, shouldRecoverDailyCycle, shouldRepairSkuCoverage } from './canonicalCyclePolicy.ts';
+import { collectUnconfirmedCycleStages, collectDetailedStageFailures, describeUnconfirmedCycleStage, isConfirmedCycleStage, resolveCanonicalCycleOutcome, isDecisionExecutionConfirmed, shouldRecoverDailyCycle, shouldRepairSkuCoverage } from './canonicalCyclePolicy.ts';
 
 Deno.test('etapa do motor só é sucesso com confirmação explícita', () => {
   assertEquals(isConfirmedCycleStage({ ok: true }), true);
@@ -81,4 +81,22 @@ Deno.test('falha de etapa central continua bloqueando o ciclo, mesmo com supervi
   assertEquals(resolveCanonicalCycleOutcome([], false, null), {
     ok: true, core_ok: true, supervision_ok: true, partial: false,
   });
+});
+
+Deno.test("preserves nested lifecycle stage failures and redacts credentials", () => {
+  const failures = collectDetailedStageFailures({ campaignLifecycle: {
+    ok: false,
+    results: [{ amazon_account_id: "account-7", stages: {
+      kickoff: { ok: true },
+      harvesting: { ok: false, error: "Amazon HTTP 429: Bearer abc123" },
+      budget: { ok: false, error: "access_token=secret" },
+    } }],
+  } });
+  assertEquals(failures, [
+    { stage: "campaignLifecycle.harvesting", error: "Amazon HTTP 429: Bearer [REDACTED]", account_id: "account-7" },
+    { stage: "campaignLifecycle.budget", error: "access_token=[REDACTED]", account_id: "account-7" },
+  ]);
+  assertEquals(describeUnconfirmedCycleStage("unified_engine", {
+    ok: false, failed_stages: failures,
+  }).details, failures.map(({ stage, error }) => ({ stage, error })));
 });
