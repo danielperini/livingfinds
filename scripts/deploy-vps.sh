@@ -127,11 +127,13 @@ drained=0
 for attempt in $(seq 1 60); do
   active_runs="$(docker compose -f "$drain_lock_compose" --project-directory "$VPS_PATH/server" exec -T db psql -U livingfinds -d livingfinds -Atc \
     "SELECT count(*) FROM motor_execution_runs WHERE status='running'")"
+  queued_runs="$(docker compose -f "$drain_lock_compose" --project-directory "$VPS_PATH/server" exec -T db psql -U livingfinds -d livingfinds -Atc \
+    "SELECT count(*) FROM motor_execution_runs WHERE status='queued'")"
   active_claims="$(docker compose -f "$drain_lock_compose" --project-directory "$VPS_PATH/server" exec -T db psql -U livingfinds -d livingfinds -Atc \
     "SELECT count(*) FROM motor_decision_execution_claims WHERE status='authorized' AND lease_expires_at > now()")"
-  case "$active_runs/$active_claims" in (*[!0-9/]*) echo 'Estado persistente de execuções não pôde ser validado.' >&2; exit 4;; esac
-  echo "DRAIN_WAIT=durable_work|attempt=$attempt|runs=$active_runs|authorized_claims=$active_claims"
-  if [ "$active_runs" = 0 ] && [ "$active_claims" = 0 ]; then drained=1; break; fi
+  case "$active_runs/$queued_runs/$active_claims" in (*[!0-9/]*) echo 'Estado persistente de execuções não pôde ser validado.' >&2; exit 4;; esac
+  echo "DRAIN_WAIT=durable_work|attempt=$attempt|running=$active_runs|queued=$queued_runs|authorized_claims=$active_claims"
+  if [ "$active_runs" = 0 ] && [ "$queued_runs" = 0 ] && [ "$active_claims" = 0 ]; then drained=1; break; fi
   sleep 10
 done
 if [ "$drained" != 1 ]; then echo 'Tarefas persistentes ou autorizações ainda ativas; deploy cancelado sem reiniciar o app.' >&2; exit 4; fi
