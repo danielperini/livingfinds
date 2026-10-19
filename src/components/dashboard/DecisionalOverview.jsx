@@ -168,7 +168,7 @@ function AttentionPanel({ accountId, decisions = [] }) {
 
 /**
  * DecisionalOverview — as 3 faixas do dashboard Clean Light Pro.
- * Props (todos já carregados pela página; zero polling novo):
+ * Props (dados da página e estado do ciclo consultado em /health):
  *  - account, user, campaigns
  *  - metricsDaily (ou allMetrics), salesDaily
  *  - decisions, bidChanges
