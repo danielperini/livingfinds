@@ -43,7 +43,7 @@ drain_lock_backend_pid=""
 release_scheduler_drain_locks() {
   if [ -n "$drain_lock_backend_pid" ] && [[ "$drain_lock_backend_pid" =~ ^[0-9]+$ ]]; then
     docker compose -f "$drain_lock_compose" --project-directory "$VPS_PATH/server" exec -T db \
-      psql -U livingfinds -d livingfinds -Atc "SELECT pg_terminate_backend($drain_lock_backend_pid)" >/dev/null 2>&1 || true
+      psql -U livingfinds -d livingfinds -Atc "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid=$drain_lock_backend_pid AND application_name='livingfinds-deploy-drain-$RELEASE_SHA'" >/dev/null 2>&1 || true
     drain_lock_backend_pid=""
   fi
   if [ -n "$drain_lock_pid" ]; then
@@ -96,7 +96,7 @@ if ! docker compose -f "$drain_lock_compose" --project-directory "$VPS_PATH/serv
   cp "$stage/server/docker-compose.yml" "$drain_lock_compose"
   chmod 600 "$drain_lock_compose"
 fi
-docker compose -f "$drain_lock_compose" --project-directory "$VPS_PATH/server" exec -T db \
+docker compose -f "$drain_lock_compose" --project-directory "$VPS_PATH/server" exec -e "PGAPPNAME=livingfinds-deploy-drain-$RELEASE_SHA" -T db \
   psql -v ON_ERROR_STOP=1 -U livingfinds -d livingfinds \
   < "$stage/server/.scheduler-drain-locks.sql" > "$drain_lock_output" 2>&1 &
 drain_lock_pid=$!
