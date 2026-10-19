@@ -225,6 +225,12 @@ export async function claimNextRunWithSql(
   const table = quoteRunTable(tableName);
   const leaseId = crypto.randomUUID();
   return await client.begin(async (tx: any) => {
+    // A deploy session holds this lock while the scheduler and active work drain.
+    // Claims that started before that gate finish first; new claims remain queued.
+    const maintenance = await tx.unsafe(
+      "select pg_try_advisory_xact_lock(hashtextextended('livingfinds:deploy-maintenance', 0)) as acquired",
+    ) as unknown as Array<{ acquired: boolean }>;
+    if (!maintenance[0]?.acquired) return null;
     const candidates = await tx.unsafe(
       `select id,account_scope from ${table} where status='queued' order by created_at asc for update skip locked limit 1`,
     ) as unknown as DbRow[];
