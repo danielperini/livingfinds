@@ -121,6 +121,17 @@ test('scheduler drain SQL uses the exact scheduler lock keys and deduplicates by
   assert.match(sql, /pg_sleep\(86400\)/);
 });
 
+test('deploy confirms scheduler locks from the live PostgreSQL session without buffered psql output', () => {
+  const remote = readFileSync(new URL('./deploy-vps.sh', import.meta.url), 'utf8');
+  const applicationName = `livingfinds-deploy-${sha.slice(0, 24)}`;
+  assert.equal(applicationName.length, 43);
+  assert.ok(Buffer.byteLength(applicationName) <= 63);
+  assert.match(remote, /drain_lock_app="livingfinds-deploy-\$\{RELEASE_SHA:0:24\}"/);
+  assert.match(remote, /PGAPPNAME=\$drain_lock_app/);
+  assert.match(remote, /application_name='\$drain_lock_app'.*query LIKE '%pg_sleep\(86400\)%'/s);
+  assert.doesNotMatch(remote, /grep -q 'SCHEDULER_DRAIN_LOCKS_ACQUIRED\|'/);
+});
+
 test('scheduler lock builder rejects an empty or malformed schedule', () => {
   assert.throws(() => schedulerLockKeys({ jobs: [] }), /at least one job/);
   assert.throws(() => schedulerLockKeys({ jobs: [{ function: 'bad;select' }] }), /invalid function/);

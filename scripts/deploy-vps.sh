@@ -40,10 +40,11 @@ restored=0
 drain_lock_pid=""
 drain_lock_output=""
 drain_lock_backend_pid=""
+drain_lock_app="livingfinds-deploy-${RELEASE_SHA:0:24}"
 release_scheduler_drain_locks() {
   if [ -n "$drain_lock_backend_pid" ] && [[ "$drain_lock_backend_pid" =~ ^[0-9]+$ ]]; then
     docker compose -f "$drain_lock_compose" --project-directory "$VPS_PATH/server" exec -T db \
-      psql -U livingfinds -d livingfinds -Atc "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid=$drain_lock_backend_pid AND application_name='livingfinds-deploy-drain-$RELEASE_SHA'" >/dev/null 2>&1 || true
+      psql -U livingfinds -d livingfinds -Atc "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid=$drain_lock_backend_pid AND application_name='$drain_lock_app'" >/dev/null 2>&1 || true
     drain_lock_backend_pid=""
   fi
   if [ -n "$drain_lock_pid" ]; then
@@ -96,18 +97,17 @@ if ! docker compose -f "$drain_lock_compose" --project-directory "$VPS_PATH/serv
   cp "$stage/server/docker-compose.yml" "$drain_lock_compose"
   chmod 600 "$drain_lock_compose"
 fi
-docker compose -f "$drain_lock_compose" --project-directory "$VPS_PATH/server" exec -e "PGAPPNAME=livingfinds-deploy-drain-$RELEASE_SHA" -T db \
+docker compose -f "$drain_lock_compose" --project-directory "$VPS_PATH/server" exec -e "PGAPPNAME=$drain_lock_app" -T db \
   psql -v ON_ERROR_STOP=1 -U livingfinds -d livingfinds \
   < "$stage/server/.scheduler-drain-locks.sql" > "$drain_lock_output" 2>&1 &
 drain_lock_pid=$!
 locks_acquired=0
 for attempt in $(seq 1 60); do
-  if grep -q 'SCHEDULER_DRAIN_LOCKS_ACQUIRED|' "$drain_lock_output" 2>/dev/null; then
-    drain_lock_backend_pid="$(sed -n 's/^SCHEDULER_DRAIN_LOCKS_ACQUIRED|\\([0-9][0-9]*\\)$/\\1/p' "$drain_lock_output" | tail -n 1)"
-    if [[ "$drain_lock_backend_pid" =~ ^[0-9]+$ ]] && kill -0 "$drain_lock_pid" 2>/dev/null; then
-      locks_acquired=1
-      break
-    fi
+  drain_lock_backend_pid="$(docker compose -f "$drain_lock_compose" --project-directory "$VPS_PATH/server" exec -T db psql -U livingfinds -d livingfinds -Atc \
+    "SELECT pid FROM pg_stat_activity WHERE application_name='$drain_lock_app' AND state='active' AND query LIKE '%pg_sleep(86400)%' ORDER BY backend_start DESC LIMIT 1" 2>/dev/null || true)"
+  if [[ "$drain_lock_backend_pid" =~ ^[0-9]+$ ]] && kill -0 "$drain_lock_pid" 2>/dev/null; then
+    locks_acquired=1
+    break
   fi
   if ! kill -0 "$drain_lock_pid" 2>/dev/null; then
     cat "$drain_lock_output" >&2 || true
