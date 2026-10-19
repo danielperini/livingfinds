@@ -224,7 +224,7 @@ echo '--- instalando a release e verificando backend ---'
 release_applied=1
 rm -rf base44 dist server/src
 tar xzf /tmp/deploy.tar.gz -C "$VPS_PATH"
-rm -f server/docker-compose.deploy.yml .dockerignore
+rm -f server/docker-compose.deploy.yml server/.scheduler-drain-locks.sql .dockerignore
 ENABLE_SCHEDULER=false ENABLE_MOTOR_RUN_WORKER=false \
   docker compose -f "$compose_file" --project-directory "$VPS_PATH/server" up -d --build app
 ready=0
