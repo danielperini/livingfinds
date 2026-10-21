@@ -79,6 +79,24 @@ export async function ensureMotorRunTable(): Promise<void> {
     await sql.unsafe(
       `create index if not exists motor_execution_runs_scope_idx on motor_execution_runs(account_scope, status, last_activity_at desc)`,
     );
+    // Older decision-only runs were incorrectly persisted with remote_outcome=unknown
+    // whenever the engine returned a failure. They cannot send campaign mutations;
+    // the queue executor is the sole campaign-write path. Reconcile only terminal
+    // failed planner rows. Keep timed-out/remote_unknown rows and executor failures
+    // blocked until a human or remote-state reconciler resolves them.
+    await sql.unsafe(
+      `update motor_execution_runs
+       set remote_outcome='not_attempted',
+           errors=errors || jsonb_build_array(jsonb_build_object(
+             'stage','remote_outcome_reconciliation',
+             'message','Terminal decision-only failure reconciled: this run did not send an Amazon campaign write.',
+             'at',now()
+           ))
+       where status='failed'
+         and remote_outcome='unknown'
+         and function_name = any($1::text[])`,
+      [['runCanonicalDecisionCycle', 'runUnifiedDecisionEngine', 'runStrategyEngine']] as any[],
+    );
     // Cross-process exclusivity is enforced by a PostgreSQL advisory transaction lock
     // in both enqueue and claim. Avoid adding a uniqueness constraint over legacy rows.
   })();
