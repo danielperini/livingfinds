@@ -32,6 +32,25 @@ Deno.test('a thrown queue write remains remotely unknown even when it was not a 
   assertEquals(motorRemoteOutcome('confirmExecutedDecisions', { ok: true, confirmed: 2 }), 'confirmed');
 });
 
+Deno.test('failed decision-only runs do not claim an unknown Amazon write outcome', () => {
+  assertEquals(motorRemoteOutcome('runUnifiedDecisionEngine', {
+    ok: false,
+    failed_stages: [{ stage: 'inventory_preflight', error: 'stock guard unavailable' }],
+  }), 'not_attempted');
+  assertEquals(motorRemoteOutcome('runCanonicalDecisionCycle', {
+    ok: false,
+    error: 'decision stage failed',
+  }), 'not_attempted');
+  assertEquals(motorRemoteOutcome('runUnifiedDecisionEngine', {
+    ok: false,
+    remote_outcome: 'unknown',
+  }), 'unknown');
+  assertEquals(motorRemoteOutcome('executeApprovedDecisionQueue', {
+    ok: false,
+    error: 'executor failed before confirmation',
+  }), 'unknown');
+});
+
 Deno.test('partial batches remain partial and retain per-item failures in the result summary', () => {
   const result = { ok: false, executed: 3, failed_stages: [{ stage: 'campaigns', error: 'HTTP 429' }] };
   assertEquals(terminalMotorStatus(result), 'partial');
