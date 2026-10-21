@@ -75,11 +75,12 @@ export function motorRemoteOutcome(functionName: string, result: Record<string, 
   if (confirmed > 0) return 'confirmed';
   if (executed > 0) return 'sent_unconfirmed';
   // Only the queue executor can send campaign mutations in this run API.
-  // Require an explicit successful zero count before declaring no remote write.
-  if (functionName === 'executeApprovedDecisionQueue' && result.ok === true && (result.executed === 0 || result.sent === 0)) {
-    return 'not_attempted';
-  }
-  if (['runCanonicalDecisionCycle', 'runUnifiedDecisionEngine', 'runStrategyEngine', 'confirmExecutedDecisions'].includes(functionName) && result.ok === true) {
+  // Decision generation and confirmation may fail, but that alone does not mean
+  // a campaign write was sent. Preserve explicit uncertainty and send counters above.
+  if (functionName !== 'executeApprovedDecisionQueue') return 'not_attempted';
+  // For the executor, require an explicit successful zero count before declaring
+  // that no remote write was attempted.
+  if (result.ok === true && (result.executed === 0 || result.sent === 0)) {
     return 'not_attempted';
   }
   return 'unknown';
