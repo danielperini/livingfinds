@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Download, Loader2, RefreshCw, Search, Upload, X, Zap } from 'lucide-react';
+import { Check, Download, Loader2, RefreshCw, Upload, X, Zap } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
+import { selectActiveImportedSearchTermRows } from '../../base44/shared/importedSearchTermReport.js';
 import { loadAllCampaigns, campaignIsArchived } from '@/lib/campaignUtils';
 import { Button } from '@/components/ui/button';
 import PremiumDataTable from '@/components/ui/PremiumDataTable';
@@ -98,10 +99,7 @@ export default function KeywordManagement() {
       ]);
 
       if (rules[0]?.target_acos) setAcosTarget(Number(rules[0].target_acos));
-      const completedImportIds = new Set(importBatches.filter((batch) => batch.status === 'completed').map((batch) => batch.id));
-      const visibleImportedRows = importedRows
-        .filter((row) => completedImportIds.has(row.import_batch_id))
-        .map((row) => ({ ...row, decision_eligible: false, imported_unverified: true }));
+      const visibleImportedRows = selectActiveImportedSearchTermRows(importedRows, importBatches);
       setKeywords([...searchTerms, ...visibleImportedRows]);
       setConfiguredKeywords(configured.filter(k => String(k.state || k.status).toLowerCase() !== 'archived'));
       setNegatives(suggestions);

@@ -29,8 +29,20 @@ function numberValue(row, ...keys) {
     if (raw === undefined || raw === null || String(raw).trim() === '') continue;
     if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
     let value = String(raw).trim().replace(/[^\d,.-]/g, '');
-    if (value.includes(',') && value.includes('.')) value = value.replace(/\./g, '').replace(',', '.');
-    else if (value.includes(',')) value = value.replace(',', '.');
+    if (value.includes(',') && value.includes('.')) {
+      const decimalSeparator = value.lastIndexOf(',') > value.lastIndexOf('.') ? ',' : '.';
+      const thousandsSeparator = decimalSeparator === ',' ? '.' : ',';
+      const decimalDigits = value.length - value.lastIndexOf(decimalSeparator) - 1;
+      if (decimalDigits < 1 || decimalDigits > 2) return null;
+      value = value.split(thousandsSeparator).join('').replace(decimalSeparator, '.');
+    } else if (value.includes(',')) {
+      const groups = value.split(',');
+      if (groups.length > 2 || (groups.length === 2 && groups[1].length === 3 && groups[0].length <= 3)) return null;
+      value = value.replace(',', '.');
+    } else if (value.includes('.')) {
+      const groups = value.split('.');
+      if (groups.length > 2 || (groups.length === 2 && groups[1].length === 3 && groups[0].length <= 3)) return null;
+    }
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
   }
@@ -84,7 +96,8 @@ export async function normalizeImportedSearchTermRows(rows, account, syncedAt) {
     const matchType = /exat|exact/.test(matchTypeRaw) ? 'exact' : /fras|phrase/.test(matchTypeRaw) ? 'phrase' : /auto/.test(matchTypeRaw) ? 'auto' : 'broad';
     const adGroupId = textValue(row, 'ID do grupo de anúncios', 'Ad Group ID', 'adGroupId');
     const keywordId = textValue(row, 'ID da palavra-chave', 'Keyword ID', 'keywordId');
-    const key = stableUniqueKey([accountId, campaignId, adGroupId, keywordId, searchTerm, start]);
+    const targetingIdentity = keywordId || stableUniqueKey([textValue(row, 'Palavra-chave', 'Keyword'), matchType]);
+    const key = stableUniqueKey([accountId, campaignId, adGroupId, targetingIdentity, searchTerm, start]);
     const windowFields = {};
     for (const days of [1, 7, 14, 30]) {
       windowFields[`orders_${days}d`] = days === windowValue ? orders : null;
@@ -147,6 +160,26 @@ export async function normalizeImportedSearchTermRows(rows, account, syncedAt) {
     record.import_batch_id = batchId;
   }
   return { ok: true, batch_id: batchId, records: normalized, duplicates_removed: rows.length - normalized.length };
+}
+
+/** Keep immutable report versions for audit, but expose only the latest completed row per source observation. */
+export function selectActiveImportedSearchTermRows(rows, batches) {
+  const completed = new Map((batches || [])
+    .filter((batch) => batch.status === 'completed')
+    .map((batch) => [batch.id, batch]));
+  const active = new Map();
+  for (const row of rows || []) {
+    const batch = completed.get(row.import_batch_id);
+    if (!batch) continue;
+    const key = row.source_record_key || row.unique_key;
+    const current = active.get(key);
+    const versionTime = Date.parse(batch.completed_at || batch.started_at || '') || 0;
+    const currentTime = current ? (Date.parse(current.batch.completed_at || current.batch.started_at || '') || 0) : -1;
+    if (!current || versionTime > currentTime || (versionTime === currentTime && String(batch.id) > String(current.batch.id))) {
+      active.set(key, { row, batch });
+    }
+  }
+  return [...active.values()].map(({ row }) => ({ ...row, decision_eligible: false, imported_unverified: true }));
 }
 
 /**

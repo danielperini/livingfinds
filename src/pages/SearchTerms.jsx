@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
+import { selectActiveImportedSearchTermRows } from '../../base44/shared/importedSearchTermReport.js';
 import {
-  Search, Filter, RefreshCw, Loader2, TrendingUp, TrendingDown,
-  ArrowUpRight, X, CheckCircle, AlertCircle, Brain, Upload,
-  Settings, BookOpen, Plus, ChevronDown, ChevronUp
+  Search, RefreshCw, Loader2, TrendingUp, TrendingDown, X, Upload,
+  Settings, BookOpen
 } from 'lucide-react';
 
 // ─── Normalização de texto ────────────────────────────────────────────────────
@@ -22,7 +22,21 @@ function normalizeText(text) {
     .trim();
 }
 
-const termText = (row) => row?.keyword_text || row?.keyword || row?.search_term || '';
+const termText = (row) => row?.search_term || row?.keyword_text || row?.keyword || '';
+
+async function loadAllRows(entity, filter) {
+  const rows = [];
+  const seen = new Set();
+  for (let offset = 0; ; offset += 500) {
+    const page = await entity.filter(filter, 'id', 500, offset);
+    for (const row of page) {
+      if (seen.has(row.id)) throw new Error('Dados alterados durante a leitura. Atualize a página.');
+      seen.add(row.id);
+      rows.push(row);
+    }
+    if (page.length < 500) return rows;
+  }
+}
 
 // ─── Classificação ───────────────────────────────────────────────────────────
 
@@ -136,18 +150,15 @@ export default function SearchTerms() {
 
       const [kws, importedRows, importBatches, apCfgs] = await Promise.all([
         base44.entities.Keyword.filter({ amazon_account_id: acc.id }, '-spend', 1000),
-        base44.entities.ImportedSearchTermReportRow.filter({ amazon_account_id: acc.id }, '-date', 5000),
-        base44.entities.ImportedSearchTermReportImport.filter({ amazon_account_id: acc.id }, '-started_at', 1000),
+        loadAllRows(base44.entities.ImportedSearchTermReportRow, { amazon_account_id: acc.id }),
+        loadAllRows(base44.entities.ImportedSearchTermReportImport, { amazon_account_id: acc.id }),
         base44.entities.AutopilotConfig.filter({ amazon_account_id: acc.id }, null, 1),
       ]);
 
       const ap = apCfgs[0];
       if (ap?.target_acos) setCfg(p => ({ ...p, meta_acos: ap.target_acos }));
 
-      const completedImportIds = new Set(importBatches.filter((batch) => batch.status === 'completed').map((batch) => batch.id));
-      const visibleImportedRows = importedRows
-        .filter((row) => completedImportIds.has(row.import_batch_id))
-        .map((row) => ({ ...row, decision_eligible: false, imported_unverified: true }));
+      const visibleImportedRows = selectActiveImportedSearchTermRows(importedRows, importBatches);
       setKeywords([...kws, ...visibleImportedRows]);
     } finally {
       setLoading(false);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeImportedSearchTermRows, persistImportedSearchTermBatch } from './importedSearchTermReport.js';
+import { normalizeImportedSearchTermRows, persistImportedSearchTermBatch, selectActiveImportedSearchTermRows } from './importedSearchTermReport.js';
 
 const row = (overrides = {}) => ({
   'Data inicial': '2026-10-20', 'Data final': '2026-10-20',
@@ -46,6 +46,41 @@ test('zero is preserved as a valid metric and Brazilian decimal strings parse co
   assert.equal(result.records[0].sales, 0);
   assert.equal(result.records[0].acos, null);
   assert.equal(result.records[0].conversion_rate, null);
+});
+
+test('English and Brazilian money formats parse correctly and ambiguous thousands are rejected', async () => {
+  const us = await normalizeImportedSearchTermRows([row({ Gastos: undefined, Spend: '$1,234.56' })], 'a', 'now');
+  const br = await normalizeImportedSearchTermRows([row({ Gastos: 'R$ 1.234,56' })], 'a', 'now');
+  const ambiguous = await normalizeImportedSearchTermRows([row({ Gastos: '1.234' })], 'a', 'now');
+  assert.equal(us.records[0].spend, 1234.56);
+  assert.equal(br.records[0].spend, 1234.56);
+  assert.equal(ambiguous.ok, false);
+});
+
+test('targeting text distinguishes same query when keyword IDs are absent', async () => {
+  const result = await normalizeImportedSearchTermRows([
+    row({ Keyword: 'target one' }),
+    row({ Keyword: 'target two' }),
+  ], 'a', 'now');
+  assert.equal(result.ok, true);
+  assert.equal(result.records.length, 2);
+});
+
+test('latest completed corrected report replaces same source observation in default view', () => {
+  const rows = [
+    { id: 'old', import_batch_id: 'old-batch', source_record_key: 'source', spend: 4 },
+    { id: 'new', import_batch_id: 'new-batch', source_record_key: 'source', spend: 5 },
+    { id: 'other', import_batch_id: 'new-batch', source_record_key: 'other', spend: 2 },
+    { id: 'staged', import_batch_id: 'staged-batch', source_record_key: 'staged', spend: 100 },
+  ];
+  const batches = [
+    { id: 'old-batch', status: 'completed', completed_at: '2026-10-20T00:00:00Z' },
+    { id: 'new-batch', status: 'completed', completed_at: '2026-10-21T00:00:00Z' },
+    { id: 'staged-batch', status: 'processing', started_at: '2026-10-22T00:00:00Z' },
+  ];
+  const active = selectActiveImportedSearchTermRows(rows, batches);
+  assert.deepEqual(active.map((item) => item.id).sort(), ['new', 'other']);
+  assert.equal(active.reduce((sum, item) => sum + item.spend, 0), 7);
 });
 
 test('exact duplicate rows deduplicate, while conflicting duplicate identities are rejected', async () => {
