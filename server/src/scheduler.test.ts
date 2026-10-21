@@ -176,6 +176,21 @@ Deno.test('canonical cycle failures identify the actual failed stage', () => {
   ]);
 });
 
+Deno.test('scheduler preserves nested canonical failed-stage details instead of stage_failed', () => {
+  assertEquals(failedJobStages({ ok: true, status: 200, data: {
+    ok: false,
+    unified_engine: {
+      ok: false,
+      failed_stages: [{
+        stage: 'inventory_preflight',
+        error: 'fresh_inventory_or_stock_guard_not_confirmed',
+      }],
+    },
+  } }), [
+    { name: 'inventory_preflight', detail: 'fresh_inventory_or_stock_guard_not_confirmed' },
+  ]);
+});
+
 Deno.test('watchdog reconciles a confirmed Ads cycle despite unrelated audit failure', () => {
   const response = { ok: true, data: { ok: false, reports: [{
     daily_cycle: { status: 'confirmed' },

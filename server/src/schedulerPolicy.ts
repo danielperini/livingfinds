@@ -53,12 +53,26 @@ export function failedJobStages(response: any): Array<{ name: string; detail: st
   })) {
     if (!(name in candidates) && stage !== undefined) candidates[name] = stage;
   }
-  return Object.entries(candidates)
-    .filter(([, stage]) => stage && typeof stage === 'object' && stage.ok === false)
-    .map(([name, stage]) => ({
+  const failures: Array<{ name: string; detail: string }> = [];
+  for (const [name, stage] of Object.entries(candidates)) {
+    if (!stage || typeof stage !== 'object' || stage.ok !== false) continue;
+    const nested = Array.isArray(stage.failed_stages) ? stage.failed_stages : [];
+    const nestedFailures = nested
+      .filter((item: any) => item && typeof item === 'object')
+      .map((item: any, index: number) => ({
+        name: String(item.stage || item.name || `${name}.failed_stage_${index + 1}`),
+        detail: String(item.error || item.detail || item.reason || item.message || item.status || 'stage_failed'),
+      }));
+    if (nestedFailures.length) {
+      failures.push(...nestedFailures);
+      continue;
+    }
+    failures.push({
       name,
       detail: String(stage.error || stage.message || stage.reason || stage.status || 'stage_failed'),
-    }));
+    });
+  }
+  return failures;
 }
 
 export function shouldDispatchRun(
