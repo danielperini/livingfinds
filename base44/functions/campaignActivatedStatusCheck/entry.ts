@@ -1,47 +1,55 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
-
-/** Refresh a once-fresh token */
-async function getAccessToken(req) {
-  const refreshUrl = `https://advertising-api.amazon.com/auth/o2/token`;
-  const body = new URLSearchParams({
-    grant_type: 'refresh_token',
-    refresh_token: Deno.env.get('ADS_REFRESH_TOKEN') || '',
-    client_id: Deno.env.get('ADS_CLIENT_ID') || '',
-    client_secret: Deno.env.get('ADS_CLIENT_SECRET') || '',
-  }).toString();
-  const tokRes = await fetch(refreshUrl, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
-  const tokData = await tokRes.json();
-  return tokData.access_token;
-}
-
-function extractStateName(statusStr) {
-  // amazon returns "ARCHIVED", "ENABLED",or "PAUSED"
-  return statusStr?.trim?.().toUpperCase()?.replace(/[\n\r]+/g, '') || statusStr;
-}
-
-const BASE_URL_CAMPAIGNS = 'https://advertising-api.amazon.com/sp/campaigns';
-const HEADER_TOKEN = null;
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 
 Deno.serve(async (req) => {
   try {
-    const amazonRegEnv = 'NA';
-    const baseCampaignUrl = `https://advertising-api.amazon.com/sp/campaigns`;
-    const searchParams = new URL(req.url, 'http://dummy').searchParams;
-    const campaignId = searchParams.get('campaign_id') || '';
-    const profileId = searchParams.get('profile_id') || '1489314938316530';
-    const action = searchParams.get('action') || '';
-    const newState = searchParams.get('new_state') || '';
-    const newBudget = searchParams.get('new_budget') || '';
-    const newName = searchParams.get('new_nome') || '';
-    const freeFormAction = action.split('|')[0];
-
     const base44 = createClientFromRequest(req);
-    base44.auth.me(); // no validate needed for profile
+    const body = await req.json().catch(() => ({}));
+    const authenticated = await base44.auth.isAuthenticated().catch(() => false);
 
-    let resultObj = anyObject;
+    if (!authenticated && !body._service_role) {
+      return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
+    }
 
-    const createToken = await getAccessToken();
+    const url = new URL(req.url);
+    const campaignId = String(body.campaign_id || url.searchParams.get('campaign_id') || '');
+    const accountId = String(
+      body.amazon_account_id || url.searchParams.get('amazon_account_id') || '',
+    );
 
-    const bearerToken = createToken;
-    if (!bearerToken) { return extractStateName(rawState) === 'fail' && implement fresh...;/**/}
+    if (!campaignId) {
+      return Response.json({ ok: false, error: 'campaign_id obrigatório' }, { status: 400 });
+    }
+
+    const rows = await base44.asServiceRole.entities.Campaign.filter(
+      accountId
+        ? { amazon_account_id: accountId, campaign_id: campaignId }
+        : { campaign_id: campaignId },
+      '-updated_at',
+      1,
+    ).catch(() => []);
+    const campaign = rows[0];
+
+    if (!campaign) {
+      return Response.json({ ok: true, found: false, campaign_id: campaignId, state: 'UNKNOWN' });
+    }
+
+    const state = String(
+      campaign.state || campaign.status || campaign.amazon_state || '',
+    ).toUpperCase();
+
+    return Response.json({
+      ok: true,
+      found: true,
+      campaign_id: campaignId,
+      state,
+      enabled: state === 'ENABLED',
+      paused: state === 'PAUSED',
+      updated_at: campaign.updated_at || null,
+    });
+  } catch (error) {
+    return Response.json(
+      { ok: false, error: error?.message || String(error) },
+      { status: 500 },
+    );
   }
+});
