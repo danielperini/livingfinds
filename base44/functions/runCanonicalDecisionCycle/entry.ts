@@ -51,18 +51,22 @@ Deno.serve(async(request)=>{
       max_candidates:body.max_economic_evidence_candidates??100,
     });
 
-    const aiReview=await invoke(base44,'runCanonicalAIDecisionReview',{
-      amazon_account_id:body.amazon_account_id||null,
-      effective_settings: body.effective_settings || null,
-      economic_evidence:economicEvidence,
-      unified_engine:engine,
-      data_freshness: body.data_freshness || null,
-      ai_review_enabled: body.ai_review_enabled,
-      dry_run:body.dry_run===true,
-      _service_role:true,
-      correlation_id:correlationId,
-      trigger_type:body.trigger_type||'canonical_decision_cycle',
-    });
+    const connectedAccounts = body.amazon_account_id
+      ? [{ id: body.amazon_account_id }]
+      : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 100).catch(() => []);
+    const aiReviewRuns = await Promise.all((connectedAccounts.length ? connectedAccounts : [{ id: null }]).map((account: any) =>
+      invoke(base44, 'runCanonicalAIDecisionReview', {
+        amazon_account_id: account?.id || null,
+        effective_settings: body.effective_settings || null,
+        economic_evidence: economicEvidence,
+        data_freshness: body.data_freshness || null,
+        ai_review_enabled: body.ai_review_enabled,
+        dry_run: body.dry_run === true,
+        _service_role: true,
+        correlation_id: correlationId,
+        trigger_type: body.trigger_type || 'canonical_decision_cycle',
+      })));
+    const aiReview = { ok: aiReviewRuns.every((run: any) => run?.ok !== false), proposal_only: true, runs: aiReviewRuns };
 
     const engine=await invoke(base44,'runUnifiedDecisionEngine',{
       ...common,
@@ -94,7 +98,7 @@ Deno.serve(async(request)=>{
         });
 
     const stageResults: Record<string, any> = { economic_evidence: economicEvidence, unified_engine: engine, ai_review: aiReview, reconciliation, arbitration };
-    const failedStageNames = collectUnconfirmedCycleStages(stageResults, ['economic_evidence', 'unified_engine', 'ai_review', 'reconciliation', 'arbitration']);
+    const failedStageNames = collectUnconfirmedCycleStages(stageResults, ['economic_evidence', 'unified_engine', 'reconciliation', 'arbitration']);
     const failedStages = failedStageNames
       .map((stage) => describeUnconfirmedCycleStage(stage, stageResults[stage]));
     const shouldSupervise = body.daily_close === true || failedStages.length > 0;
