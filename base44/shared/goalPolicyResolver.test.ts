@@ -27,3 +27,19 @@ Deno.test('CPC médio desejado não vira teto individual', () => {
   assert(policy.effectiveTargets.targetAverageCpc === 0.70);
   assert(policy.effectiveTargets.hardMaximumCpc === 0.95);
 });
+
+Deno.test('não inventa teto diário quando a configuração está ausente', () => {
+  const policy = resolveGoalPolicy({ objective: 'profitability' });
+  assert(policy.effectiveTargets.maximumDailySpend === null);
+});
+
+Deno.test('preserva zero como configuração explícita de orçamento', () => {
+  const policy = resolveGoalPolicy({ maximumDailySpend: 0 });
+  assert(policy.effectiveTargets.maximumDailySpend === 0);
+});
+
+Deno.test('aceita objetivos estratégicos adicionais', () => {
+  assert(resolveGoalPolicy({ objective: 'aggressive_peak' }).primaryObjective === 'AGGRESSIVE_PEAK');
+  assert(resolveGoalPolicy({ objective: 'flex_stock' }).primaryObjective === 'FLEX_STOCK');
+  assert(resolveGoalPolicy({ objective: 'custom' }).primaryObjective === 'CUSTOM');
+});
