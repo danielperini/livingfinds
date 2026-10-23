@@ -836,7 +836,18 @@ Deno.serve(async (req) => {
     });
     settings.target_acos = accountGoalPolicy.effectiveTargets.targetAcos;
     settings.max_acos = accountGoalPolicy.effectiveTargets.maximumAcos;
-    settings.daily_budget_cap = accountGoalPolicy.effectiveTargets.maximumDailySpend;
+    // Não substitua um teto ausente por um número inventado. Quando não há
+    // configuração explícita, preservamos o valor resolvido pela fonte
+    // canônica e marcamos a ausência para que o guard de orçamento bloqueie
+    // qualquer aumento até haver um limite configurado.
+    if (accountGoalPolicy.effectiveTargets.maximumDailySpend !== null) {
+      settings.daily_budget_cap = accountGoalPolicy.effectiveTargets.maximumDailySpend;
+      settings.daily_budget_cap_source = settings.source || 'configured';
+      settings.daily_budget_cap_configured = true;
+    } else {
+      settings.daily_budget_cap_configured = false;
+      settings.daily_budget_cap_source = 'missing';
+    }
     settings.max_bid_increase_pct = Math.min(
       settings.max_bid_increase_pct,
       accountGoalPolicy.constraints.maximumBidChangePct,

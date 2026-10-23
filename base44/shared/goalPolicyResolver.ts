@@ -1,5 +1,5 @@
 export type ResolvedGoalPolicy = {
-  primaryObjective: 'PROFIT' | 'BALANCED' | 'SALES_GROWTH' | 'LAUNCH' | 'DELIVERY_RECOVERY' | 'INVENTORY_CLEARANCE';
+  primaryObjective: 'PROFIT' | 'BALANCED' | 'SALES_GROWTH' | 'LAUNCH' | 'DELIVERY_RECOVERY' | 'INVENTORY_CLEARANCE' | 'AGGRESSIVE_PEAK' | 'FLEX_STOCK' | 'CUSTOM';
   presetCode: string;
   presetVersion: number;
   effectiveTargets: {
@@ -7,7 +7,7 @@ export type ResolvedGoalPolicy = {
     maximumAcos: number;
     targetAverageCpc: number | null;
     hardMaximumCpc: number | null;
-    maximumDailySpend: number;
+    maximumDailySpend: number | null;
   };
   constraints: {
     maximumBidChangePct: number;
@@ -23,6 +23,12 @@ const positive = (value: unknown): number | null => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 };
 
+const configuredNumber = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
 const PRESETS: Record<string, { objective: ResolvedGoalPolicy['primaryObjective']; minConfidence: number; targetAcos: number }> = {
   profitability: { objective: 'PROFIT', minConfidence: 0.85, targetAcos: 15 },
   balanced: { objective: 'BALANCED', minConfidence: 0.75, targetAcos: 20 },
@@ -31,6 +37,11 @@ const PRESETS: Record<string, { objective: ResolvedGoalPolicy['primaryObjective'
   defense: { objective: 'DELIVERY_RECOVERY', minConfidence: 0.85, targetAcos: 20 },
   liquidation: { objective: 'INVENTORY_CLEARANCE', minConfidence: 0.80, targetAcos: 25 },
   maintenance: { objective: 'BALANCED', minConfidence: 0.80, targetAcos: 18 },
+  aggressive_peak: { objective: 'AGGRESSIVE_PEAK', minConfidence: 0.85, targetAcos: 25 },
+  'aggressive-peak': { objective: 'AGGRESSIVE_PEAK', minConfidence: 0.85, targetAcos: 25 },
+  flex_stock: { objective: 'FLEX_STOCK', minConfidence: 0.80, targetAcos: 22 },
+  'flex-stock': { objective: 'FLEX_STOCK', minConfidence: 0.80, targetAcos: 22 },
+  custom: { objective: 'CUSTOM', minConfidence: 0.80, targetAcos: 20 },
 };
 
 /**
@@ -87,7 +98,9 @@ export function resolveGoalPolicy(input: {
       maximumAcos,
       targetAverageCpc: positive(input.targetAverageCpc),
       hardMaximumCpc: effectiveHardCpc,
-      maximumDailySpend: positive(input.maximumDailySpend) || 56,
+      // Ausência não pode virar um teto financeiro inventado. Zero é preservado
+      // como configuração explícita (por exemplo, conta em pausa).
+      maximumDailySpend: configuredNumber(input.maximumDailySpend),
     },
     constraints: {
       maximumBidChangePct: Math.min(0.20, positive(input.maximumBidChangePct) || 0.20),
