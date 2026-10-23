@@ -5,6 +5,7 @@ import { currentCorrelationId } from '../cycleContext.ts';
  * com corpo JSON, e devolve { data, status, ok } — as funções leem `res?.data || res`.
  */
 import { registry, type FnHandler } from '../registry.ts';
+import { buildFunctionPayload } from './functionPayload.ts';
 
 // deno-lint-ignore no-explicit-any
 type Json = Record<string, any>;
@@ -21,7 +22,7 @@ function internalInvocationToken(): string {
 export function makeFunctions(serviceRole: boolean) {
   const invoke = async (name: string, payload: Json = {}): Promise<Json> => {
     const handler: FnHandler | undefined = registry.get(name);
-    const correlated = { ...payload, correlation_id: currentCorrelationId() || String(payload.correlation_id || '').trim() || crypto.randomUUID() };
+    const correlated = buildFunctionPayload(name, payload, currentCorrelationId());
     const body = serviceRole ? { ...correlated, _service_role: true } : correlated;
     const internalToken = serviceRole ? internalInvocationToken() : '';
     const headers: Record<string, string> = {

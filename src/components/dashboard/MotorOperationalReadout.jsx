@@ -34,11 +34,17 @@ export default function MotorOperationalReadout({ data, error, accountId }) {
       <p>Serviço: {data.service?.status === 'responding' ? 'respondendo' : 'estado não confirmado'} · leitura do banco: {data.service?.database_read === true ? 'confirmada' : 'incompleta'}. Saúde do motor depende também de dados, fila e reconciliação.</p>
       <p>Scheduler: {data.scheduler?.enabled ? data.scheduler?.started ? 'ativo' : 'habilitado, inicialização não confirmada' : 'desabilitado'}{data.scheduler?.healthy === true ? ' · saudável' : ' · saúde não confirmada'}{data.states?.includes('scheduler_error') ? ' · scheduler_error (falha técnica)' : ''}</p>
       {data.scheduler?.last_error && <p role="alert">Causa técnica do scheduler: {data.scheduler.last_error}</p>}
+      {cycle?.audit_outcomes?.map((outcome, index) => <p key={`${outcome.function_name}-${outcome.slot_key}-${index}`}>
+        Resultado operacional de {outcome.function_name}: {outcome.audit_status === 'completed_with_alerts'
+          ? `auditoria concluída com ${outcome.critical_alerts?.length || 0} ${outcome.critical_alerts?.length === 1 ? 'alerta crítico' : 'alertas críticos'}`
+          : outcome.audit_status === 'partial' ? `auditoria parcial${outcome.partial_reasons?.length ? ` · ${outcome.partial_reasons.join(', ')}` : ''}` : 'auditoria concluída'} · scheduler {outcome.status}
+        {outcome.correlation_id ? ` · correlation_id ${outcome.correlation_id}` : ''}
+      </p>)}
       {data.scheduler?.active_job_errors?.map((job,index) => <p role="alert" key={index}>Job {job.job} · slot {job.slot_key} · {job.cause} · {dateTime(job.at)}</p>)}
       {data.daily_motor?.failed_jobs?.filter(job => job.classification === 'technical_failure').map((job,index) => <p role="alert" key={index}>Falha técnica persistida: {job.function_name} · {job.last_error} · {dateTime(job.updated_at)}</p>)}
       {cycle?.unresolved_run && <p>Execução com resultado remoto desconhecido: {cycle.unresolved_run.id} · correlation_id: {cycle.unresolved_run.correlation_id || 'ausente no registro legado'} · {dateTime(cycle.unresolved_run.date)}</p>}
       {cycle?.block_reason && <p>Motivo do bloqueio: {cycle.block_reason}</p>}
-      <p>Decisões stale: {data.decision_counts?.stale ?? '—'} · última decisão criada: {dateTime(data.decision_counts?.last_decision_at)} · bloqueadas: {data.decision_counts?.blocked ?? '—'} · sem evidência de envio: {data.decision_counts?.not_sent ?? '—'} · não enviadas (confirmado): {data.decision_counts?.confirmed_not_sent ?? '—'} · apenas enviadas, sem confirmação: {data.decision_counts?.unconfirmed ?? '—'} · total com evidência de envio: {data.decision_counts?.sent ?? '—'} · confirmadas: {data.decision_counts?.confirmed ?? '—'}</p>
+      <p>Decisões stale: {data.decision_counts?.stale ?? '—'} (exigem nova coleta: {data.decision_counts?.requires_new_collection ?? '—'}) · última decisão criada: {dateTime(data.decision_counts?.last_decision_at)} · bloqueadas: {data.decision_counts?.blocked ?? '—'} · sem evidência suficiente: {data.decision_counts?.insufficient_evidence ?? '—'} · explicitamente não enviadas: {data.decision_counts?.not_sent ?? '—'} · enviadas sem confirmação: {data.decision_counts?.sent_without_confirmation ?? '—'} · remote_unknown: {data.decision_counts?.remote_unknown ?? '—'} · parcialmente confirmadas: {data.decision_counts?.partially_confirmed ?? '—'} · rejeitadas: {data.decision_counts?.rejected ?? '—'} · total com evidência de envio: {data.decision_counts?.sent ?? '—'} · confirmadas: {data.decision_counts?.confirmed ?? '—'}</p>
       <p>Fila pendente: {data.decision_recovery?.pending ?? '—'} · propostas recentes sem envio: {data.decision_recovery?.safe_unsent ?? '—'} (ainda sujeitas às validações) · exigem nova coleta e nova decisão: {data.decision_recovery?.requires_new_collection ?? '—'}</p>
       {data.decision_recovery?.blocked_by_remote_unknown && <p role="alert">Recuperação da fila desta conta bloqueada até reconciliação do estado remoto, mesmo para propostas recentes.</p>}
       <div className="grid grid-cols-2 gap-2">
@@ -56,7 +62,9 @@ export default function MotorOperationalReadout({ data, error, accountId }) {
       {cycleDate && <button type="button" className="text-blue-600 underline" onClick={() => { setShowEvidence((value) => !value); setOffset(0); }}>{cycle?.reconciliation === 'pending' ? 'Reconciliar — consultar evidências (somente leitura)' : 'Consultar evidência histórica (somente leitura)'}</button>}
       {showEvidence && <div className="rounded border border-[var(--border-color)] p-3 space-y-2">
         <label>Fonte: <select value={source} onChange={(event) => { setSource(event.target.value); setOffset(0); }}>
-          <option value="decisions">Decisões e request_ids</option><option value="claims">Claims</option><option value="history">Histórico e request_ids</option>
+          <option value="decisions">Decisões e request_ids</option><option value="claims">Claims</option>
+          <option value="queue">AmazonActionQueue</option><option value="history">SyncExecutionLog</option>
+          <option value="campaign_history">CampaignChangeHistory</option><option value="bids">AdsBidChangeLog</option><option value="campaigns">Estado local da campanha</option>
         </select></label>
         <p>Ciclo {cycleDate}. Nenhuma operação de reconciliação ou replay é executada por esta consulta.</p>
         {evidence.data?.match_mode === 'local_date_candidates' && <p>Correlação não registrada: listando candidatos da data local, sem afirmar vínculo causal com o ciclo.</p>}

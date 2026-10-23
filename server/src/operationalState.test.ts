@@ -17,6 +17,19 @@ Deno.test('1020 stale decisions are historical data, not an empty decision sourc
   eq(counts.recent_24h, 0); eq(counts.historical_total, 1020); eq(counts.stale, 1020);
   eq(counts.blocked, 1020); eq(counts.last_decision_at, '2026-10-20T12:00:00Z');
 });
+Deno.test('350 sent decisions without confirmation remain distinct from remote_unknown and are never treated as confirmed', () => {
+  const rows = Array.from({ length: 350 }, (_, i) => ({ id: `sent-${i}`, created_at: '2026-10-24T11:00:00Z',
+    status: 'executed', remote_outcome: 'sent_unconfirmed', amazon_request_id: `request-${i}` }));
+  rows.push({ id: 'unknown', created_at: '2026-10-24T11:00:00Z', status: 'remote_unknown', remote_outcome: 'unknown', amazon_request_id: 'unknown-request' });
+  const counts = dashboardDecisionCounts(rows, now);
+  eq(counts.sent_without_confirmation, 350); eq(counts.remote_unknown, 1); eq(counts.confirmed, 0);
+});
+Deno.test('inventory coverage separately counts 13 records without timestamps', () => {
+  const rows = Array.from({ length: 164 }, (_, i) => i < 13 ? {} : { inventory_snapshot_at: '2026-10-24T11:55:00Z' });
+  const coverage = sourceFreshness(rows, ['inventory_snapshot_at', 'last_inventory_sync_at'], now);
+  eq(coverage.total_records, 164); eq(coverage.missing_timestamp_records, 13); eq(coverage.recent_records, 151);
+  eq(coverage.status, 'data_stale');
+});
 Deno.test('legacy correlation absence is explicit and historical remote uncertainty remains operationally blocked', () => {
   const model = dailyMotorReadModel({ latest: { status: 'exhausted', slot_key: '2026-10-23', attempt_count: 4,
     last_error: 'deployment_interrupted; automatic replay blocked' }, today: '2026-10-24', due: true, now });

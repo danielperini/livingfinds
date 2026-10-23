@@ -12,6 +12,8 @@ import { makeFunctions } from './sdk/functions.ts';
 import { schedulerSql } from './db.ts';
 import {
   dailyCatchUpSlot,
+  classifyAuditJobException,
+  classifyAuditJobResponse,
   failedJobStages,
   isDailyCycleExecutionConfirmedResponse,
   isStaleFinalAttempt,
@@ -190,6 +192,8 @@ async function ensureRunLedger(): Promise<void> {
     )
   `);
   await schedulerSql.unsafe('alter table scheduler_job_runs add column if not exists correlation_id text');
+  await schedulerSql.unsafe('alter table scheduler_job_runs add column if not exists outcome_class text');
+  await schedulerSql.unsafe("alter table scheduler_job_runs add column if not exists result_summary jsonb not null default '{}'::jsonb");
   await schedulerSql.unsafe(
     'alter table scheduler_job_runs add column if not exists recovery_count integer not null default 0',
   );
@@ -336,17 +340,20 @@ export async function startScheduler(): Promise<void> {
           const stableCorrelationId = String(payload.correlation_id || previous?.correlation_id || '').trim().slice(0, 180) || crypto.randomUUID();
           await schedulerSql.unsafe(
             `
-            insert into scheduler_job_runs (job_key,slot_key,job_name,function_name,status,attempt_count,started_at,finished_at,next_attempt_at,last_error,updated_at,correlation_id)
-            values ($1,$2,$3,$4,'running',$5,now(),null,null,null,now(),$6)
+            insert into scheduler_job_runs (job_key,slot_key,job_name,function_name,status,attempt_count,started_at,finished_at,next_attempt_at,last_error,updated_at,correlation_id,outcome_class,result_summary)
+            values ($1,$2,$3,$4,'running',$5,now(),null,null,null,now(),$6,null,'{}'::jsonb)
             on conflict (job_key,slot_key) do update set
               job_name=excluded.job_name,function_name=excluded.function_name,status='running',attempt_count=excluded.attempt_count,
-              started_at=now(),finished_at=null,next_attempt_at=null,last_error=null,updated_at=now(),correlation_id=excluded.correlation_id
+              started_at=now(),finished_at=null,next_attempt_at=null,last_error=null,updated_at=now(),correlation_id=excluded.correlation_id,
+              outcome_class=null,result_summary='{}'::jsonb
           `,
             [jobKey, slotKey, job.name, job.function, attempt, stableCorrelationId],
           );
 
           let response: any;
           let errorText: string | null = null;
+          let outcomeClass: string | null = null;
+          let resultSummary: Record<string, unknown> = {};
           try {
             response = await service.invoke(job.function, {
               ...payload,
@@ -354,7 +361,12 @@ export async function startScheduler(): Promise<void> {
               _scheduler_slot_key: slotKey,
               _scheduler_attempt: attempt,
             });
-            if (!isSuccessfulJobResponse(response)) {
+            const auditOutcome = classifyAuditJobResponse(job.function, response);
+            if (auditOutcome) {
+              outcomeClass = auditOutcome.classification;
+              resultSummary = auditOutcome.summary || {};
+              if (!auditOutcome.scheduler_success) errorText = auditOutcome.error || `${job.function} ${auditOutcome.classification}`;
+            } else if (!isSuccessfulJobResponse(response)) {
               const failedStages = failedJobStages(response)
                 .map(({ name, detail }) => `${name}:${safeError(detail)}`);
               errorText = failedStages.join('; ').slice(0, 500) ||
@@ -366,7 +378,14 @@ export async function startScheduler(): Promise<void> {
               errorText = `remote_unknown; automatic replay blocked; ${errorText || 'remote reconciliation required'}`.slice(0, 500);
             }
           } catch (error) {
-            errorText = `remote_unknown; invocation interrupted; automatic replay blocked; ${safeError(error)}`;
+            const auditFailure = classifyAuditJobException(job.function, error, stableCorrelationId);
+            if (auditFailure) {
+              outcomeClass = auditFailure.classification;
+              resultSummary = auditFailure.summary || {};
+              errorText = `${job.function} ${auditFailure.classification}: ${safeError(error)}`;
+            } else {
+              errorText = `remote_unknown; invocation interrupted; automatic replay blocked; ${safeError(error)}`;
+            }
           }
 
           const succeeded = errorText === null;
@@ -380,7 +399,7 @@ export async function startScheduler(): Promise<void> {
             `
             update scheduler_job_runs set status=$3, finished_at=now(),
               next_attempt_at=case when $3='failed' then now() + ($4 * interval '1 second') else null end,
-              last_error=$5, updated_at=now()
+              last_error=$5, updated_at=now(),outcome_class=$6,result_summary=$7::jsonb
             where job_key=$1 and slot_key=$2
           `,
             [
@@ -389,6 +408,8 @@ export async function startScheduler(): Promise<void> {
               succeeded ? 'succeeded' : exhausted ? 'exhausted' : 'failed',
               delay,
               errorText,
+              outcomeClass,
+              JSON.stringify(resultSummary),
             ],
           );
 

@@ -9,14 +9,15 @@ Deno.test({ name: 'PostgreSQL dashboard read-only: historical incident, full pag
     if (!['127.0.0.1', 'localhost'].includes(parsed.hostname) || !parsed.pathname.includes('test')) throw new Error('local_test_database_required');
     const client = postgres(url!, { max: 3, connect_timeout: 5 });
     const suffix = crypto.randomUUID().replaceAll('-', '');
-    const tables = Object.fromEntries(Object.keys(motorDashboardTables).map((key) => [key, `lf_dashboard_${key}_${suffix}`])) as typeof motorDashboardTables;
+    const tables = Object.fromEntries(Object.keys(motorDashboardTables).map((key) => [key, `lf_dashboard_${key.toLowerCase()}_${suffix}`])) as typeof motorDashboardTables;
     try {
-      for (const key of ['decisions', 'logs', 'campaigns', 'products'] as const) {
+      for (const key of ['decisions', 'logs', 'campaigns', 'products', 'actionQueue', 'campaignHistory', 'bidLogs'] as const) {
         await client.unsafe(`create table "${tables[key]}"(id text primary key,created_date timestamptz default now(),updated_date timestamptz default now(),data jsonb not null)`);
       }
       await client.unsafe(`create table "${tables.scheduler}"(slot_key text,status text,attempt_count int,recovery_count int,
-        started_at timestamptz,finished_at timestamptz,updated_at timestamptz,last_error text,function_name text)`);
-      await client.unsafe(`insert into "${tables.scheduler}" values ('2026-10-23','exhausted',6,0,'2026-10-23T04:25:00Z','2026-10-23T04:30:00Z','2026-10-23T04:30:00Z',
+        started_at timestamptz,finished_at timestamptz,updated_at timestamptz,last_error text,function_name text,
+        outcome_class text,result_summary jsonb)`);
+      await client.unsafe(`insert into "${tables.scheduler}"(slot_key,status,attempt_count,recovery_count,started_at,finished_at,updated_at,last_error,function_name) values ('2026-10-23','exhausted',6,0,'2026-10-23T04:25:00Z','2026-10-23T04:30:00Z','2026-10-23T04:30:00Z',
         'deployment_interrupted; remote state not confirmed; automatic replay blocked','runCanonicalDecisionCycle')`);
       await client.unsafe(`create table "${tables.runs}"(id text,status text,remote_outcome text,started_at timestamptz,finished_at timestamptz,
         last_activity_at timestamptz,lease_expires_at timestamptz,result_summary jsonb,account_scope text)`);
@@ -34,14 +35,27 @@ Deno.test({ name: 'PostgreSQL dashboard read-only: historical incident, full pag
       await client.unsafe(`insert into "${tables.campaigns}"(id,data) values('c',$1::jsonb)`, [{ amazon_account_id: 'a', state: 'enabled', last_api_sync_at: '2026-10-22T00:00:00Z' }]);
       await client.unsafe(`insert into "${tables.products}"(id,data) values('p',$1::jsonb)`, [{ amazon_account_id: 'a', status: 'active', fba_inventory: 10, last_catalog_sync_at: '2026-10-22T00:00:00Z' }]);
       await client.unsafe(`insert into "${tables.logs}"(id,data) values('log-23',$1::jsonb)`, [{ amazon_account_id: 'a', correlation_id: 'cycle-23', operation: 'canonical', status: 'warning', amazon_request_id: 'historic-request', started_at: '2026-10-23T04:25:00Z' }]);
+      await client.unsafe(`insert into "${tables.decisions}"(id,data)
+        select 'uncertain-'||lpad(i::text,3,'0'),jsonb_build_object('amazon_account_id','a','correlation_id','cycle-350',
+          'campaign_id','remote-1','status','executed','remote_outcome','sent_unconfirmed','request_id','request-'||i,
+          'created_at','2026-10-23T05:00:00Z') from generate_series(1,350) i`);
+      await client.unsafe(`insert into "${tables.claims}"(decision_id,account_id,status,attempt,created_at)
+        select 'uncertain-'||lpad(i::text,3,'0'),'a','submitted',1,'2026-10-23T05:00:00Z' from generate_series(1,350) i`);
+      await client.unsafe(`insert into "${tables.actionQueue}"(id,data) values('queue-350',$1::jsonb)`, [{ amazon_account_id: 'a', correlation_id: 'cycle-350', decision_id: 'uncertain-001', status: 'submitted', request_id: 'request-1', created_at: '2026-10-23T05:00:00Z' }]);
+      await client.unsafe(`insert into "${tables.campaignHistory}"(id,data) values('change-350',$1::jsonb)`, [{ amazon_account_id: 'a', correlation_id: 'cycle-350', campaign_id: 'remote-1', operation: 'budget_update', status: 'submitted', request_id: 'request-1', created_at: '2026-10-23T05:00:00Z' }]);
+      await client.unsafe(`insert into "${tables.bidLogs}"(id,data) values('bid-350',$1::jsonb)`, [{ amazon_account_id: 'a', correlation_id: 'cycle-350', decision_id: 'uncertain-001', campaign_id: 'remote-1', status: 'submitted', request_id: 'request-1', old_bid: 1, new_bid: 1.1, created_at: '2026-10-23T05:00:00Z' }]);
       await client.unsafe(`delete from "${tables.campaigns}"`);
       await client.unsafe(`insert into "${tables.campaigns}"(id,data) select 'c-'||i::text,
         jsonb_build_object('amazon_account_id','a','synced_at',case when i<=1237 then '2026-10-24T11:55:00Z' when i<=3000 then '2026-10-20T00:00:00Z' else null end)
         from generate_series(1,3208) i`);
-      await client.unsafe(`insert into "${tables.scheduler}" values
+      await client.unsafe(`insert into "${tables.campaigns}"(id,data) values('local-remote-1',$1::jsonb)`, [{ amazon_account_id: 'a', campaign_id: 'remote-1', asin: 'B000TEST01', state: 'enabled', synced_at: '2026-10-24T11:55:00Z', updated_at: '2026-10-23T05:00:00Z' }]);
+      await client.unsafe(`insert into "${tables.scheduler}"(slot_key,status,attempt_count,recovery_count,started_at,finished_at,updated_at,last_error,function_name) values
         ('2026-10-24-01','failed',1,0,'2026-10-24T01:00:00Z','2026-10-24T01:01:00Z','2026-10-24T01:01:00Z','connection refused','syncSafe'),
         ('2026-10-24-02','succeeded',1,0,'2026-10-24T02:00:00Z','2026-10-24T02:01:00Z','2026-10-24T02:01:00Z',null,'syncSafe'),
         ('2026-10-24-11','failed',1,0,'2026-10-24T11:00:00Z','2026-10-24T11:01:00Z','2026-10-24T11:01:00Z','database timeout','brokenJob')`);
+      await client.unsafe(`insert into "${tables.scheduler}"(slot_key,status,attempt_count,recovery_count,started_at,finished_at,updated_at,last_error,function_name,outcome_class,result_summary)
+        values ('2026-10-24-audit','succeeded',1,0,'2026-10-24T11:00:00Z','2026-10-24T11:01:00Z','2026-10-24T11:01:00Z',null,'auditAdsAutomationE2E','completed_with_alerts',
+          '{"audit_status":"completed_with_alerts","critical_alerts":[{"alert":"DECISION_STALE"}],"partial":false,"correlation_id":"audit-correlation","completed_at":"2026-10-24T11:01:00Z"}')`);
       const before = await client.unsafe(`select * from "${tables.scheduler}"`);
       await client.begin('read only', async (tx) => {
         const result = await getMotorDashboardWithSql(tx as any, { accountId: 'a', today: '2026-10-24', due: true,
@@ -49,17 +63,20 @@ Deno.test({ name: 'PostgreSQL dashboard read-only: historical incident, full pag
         eq(result.ok, true); eq(result.read_only, true);
         eq(result.daily_motor.failed_jobs.find(row => row.function_name==='syncSafe')?.classification,'resolved');
         eq(result.daily_motor.failed_jobs.find(row => row.function_name==='brokenJob')?.classification,'technical_failure');
+        eq(result.daily_motor.audit_outcomes[0]?.audit_status,'completed_with_alerts');
+        eq(result.daily_motor.audit_outcomes[0]?.critical_alerts.length,1);
+        eq(result.daily_motor.audit_outcomes[0]?.correlation_id,'audit-correlation');
         ok(result.states.includes('scheduler_error'));
         eq(result.data_freshness.campaigns?.stale_records,1971);
         eq(result.data_freshness.campaigns?.missing_timestamp_records,208);
-        eq(result.data_freshness.campaigns?.coverage_percent,38.56);
+        eq(result.data_freshness.campaigns?.coverage_percent,38.58);
         eq(result.data_freshness.campaigns?.status,'data_stale');
         eq(result.daily_motor.status, 'exhausted'); eq(result.daily_motor.remote_outcome, 'unknown');
         eq(result.daily_motor.replay, 'blocked'); eq(result.daily_motor.reconciliation, 'pending');
         eq(result.daily_motor.is_running, false); eq(result.daily_motor.correlation_id, null);
         eq(result.daily_motor.unresolved_run?.correlation_id, 'cycle-23');
-        eq(result.decision_counts?.historical_total, 6283); eq(result.decision_counts?.recent_24h, 3);
-        eq(result.decision_counts?.confirmed, 1); eq(result.decision_counts?.sent, 2); eq(result.decision_counts?.unconfirmed, 1);
+        eq(result.decision_counts?.historical_total, 6633); eq(result.decision_counts?.recent_24h, 3);
+        eq(result.decision_counts?.confirmed, 1); eq(result.decision_counts?.sent, 352); eq(result.decision_counts?.unconfirmed, 351);
         eq(result.decision_counts?.blocked, 6280); ok(result.states.includes('data_stale'));
         eq(result.data_freshness.inventory?.latest_at, null);
         eq(result.data_freshness.inventory?.missing_timestamp_records,1); // Catalog sync is not inventory evidence.
@@ -73,6 +90,20 @@ Deno.test({ name: 'PostgreSQL dashboard read-only: historical incident, full pag
         eq(claims.items[0].status, 'remote_unknown');
         const logs = await listMotorCycleEvidenceWithSql(tx as any, { accountId: 'a', date: '2026-10-23', source: 'history' }, tables);
         eq(logs.items[0].request_id, 'historic-request');
+        const beforeAudit = await tx.unsafe(`select count(*)::int as count from "${tables.decisions}" where data->>'correlation_id'='cycle-350'`);
+        let offset350: number | null = 0, sentWithoutConfirmation = 0;
+        while (offset350 !== null) {
+          const page = await listMotorCycleEvidenceWithSql(tx as any, { accountId: 'a', date: '2026-10-23', correlationId: 'cycle-350', source: 'decisions', offset: offset350 }, tables);
+          sentWithoutConfirmation += page.items.filter((item: any) => item.classification === 'sent_without_confirmation').length;
+          offset350 = page.next_offset;
+        }
+        eq(sentWithoutConfirmation, 350);
+        eq((await listMotorCycleEvidenceWithSql(tx as any, { accountId: 'a', date: '2026-10-23', correlationId: 'cycle-350', source: 'claims' }, tables)).items.length, 250);
+        eq((await listMotorCycleEvidenceWithSql(tx as any, { accountId: 'a', date: '2026-10-23', correlationId: 'cycle-350', source: 'queue' }, tables)).items[0].request_id, 'request-1');
+        eq((await listMotorCycleEvidenceWithSql(tx as any, { accountId: 'a', date: '2026-10-23', correlationId: 'cycle-350', source: 'campaign_history' }, tables)).items[0].campaign_id, 'remote-1');
+        eq((await listMotorCycleEvidenceWithSql(tx as any, { accountId: 'a', date: '2026-10-23', correlationId: 'cycle-350', source: 'bids' }, tables)).items[0].request_id, 'request-1');
+        eq((await listMotorCycleEvidenceWithSql(tx as any, { accountId: 'a', date: '2026-10-23', correlationId: 'cycle-350', source: 'campaigns' }, tables)).items[0].local_state, 'enabled');
+        eq((await tx.unsafe(`select count(*)::int as count from "${tables.decisions}" where data->>'correlation_id'='cycle-350'`))[0].count, beforeAudit[0].count);
       });
         const failed = await getMotorDashboardWithSql(client as any, { accountId: 'a', today: '2026-10-24', due: true,
           scheduler: {} }, { ...tables, products: 'lf_dashboard_deliberately_absent' });

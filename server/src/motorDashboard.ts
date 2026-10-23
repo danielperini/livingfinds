@@ -1,11 +1,12 @@
 import { decisionRecoveryEligibility } from '../../base44/shared/operationalState.js';
 import { dailyMotorReadModel } from './motorDashboardPolicy.ts';
 import { safeMotorError } from './motorRunPolicy.ts';
-import { dashboardDecisionCounts } from '../../base44/shared/dashboardReads.js';
+import { classifyDecisionEvidence, dashboardDecisionCounts } from '../../base44/shared/dashboardReads.js';
 
 export type ReadSql = { unsafe: (query: string, values?: any[]) => Promise<any[]> };
 export const motorDashboardTables = { scheduler: 'scheduler_job_runs', runs: 'motor_execution_runs',
-  decisions: 'optimization_decision', claims: 'motor_decision_execution_claims', logs: 'sync_execution_log', campaigns: 'campaign', products: 'product' };
+  decisions: 'optimization_decision', claims: 'motor_decision_execution_claims', logs: 'sync_execution_log', campaigns: 'campaign', products: 'product',
+  actionQueue: 'amazon_action_queue', campaignHistory: 'campaign_change_history', bidLogs: 'ads_bid_change_log' };
 type Tables = typeof motorDashboardTables;
 const quoted = (name: string) => {
   if (!/^[a-z_][a-z0-9_]*$/.test(name)) throw new Error('invalid_read_table');
@@ -20,7 +21,7 @@ export async function readDailyMotorWithSql(sql: ReadSql, input: { today: string
     try { return await sql.unsafe(query, values); }
     catch (error) { errors.push({ source, error: safeMotorError(error) }); return null; }
   };
-  const [history, active, unknown] = await Promise.all([
+  const [history, active, unknown, auditOutcomes] = await Promise.all([
     read('scheduler', `select slot_key,status,attempt_count,recovery_count,started_at,finished_at,updated_at,last_error,
       to_jsonb(s)->>'correlation_id' as correlation_id
       from ${quoted(tables.scheduler)} s where function_name='runCanonicalDecisionCycle' order by slot_key desc,started_at desc nulls last limit 1`, []),
@@ -30,6 +31,10 @@ export async function readDailyMotorWithSql(sql: ReadSql, input: { today: string
     read('unresolved_run', `select id,status,remote_outcome,started_at,finished_at,coalesce(result_summary->>'correlation_id',to_jsonb(r)->'request_payload'->>'correlation_id') as correlation_id
       from ${quoted(tables.runs)} r where (remote_outcome='unknown' or status='remote_unknown')
       and ($1::text is null or account_scope=$1 or account_scope='default-account') order by started_at desc nulls last limit 1`, [input.accountId || null]),
+    read('scheduler_outcomes', `select function_name,slot_key,status,updated_at,
+      to_jsonb(s)->>'outcome_class' as outcome_class,to_jsonb(s)->'result_summary' as result_summary
+      from ${quoted(tables.scheduler)} s where function_name in ('auditAdsAutomationE2E','runCanonicalWeeklyDecisionReview')
+      and to_jsonb(s)->>'outcome_class' is not null order by updated_at desc limit 50`, []),
   ]);
   const jobFailures = await read('scheduler_jobs', `select s.function_name,s.slot_key,s.status,s.attempt_count,s.last_error,s.finished_at,s.updated_at,
     (select max(n.updated_at) from ${quoted(tables.scheduler)} n where n.status='succeeded' and n.updated_at>s.updated_at
@@ -45,6 +50,15 @@ export async function readDailyMotorWithSql(sql: ReadSql, input: { today: string
       : row.recovered_at ? 'resolved' : row.slot_key?.includes(input.today) ? 'technical_failure' : 'historical' }));
   return { ...model, states: [...new Set([...model.states, ...(failures.some(row => row.classification === 'technical_failure') ? ['scheduler_error'] : [])])],
     failed_jobs_limit: 100, failed_jobs_has_more: (jobFailures?.length || 0) > 100, failed_jobs: failures, correlation_id: model.correlation_id,
+    audit_outcomes: (auditOutcomes || []).map(row => {
+      const summary = typeof row.result_summary === 'string' ? JSON.parse(row.result_summary) : row.result_summary || {};
+      return { function_name: row.function_name, slot_key: row.slot_key, status: row.status,
+        outcome_class: row.outcome_class, audit_status: summary.audit_status || row.outcome_class,
+        critical_alerts: Array.isArray(summary.critical_alerts) ? summary.critical_alerts : [],
+        partial: summary.partial === true, partial_reasons: Array.isArray(summary.partial_reasons) ? summary.partial_reasons : [],
+        correlation_id: summary.correlation_id || null,
+        completed_at: summary.completed_at || row.updated_at };
+    }),
     unresolved_run: unknown?.[0] ? { id: unknown[0].id, date: cycleDate(unknown[0]),
       correlation_id: unknown[0].correlation_id, remote_outcome: 'unknown', replay: 'blocked', reconciliation: 'pending' } : null };
 }
@@ -145,7 +159,34 @@ export async function listMotorCycleEvidenceWithSql(sql: ReadSql, input: {
     rows = await sql.unsafe(`select id,data->>'operation' as operation,data->>'status' as status,
       coalesce(data->>'amazon_request_id',data->>'request_id') as request_id,data->>'started_at' as started_at,
       data->>'completed_at' as completed_at from ${quoted(tables.logs)} where ${match} order by id limit 251 offset $4`, values);
+  } else if (input.source === 'queue') {
+    rows = await sql.unsafe(`select id,data->>'decision_id' as decision_id,data->>'status' as status,
+      coalesce(data->>'amazon_request_id',data->>'request_id') as request_id,data->>'remote_outcome' as remote_outcome,
+      coalesce(data->>'created_at',created_date::text) as created_at,data->>'updated_at' as updated_at
+      from ${quoted(tables.actionQueue)} where ${match} order by id limit 251 offset $4`, values);
+  } else if (input.source === 'campaign_history') {
+    rows = await sql.unsafe(`select id,data->>'campaign_id' as campaign_id,data->>'asin' as asin,data->>'operation' as operation,
+      data->>'status' as status,coalesce(data->>'amazon_request_id',data->>'request_id') as request_id,
+      data->>'created_at' as created_at,data->>'completed_at' as completed_at
+      from ${quoted(tables.campaignHistory)} where ${match} order by id limit 251 offset $4`, values);
+  } else if (input.source === 'bids') {
+    rows = await sql.unsafe(`select id,data->>'decision_id' as decision_id,data->>'campaign_id' as campaign_id,
+      data->>'keyword_id' as keyword_id,data->>'status' as status,
+      coalesce(data->>'amazon_request_id',data->>'request_id') as request_id,
+      data->>'old_bid' as old_bid,data->>'new_bid' as new_bid,data->>'created_at' as created_at
+      from ${quoted(tables.bidLogs)} where ${match} order by id limit 251 offset $4`, values);
+  } else if (input.source === 'campaigns') {
+    rows = await sql.unsafe(`select id,data->>'campaign_id' as campaign_id,data->>'asin' as asin,
+      coalesce(data->>'state',data->>'status') as local_state,data->>'updated_at' as updated_at,
+      data->>'correlation_id' as correlation_id from ${quoted(tables.campaigns)}
+      where data->>'amazon_account_id'=$1 and (data->>'campaign_id' in
+        (select data->>'campaign_id' from ${quoted(tables.decisions)} where ${match}) or id in
+        (select data->>'campaign_id' from ${quoted(tables.decisions)} where ${match}))
+      order by id limit 251 offset $4`, [input.accountId, input.date, input.correlationId || null, offset]);
   } else throw new Error('invalid_evidence_source');
+  const items = input.source === 'decisions'
+    ? rows.map(row => ({ ...row, classification: classifyDecisionEvidence(row) }))
+    : rows;
   return { ok: true, read_only: true, match_mode: input.correlationId ? 'correlation_id' : 'local_date_candidates',
-    date: input.date, items: rows.slice(0, 250), next_offset: rows.length > 250 ? offset + 250 : null };
+    date: input.date, source: input.source, items: items.slice(0, 250), next_offset: rows.length > 250 ? offset + 250 : null };
 }

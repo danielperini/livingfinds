@@ -23,7 +23,9 @@ Deno.test('actual executor blocks stale and remote-unknown proposals without any
   const response = await handler!(new Request('http://test.invalid', { method: 'POST', body: JSON.stringify({ _service_role: true, amazon_account_id: 'a' }) }));
   const result = await response.json();
   eq(result.executed, 0); eq(external, 0); eq(patches.length, 2);
-  ok(patches.some(row => row.id === 'stale' && row.requires_new_collection));
-  ok(patches.some(row => row.id === 'unknown' && row.block_reason === 'reconciliation_required'));
+  ok(patches.some(row => row.id === 'stale' && row.requires_new_collection && row.requires_new_evaluation &&
+    row.requires_new_authorization && row.requires_remote_validation));
+  ok(patches.some(row => row.id === 'unknown' && row.block_reason === 'reconciliation_required' &&
+    row.requires_remote_validation && !row.requires_new_authorization));
   eq(rows[1].remote_outcome, 'unknown');
 });

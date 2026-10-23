@@ -31,7 +31,9 @@ test('technical failure is explicit and a tick or unrelated success never clears
   assert.equal(health.active_job_errors[0].cause, 'connection refused');
 });
 test('stale or undated proposals require new collection; sent proposals require reconciliation', () => {
-  assert.equal(decisionRecoveryEligibility({ created_at: '2026-10-20' }, now).reason, 'new_collection_and_decision_required');
+  const stale = decisionRecoveryEligibility({ created_at: '2026-10-20' }, now);
+  assert.equal(stale.reason, 'new_collection_and_decision_required');
+  assert.deepEqual(stale.requirements, ['new_collection', 'new_evaluation', 'new_authorization', 'remote_state_validation']);
   assert.equal(decisionRecoveryEligibility({}, now).safe, false);
   assert.equal(decisionRecoveryEligibility({ created_at: fresh, amazon_request_id: 'request' }, now).reason, 'reconciliation_required');
   assert.equal(decisionRecoveryEligibility({ created_at: fresh }, now).safe, true);

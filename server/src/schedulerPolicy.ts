@@ -21,6 +21,113 @@ export type SchedulerRun = {
   remote_outcome?: string;
 };
 
+export type ClassifiedAuditOutcome = {
+  scheduler_success: boolean;
+  classification: 'completed' | 'completed_with_alerts' | 'partial' | 'technical_failure' | 'authentication_error' | 'timeout' | 'invalid_response';
+  error: string | null;
+  summary: Record<string, unknown> | null;
+};
+
+const AUDIT_CLASSIFIED_JOBS = new Set([
+  'auditAdsAutomationE2E',
+  'runCanonicalWeeklyDecisionReview',
+]);
+
+export function isAuditOutcomeJob(functionName: string): boolean {
+  return AUDIT_CLASSIFIED_JOBS.has(functionName);
+}
+
+function summarizeAuditPayload(payload: any): Record<string, unknown> | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const safeText = (value: unknown) => String(value || '').replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(/Atza\|[^\s]+/gi, '[redacted]')
+    .replace(/(token|secret|password|authorization)\s*[:=]\s*[^,\s"]+/gi, '$1=[redacted]')
+    .replace(/[\r\n\t]+/g, ' ').slice(0, 500);
+  return {
+    ...(typeof payload.ok === 'boolean' ? { ok: payload.ok } : {}),
+    ...(typeof payload.audit_status === 'string' ? { audit_status: safeText(payload.audit_status) } : {}),
+    ...(typeof payload.technical_failure === 'boolean' ? { technical_failure: payload.technical_failure } : {}),
+    critical_alerts: Array.isArray(payload.critical_alerts) ? payload.critical_alerts.slice(0, 100) : [],
+    ...(typeof payload.partial === 'boolean' ? { partial: payload.partial } : {}),
+    partial_reasons: Array.isArray(payload.partial_reasons) ? payload.partial_reasons.slice(0, 50).map(safeText) : [],
+    ...(typeof payload.correlation_id === 'string' ? { correlation_id: payload.correlation_id.slice(0, 180) } : {}),
+    source_errors: Array.isArray(payload.source_errors) ? payload.source_errors.slice(0, 50).map((item: any) => ({
+      source: safeText(item?.source || 'unknown'), error: safeText(item?.error || item?.message || item),
+      ...(item?.diagnostic_only === true ? { diagnostic_only: true } : {}),
+    })) : [],
+    ...(typeof payload.completed_at === 'string' ? { completed_at: payload.completed_at } : {}),
+  };
+}
+
+export function classifyAuditJobException(functionName: string, error: unknown, correlationId: string) {
+  if (!isAuditOutcomeJob(functionName)) return null;
+  const message = String((error as Error)?.message || error || 'scheduler_invocation_failed');
+  const timeout = /timeout|timed out|deadline exceeded|aborterror/i.test(message);
+  const authenticationError = /\b401\b|\b403\b|unauthori[sz]ed|authentication failed|invalid token/i.test(message);
+  const auditStatus = timeout ? 'timeout' : authenticationError ? 'authentication_error' : 'technical_failure';
+  return {
+    scheduler_success: false,
+    classification: auditStatus as 'timeout' | 'authentication_error' | 'technical_failure',
+    error: message.slice(0, 500),
+    summary: {
+      ok: false,
+      audit_status: auditStatus,
+      technical_failure: true,
+      critical_alerts: [],
+      partial: false,
+      correlation_id: correlationId,
+      source_errors: [{ source: functionName, error: message.slice(0, 500) }],
+      completed_at: new Date().toISOString(),
+    },
+  };
+}
+
+/**
+ * These jobs report operational findings as data. Business alerts and partial
+ * coverage do not make the scheduler itself fail; only a transport/runtime
+ * failure or an invalid explicit outcome contract does.
+ */
+export function classifyAuditJobResponse(functionName: string, response: any): ClassifiedAuditOutcome | null {
+  if (!AUDIT_CLASSIFIED_JOBS.has(functionName)) return null;
+  const status = Number(response?.status ?? response?.statusCode);
+  const payload = response?.data && typeof response.data === 'object' && !Array.isArray(response.data)
+    ? response.data
+    : response;
+  const fail = (classification: ClassifiedAuditOutcome['classification'], error: string): ClassifiedAuditOutcome => ({
+    scheduler_success: false, classification, error, summary: summarizeAuditPayload(payload),
+  });
+  if (status === 401 || status === 403) return fail('authentication_error', `HTTP ${status} authentication failure`);
+  if (status === 408 || status === 504 || payload?.timed_out === true) return fail('timeout', `HTTP ${status || 'unknown'} timeout`);
+  if (Number.isFinite(status) && (status < 200 || status >= 300)) {
+    return fail('technical_failure', `HTTP ${status} response`);
+  }
+  if (!response || typeof response !== 'object' || Array.isArray(response) || response.ok !== true || !Number.isFinite(status)) {
+    return fail('invalid_response', 'missing successful HTTP response envelope');
+  }
+  const required = ['ok', 'audit_status', 'technical_failure', 'critical_alerts', 'partial', 'correlation_id', 'source_errors', 'completed_at'];
+  if (!payload || required.some((key) => !(key in payload)) || typeof payload.ok !== 'boolean' ||
+    typeof payload.technical_failure !== 'boolean' || typeof payload.partial !== 'boolean' ||
+    typeof payload.audit_status !== 'string' || !Array.isArray(payload.critical_alerts) ||
+    !Array.isArray(payload.source_errors) || typeof payload.correlation_id !== 'string' || !payload.correlation_id.trim() ||
+    !Number.isFinite(Date.parse(payload.completed_at))) {
+    return fail('invalid_response', 'invalid explicit audit outcome contract');
+  }
+  if (payload.technical_failure || ['technical_failure', 'authentication_error', 'timeout'].includes(payload.audit_status)) {
+    const classification = payload.audit_status === 'authentication_error' ? 'authentication_error'
+      : payload.audit_status === 'timeout' ? 'timeout' : 'technical_failure';
+    const details = payload.source_errors.map((item: any) => String(item?.error || item?.message || item)).filter(Boolean).join('; ');
+    return fail(classification, details || `audit reported ${classification}`);
+  }
+  if (!['completed', 'completed_with_alerts', 'partial'].includes(payload.audit_status) ||
+    (!payload.ok && !payload.partial && payload.critical_alerts.length === 0)) {
+    return fail('invalid_response', 'inconsistent audit outcome contract');
+  }
+  const classification = payload.partial ? 'partial'
+    : payload.critical_alerts.length || payload.audit_status === 'completed_with_alerts' ? 'completed_with_alerts'
+    : 'completed';
+  return { scheduler_success: true, classification, error: null, summary: summarizeAuditPayload(payload) };
+}
+
 export function schedulerReplayBlocked(run: SchedulerRun | null | undefined): boolean {
   return run?.remote_outcome === 'unknown' || /deployment_interrupted|remote_unknown|remote[ _](state|outcome).*?(unknown|not confirmed)|(?:estado|resultado) remoto desconhecido|automatic replay blocked/i.test(run?.last_error || '');
 }

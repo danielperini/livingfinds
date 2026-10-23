@@ -22,17 +22,37 @@ export function dashboardDecisionCounts(decisions, now = Date.now()) {
     const at = Date.parse(row.created_at || row.created_date || row.evaluated_at || '');
     return Number.isFinite(at) && at <= now && at >= now - 86400000;
   };
-  const confirmed = (row) => row.remote_outcome !== 'unknown' && row.status !== 'remote_unknown' &&
-    (row.confirmation_status === 'confirmed' || row.amazon_confirmation_status === 'confirmed' || row.amazon_confirmed === true);
   // attempt_count/last_attempt_at also record local gates; they never prove sending.
-  const sent = (row) => Boolean(row.amazon_request_id || row.request_id || row.sent_at || row.executed_at || row.remote_outcome === 'sent_unconfirmed' || confirmed(row));
-  return { recent_24h: rows.filter(recent).length, historical_total: rows.length,
+  const outcomes = rows.map(row => classifyDecisionEvidence(row));
+  const recentCount = rows.filter(recent).length;
+  const staleUnsent = rows.filter((row, index) => !recent(row) && ['not_sent', 'insufficient_evidence'].includes(outcomes[index]));
+  const hasSendEvidence = (row, outcome) => ['sent_and_confirmed', 'partially_confirmed', 'rejected', 'sent_without_confirmation'].includes(outcome) ||
+    (outcome === 'remote_unknown' && Boolean(row.amazon_request_id || row.request_id || row.sent_at || row.executed_at));
+  return { recent_24h: recentCount, historical_total: rows.length,
     last_decision_at: rows.map(row => row.created_at || row.created_date).filter(value => Number.isFinite(Date.parse(value))).sort((a,b) => Date.parse(b)-Date.parse(a))[0] || null,
-    stale: rows.filter(row => !recent(row)).length,
-    not_sent: rows.filter(row => !sent(row)).length,
-    confirmed_not_sent: rows.filter(row => row.remote_outcome !== 'unknown' && row.status !== 'remote_unknown' && (row.remote_outcome === 'not_attempted' || row.execution_status === 'not_sent')).length,
+    stale: rows.length - recentCount, historical: rows.length - recentCount,
+    requires_new_collection: staleUnsent.length,
+    not_sent: outcomes.filter(outcome => outcome === 'not_sent').length,
+    insufficient_evidence: outcomes.filter(outcome => outcome === 'insufficient_evidence').length,
+    confirmed_not_sent: outcomes.filter(outcome => outcome === 'not_sent').length,
     blocked: rows.filter((row) => ['blocked', 'remote_unknown'].includes(row.status) || row.remote_outcome === 'unknown').length,
-    confirmed: rows.filter(confirmed).length, sent: rows.filter(sent).length,
-    unconfirmed: rows.filter((row) => sent(row) && !confirmed(row)).length,
+    confirmed: outcomes.filter(outcome => outcome === 'sent_and_confirmed').length,
+    partially_confirmed: outcomes.filter(outcome => outcome === 'partially_confirmed').length,
+    rejected: outcomes.filter(outcome => outcome === 'rejected').length,
+    remote_unknown: outcomes.filter(outcome => outcome === 'remote_unknown').length,
+    sent: rows.filter((row, index) => hasSendEvidence(row, outcomes[index])).length,
+    sent_without_confirmation: outcomes.filter(outcome => outcome === 'sent_without_confirmation').length,
+    unconfirmed: outcomes.filter(outcome => outcome === 'sent_without_confirmation').length,
     count_unit: 'decision', pagination_complete: true };
+}
+
+export function classifyDecisionEvidence(row = {}) {
+  const remoteUnknown = row.remote_outcome === 'unknown' || row.status === 'remote_unknown' || row.confirmation_status === 'pending_probe';
+  if (remoteUnknown) return 'remote_unknown';
+  if (row.confirmation_status === 'confirmed' || row.amazon_confirmation_status === 'confirmed' || row.amazon_confirmed === true || row.remote_outcome === 'confirmed') return 'sent_and_confirmed';
+  if (row.remote_outcome === 'partially_confirmed' || row.confirmation_status === 'partial') return 'partially_confirmed';
+  if (row.remote_outcome === 'rejected' || row.status === 'rejected' || row.execution_status === 'rejected' || row.confirmation_status === 'rejected') return 'rejected';
+  if (row.amazon_request_id || row.request_id || row.sent_at || row.executed_at || row.remote_outcome === 'sent_unconfirmed') return 'sent_without_confirmation';
+  if (row.remote_outcome === 'not_attempted' || row.execution_status === 'not_sent' || row.status === 'not_sent') return 'not_sent';
+  return 'insufficient_evidence';
 }
