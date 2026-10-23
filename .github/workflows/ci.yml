@@ -178,6 +178,8 @@ jobs:
           deno test --node-modules-dir=auto base44/shared/searchTermWastePolicy.test.ts
       - name: Test durable motor run outcome policy
         run: deno test --node-modules-dir=auto server/src/motorRunPolicy.test.ts
+      - name: Test canonical campaign audit incident without external access
+        run: deno test --config server/tests/canonicalIncident/deno.json --allow-env=MOTOR_STAGE_TIMEOUT_MS server/tests/canonicalIncident/incident.test.ts
       - name: Test scheduler and Hostinger OpenAI routing
         run: deno test --allow-read=base44/schedules/amazon-automation-schedule.json --node-modules-dir=auto server/src/scheduler.test.ts server/src/sdk/integrations.test.ts
       - name: Type-check Hostinger scheduler and health route

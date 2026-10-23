@@ -64,7 +64,7 @@ Deno.serve(async (request) => {
     const maxStageMs = Math.max(30_000, Math.min(5 * 60_000, Number(Deno.env.get('MOTOR_STAGE_TIMEOUT_MS') || 180_000)));
     let timedOutStage: string | null = null;
     const invokeTracked = async (name: string, payload: Record<string, unknown>) => {
-      if (timedOutStage) return { ok: false, skipped: true, error: `Não iniciada: etapa ${timedOutStage} terminou com resultado remoto desconhecido.` };
+      if (timedOutStage) return { ok: false, skipped: true, blocked_by: timedOutStage, remote_outcome: 'unknown', error: `Não iniciada: etapa ${timedOutStage} terminou com resultado remoto desconhecido.` };
       const startedAt = new Date().toISOString();
       const startMs = Date.now();
       try {
@@ -86,10 +86,10 @@ Deno.serve(async (request) => {
       if (timer) clearTimeout(timer);
       const completedAt = new Date().toISOString();
       const remoteOutcome = result.remote_outcome === 'unknown' || timedOut ? 'unknown' : undefined;
-      if (timedOut) timedOutStage = name;
+      if (remoteOutcome === 'unknown') timedOutStage = name;
       try {
         await reportDurableMotorRunProgress({
-          runId, lease: runLease, stage: name, stageStatus: timedOut ? 'remote_unknown' : result.ok === false ? 'failed' : result.report_status === 'processing' || result.report_status === 'pending' ? 'report_pending' : 'completed',
+          runId, lease: runLease, stage: name, stageStatus: remoteOutcome === 'unknown' ? 'remote_unknown' : result.ok === false ? 'failed' : result.report_status === 'processing' || result.report_status === 'pending' ? 'report_pending' : 'completed',
           startedAt, completedAt, durationMs: Date.now() - startMs, error: result.error,
           result, remoteOutcome,
         });
@@ -117,6 +117,7 @@ Deno.serve(async (request) => {
         inventory_preflight: inventoryPreflight,
         message: 'Decisões de Ads bloqueadas: atualização FBA e proteção de estoque não foram confirmadas para todas as contas deste ciclo.',
         mutations_created: 0,
+        ...(timedOutStage ? { remote_outcome: 'unknown', blocked_by: timedOutStage } : {}),
       }, { status: 409 });
     }
     const reportRequest = dailyClose && !body.skip_sync
@@ -144,6 +145,7 @@ Deno.serve(async (request) => {
     const journeyAudit = await invokeTracked('classifyMarketplaceCampaignJourneys', common);
     const manualStructureAudit = await invokeTracked('enforceCanonicalManualCampaigns', {
       ...common,
+      audit_only: true,
       trigger_type: dailyClose ? 'unified_daily_manual_structure_audit' : 'unified_intraday_manual_structure_audit',
     });
 
@@ -289,6 +291,7 @@ Deno.serve(async (request) => {
     return Response.json({
       ok: failedStages.length === 0,
       failed_stages: failedStages,
+      ...(timedOutStage ? { remote_outcome: 'unknown', blocked_by: timedOutStage } : {}),
       engine: 'unified-marketplace-decision-governance',
       engine_version: 'unified-v21-competitive-coverage',
       correlation_id: correlationId,
