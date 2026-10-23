@@ -11,7 +11,7 @@
     "typecheck": "tsc -p ./jsconfig.json",
     "preview": "vite preview",
     "ui:audit": "node scripts/capture-all-routes.mjs",
-    "test:ui-contract": "node --test src/lib/pagination.test.js src/lib/profitProjectionMath.test.js src/lib/productCatalogVisibility.test.js src/lib/navigation.test.js src/lib/operationalQueueHealth.test.js src/lib/toastPointerEvents.test.js base44/shared/importedSearchTermReport.test.js",
+    "test:ui-contract": "node --test src/lib/pagination.test.js src/lib/profitProjectionMath.test.js src/lib/productCatalogVisibility.test.js src/lib/navigation.test.js src/lib/operationalQueueHealth.test.js src/lib/toastPointerEvents.test.js base44/shared/importedSearchTermReport.test.js base44/shared/searchTermQuality.test.js",
     "agent:engineer": "npm --prefix agents start",
     "agent:engineer:install": "npm ci --prefix agents"
   },

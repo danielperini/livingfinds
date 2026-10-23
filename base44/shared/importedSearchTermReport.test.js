@@ -151,3 +151,15 @@ test('completed import batch replay does not touch any report rows', async () =>
   assert.equal(result.replayed, true);
   assert.equal(reads, 0);
 });
+test('invalid imported terms stay in raw audit and normalized duplicates retain their variants', async () => {
+  const result = await normalizeImportedSearchTermRows([
+    row({ 'Termo de pesquisa': 'B0F45JG27L' }),
+    row({ 'Termo de pesquisa': ' LIXEIRA  automática ' }),
+    row({ 'Termo de pesquisa': 'lixeira automática' }),
+  ], 'a', 'now');
+  assert.equal(result.ok, true);
+  assert.equal(result.records.length, 2);
+  assert.equal(result.records[0].raw_term, 'B0F45JG27L');
+  assert.equal(result.records[0].accepted, false);
+  assert.deepEqual(result.records[1].raw_variants, [' LIXEIRA  automática ', 'lixeira automática']);
+});

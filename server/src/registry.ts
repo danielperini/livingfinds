@@ -5,6 +5,8 @@
  * `Deno.serve` por um capturador ANTES de importar cada entry.ts — em vez de subir um servidor,
  * ele guarda o handler no registro. Depois o main.ts roteia as requisições para esses handlers.
  */
+import { withTermQualityRun } from './searchTermQualityContext.ts';
+import { EntityRepo } from './sdk/entities.ts';
 import { join, toFileUrl } from 'jsr:@std/path@1';
 
 export type FnHandler = (req: Request) => Response | Promise<Response>;
@@ -74,7 +76,16 @@ export async function loadFunctions(): Promise<{ loaded: number; failed: string[
       const handler = capturing ?? (mod.default as FnHandler | undefined) ??
         (mod.handler as FnHandler | undefined);
       if (typeof handler === 'function') {
-        registry.set(name, handler);
+        registry.set(name, async (req) => {
+          const body = await req.clone().json().catch(() => ({}));
+          return await withTermQualityRun(async () => await handler(req), async (summary) => {
+            await new EntityRepo('SearchTermQualityCycle').create({ ...summary,
+              source: name, amazon_account_id: body.amazon_account_id || null,
+              correlation_id: body.correlation_id || null,
+              completed_at: new Date().toISOString(),
+            });
+          });
+        });
         loaded++;
       } else {
         failed.push(name);

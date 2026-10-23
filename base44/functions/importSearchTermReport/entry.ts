@@ -93,7 +93,6 @@ Deno.serve(async (req) => {
                 'Campaign': { type: 'string' },
                 'Ad Group': { type: 'string' },
                 'Keyword': { type: 'string' },
-                'Search Term': { type: 'string' },
                 'Match Type': { type: 'string' },
                 'Impressions': { type: 'number' },
                 'Clicks': { type: 'number' },
@@ -125,31 +124,31 @@ Deno.serve(async (req) => {
     const importEntity = base44.asServiceRole.entities.ImportedSearchTermReportImport;
     const rowEntity = base44.asServiceRole.entities.ImportedSearchTermReportRow;
     const result = await persistImportedSearchTermBatch({
-      findBatch: async (id) => (await importEntity.filter({ id }, undefined, 1))[0] || null,
-      startBatch: async (record) => {
+      findBatch: async (id: string) => (await importEntity.filter({ id }, undefined, 1))[0] || null,
+      startBatch: async (record: any) => {
         const prior = await importEntity.filter({ id: record.id }, undefined, 1);
         return prior[0]
           ? await importEntity.update(record.id, record)
           : await importEntity.create(record);
       },
-      findRowsByUniqueKeys: async (keys) => {
+      findRowsByUniqueKeys: async (keys: string[]) => {
         const found = [];
         for (let i = 0; i < keys.length; i += 100) {
           found.push(...await rowEntity.filter({
             amazon_account_id: accountId,
-            unique_key: { $in: keys.slice(i, i + 100) },
+            search_term_quality_view: 'audit', unique_key: { $in: keys.slice(i, i + 100) },
           }, '-synced_at', 500));
         }
         return found;
       },
-      updateRows: async (items) => {
+      updateRows: async (items: any[]) => {
         for (let i = 0; i < items.length; i += 100) await rowEntity.bulkUpdate(items.slice(i, i + 100));
       },
-      createRows: async (items) => {
+      createRows: async (items: any[]) => {
         for (let i = 0; i < items.length; i += 100) await rowEntity.bulkCreate(items.slice(i, i + 100));
       },
-      completeBatch: async (id, patch) => await importEntity.update(id, { ...patch, status: 'completed', error_code: null }),
-      failBatch: async (id, errorCode) => await importEntity.update(id, { status: 'failed', error_code: errorCode }),
+      completeBatch: async (id: string, patch: any) => await importEntity.update(id, { ...patch, status: 'completed', error_code: null }),
+      failBatch: async (id: string, errorCode: string) => await importEntity.update(id, { status: 'failed', error_code: errorCode }),
     }, {
       batch_id: normalized.batch_id,
       account_id: accountId,
@@ -176,9 +175,9 @@ Deno.serve(async (req) => {
       amazon_account_id: accountId,
       message: result.replayed
         ? 'Este relatório já foi importado integralmente; nenhum dado foi alterado.'
-        : `${searchTermRecords.length} termos de pesquisa importados`,
+        : `${searchTermRecords?.length || 0} termos de pesquisa importados`,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('[importSearchTermReport] Erro:', error.message);
     if (pendingImportId) {
       await base44Client?.asServiceRole.entities.ImportedSearchTermReportImport.update(pendingImportId, {

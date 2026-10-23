@@ -1,0 +1,4 @@
+{
+  "imports": { "../../src/db.ts": "./dbMock.ts" },
+  "lock": false
+}

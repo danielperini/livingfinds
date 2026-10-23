@@ -1,3 +1,4 @@
+import { assessSearchTerm } from '../../../base44/shared/searchTermQuality.js';
 import { useMemo, useState } from 'react';
 import {
   ChevronRight, Bot, Download,
@@ -92,7 +93,7 @@ function buildHistoryCsv(items) {
     ['id', item => item.raw?.id || item.id],
   ];
   const header = columns.map(([name]) => csvCell(name)).join(';');
-  const rows = items.map(item => columns.map(([, getter]) => csvCell(getter(item))).join(';'));
+  const rows = items.filter(item => !item.raw?.keyword_text || assessSearchTerm(item.raw.keyword_text).accepted).map(item => columns.map(([, getter]) => csvCell(getter(item))).join(';'));
   return `\uFEFF${[header, ...rows].join('\n')}`;
 }
 

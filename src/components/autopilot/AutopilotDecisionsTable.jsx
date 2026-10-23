@@ -249,7 +249,7 @@ export default function AutopilotDecisionsTable({ decisions, onRefresh }) {
           </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr><td colSpan={6} className="px-5 py-10 text-center text-sm text-slate-500">Nenhuma decisão neste filtro</td></tr>
+              <tr><td colSpan={6} className="px-5 py-10 text-center text-sm text-slate-500">Nenhuma ação neste filtro. Termos inválidos podem ter sido excluídos na validação; consulte a auditoria de termos no dashboard.</td></tr>
             ) : filtered.map(d => (
               <DecisionRow key={d.id} d={d} onUpdate={updateDecision} />
             ))}

@@ -8,6 +8,8 @@
  * precisar acertar o schema tipado de 116 entidades de antemão. A tabela é criada sob demanda.
  */
 import { sql } from '../db.ts';
+import { recordTermQualityRead } from '../searchTermQualityContext.ts';
+import { QUALITY_ENTITIES, annotateSearchTerm, readQualityPage } from '../../../base44/shared/searchTermQuality.ts';
 
 const SYSTEM_FIELDS = new Set(['id', 'created_date', 'updated_date', 'created_by']);
 const ensured = new Set<string>();
@@ -182,6 +184,22 @@ export class EntityRepo {
         }. Use filter(query, sort, limit, offset).`,
       );
     }
+    if (QUALITY_ENTITIES.has(this.entity)) {
+      const { search_term_quality_view, ...query } = where;
+      if (search_term_quality_view === 'audit') {
+        return (await this.filterRaw(query, sort, limit, offset)).map(row => annotateSearchTerm(row, this.entity));
+      }
+      return await readQualityPage(async (pageSize: number, cursor: number) => {
+        const rows = await this.filterRaw(query, sort, pageSize, cursor);
+        const annotated = rows.map((row) => annotateSearchTerm(row, this.entity));
+        recordTermQualityRead(this.entity, annotated);
+        return annotated;
+      }, { limit, offset });
+    }
+    return await this.filterRaw(where, sort, limit, offset);
+  }
+
+  private async filterRaw(where: Row, sort?: string | null, limit?: number, offset?: number): Promise<Row[]> {
     await ensureTable(this.table);
     const { clause, params } = buildWhere(where, 1);
     let text = `SELECT * FROM ${q(this.table)} ${clause} ${buildOrder(sort)}`;
@@ -201,7 +219,10 @@ export class EntityRepo {
       `SELECT * FROM ${q(this.table)} WHERE id = $1 LIMIT 1`,
       [id],
     )) as unknown as Row[];
-    return rows[0] ? mapRow(rows[0]) : null;
+    const row = rows[0] ? mapRow(rows[0]) : null;
+    if (!row || !QUALITY_ENTITIES.has(this.entity)) return row;
+    const quality = annotateSearchTerm(row, this.entity);
+    return quality.accepted ? quality : null;
   }
 
   async findOne(where: Row = {}, sort?: string | null): Promise<Row | null> {
@@ -211,6 +232,23 @@ export class EntityRepo {
 
   async create(payload: Row = {}): Promise<Row> {
     await ensureTable(this.table);
+    if (QUALITY_ENTITIES.has(this.entity)) {
+      payload = annotateSearchTerm(payload, this.entity);
+      if (!payload.accepted && ['KeywordSuggestion', 'NegativeKeywordSuggestion', 'TermBank'].includes(this.entity)) {
+        await new EntityRepo('SearchTermQualityAudit').create({ ...payload, source: this.entity });
+        throw new Error(`search_term_excluded:${payload.exclusion_reason}`);
+      }
+    }
+    if (['KeywordSuggestion', 'NegativeKeywordSuggestion', 'TermBank'].includes(this.entity)) {
+      const scope = Object.fromEntries(['amazon_account_id', 'campaign_id', 'ad_group_id', 'asin', 'sku', 'match_type']
+        .map(key => [key, payload[key] ?? null]));
+      const existing = await this.filter(scope);
+      const same = existing.find(row => row.normalized_term === payload.normalized_term);
+      if (same) return same;
+      for (const key of ['keyword_text', 'keyword', 'term']) {
+        if (key in payload) payload[key] = payload.normalized_term;
+      }
+    }
     const { system, data } = splitSystem(payload);
     const id = system.id ?? crypto.randomUUID();
     // Passamos o OBJETO direto (postgres.js serializa como JSON uma única vez).
@@ -264,6 +302,19 @@ export class EntityRepo {
   }
 
   async update(id: string, patch: Row = {}): Promise<Row | null> {
+    if (QUALITY_ENTITIES.has(this.entity)) {
+      const existing = (await this.filterRaw({ id }, null, 1))[0];
+      if (!existing) return null;
+      const termChanged = ['search_term', 'searchTerm', 'keyword_text', 'keyword', 'term'].some(key => key in patch);
+      const candidate = { ...existing, ...patch };
+      if (termChanged && !('raw_term' in patch)) delete candidate.raw_term;
+      const quality = annotateSearchTerm(candidate, this.entity);
+      if (!quality.accepted && ['KeywordSuggestion', 'NegativeKeywordSuggestion', 'TermBank'].includes(this.entity)) {
+        await new EntityRepo('SearchTermQualityAudit').create(quality);
+        throw new Error(`search_term_excluded:${quality.exclusion_reason}`);
+      }
+      patch = { ...patch, ...quality };
+    }
     await ensureTable(this.table);
     const { system, data } = splitSystem(patch);
     const rows = (await sql.unsafe(
