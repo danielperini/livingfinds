@@ -22,7 +22,7 @@ export type SchedulerRun = {
 };
 
 export function schedulerReplayBlocked(run: SchedulerRun | null | undefined): boolean {
-  return run?.remote_outcome === 'unknown' || /remote_unknown|remote[ _](state|outcome).*?(unknown|not confirmed)|(?:estado|resultado) remoto desconhecido|automatic replay blocked/i.test(run?.last_error || '');
+  return run?.remote_outcome === 'unknown' || /deployment_interrupted|remote_unknown|remote[ _](state|outcome).*?(unknown|not confirmed)|(?:estado|resultado) remoto desconhecido|automatic replay blocked/i.test(run?.last_error || '');
 }
 
 export function isDailyCycleExecutionConfirmedResponse(response: any): boolean {
@@ -89,12 +89,8 @@ export function shouldDispatchRun(
   if (schedulerReplayBlocked(run)) return false;
   if (!run) return true;
   if (run.status === 'succeeded' || run.status === 'exhausted') return false;
-  if (run.status === 'running') {
-    const startedAt = Date.parse(String(run.started_at || ''));
-    // Recover a process crash after a bounded lease; a recent worker may still be active.
-    return Number(run.attempt_count || 0) < maxAttempts && Number.isFinite(startedAt) &&
-      nowMs - startedAt > 10 * 60_000;
-  }
+  if (run.status === 'running') return false; // A lost lease does not prove a remote write was not sent.
+
   if (Number(run.attempt_count || 0) >= maxAttempts) return false;
   const nextAttempt = Date.parse(String(run.next_attempt_at || ''));
   return !Number.isFinite(nextAttempt) || nextAttempt <= nowMs;
@@ -129,7 +125,7 @@ export function isStaleFinalAttempt(
   nowMs: number,
   maxAttempts: number,
 ): boolean {
-  if (run?.status !== 'running' || Number(run.attempt_count || 0) < maxAttempts) return false;
+  if (run?.status !== 'running') return false; // Any abandoned attempt requires reconciliation.
   const startedAt = Date.parse(String(run.started_at || ''));
   return Number.isFinite(startedAt) && nowMs - startedAt > 10 * 60_000;
 }

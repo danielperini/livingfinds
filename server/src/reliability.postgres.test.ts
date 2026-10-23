@@ -1,5 +1,5 @@
 import postgres from 'npm:postgres';
-import { claimNextRunWithSql, recoverExpiredMotorRunsWithSql } from './motorRuns.ts';
+import { claimNextRunWithSql, recoverExpiredMotorRunsWithSql, reportMotorRunProgressWithSql } from './motorRuns.ts';
 import { createOptimizationDecisionIdempotentWithSql } from './sdk/entities.ts';
 import {
   finishOptimizationDecisionExecutionWithSql,
@@ -357,6 +357,12 @@ Deno.test({
       ) {
         throw new Error('Worker reiniciado não retomou tarefa persistida em fila.');
       }
+      const progress = await reportMotorRunProgressWithSql(restartedQueueWorker, resumed.id, resumed.lease_id,
+        { stage: 'collect_evidence', stage_status: 'completed' }, runTable);
+      const progressRows = await client.unsafe(`select stage_results,counters from ${q(runTable)} where id='queued-1'`);
+      if (!progress || progressRows[0].stage_results.collect_evidence.correlation_id !== 'queued-1' || Number(progressRows[0].counters.stages_completed) !== 1) {
+        throw new Error('Progresso precisa persistir correlação e contadores em SQL PostgreSQL válido.');
+      }
       await client.unsafe(
         `update ${
           q(runTable)
@@ -369,6 +375,19 @@ Deno.test({
         ['queued-1'],
       ) as unknown as Array<{ status: string; remote_outcome: string }>;
       const afterRecovery = await claimNextRunWithSql(restartedQueueWorker, runTable);
+      // An old blocked account at the queue head must not starve an unrelated safe account.
+      await client.unsafe(`insert into ${q(runTable)}(id,request_key,function_name,account_scope,status) values
+        ('blocked-head','blocked-head-request','executeApprovedDecisionQueue','scope-queued','queued'),
+        ('safe-other','safe-other-request','runUnifiedDecisionEngine','other-safe-scope','queued'),
+        ('malformed','malformed-request','runUnifiedDecisionEngine','malformed-scope','queued')`);
+      await client.unsafe(`update ${q(runTable)} set request_payload=to_jsonb('legacy scalar'::text) where id='malformed'`);
+      const safeOther = await claimNextRunWithSql(restartedQueueWorker, runTable);
+      if (safeOther?.id !== 'safe-other') throw new Error('Fila segura foi bloqueada por outra conta.');
+      // Missing stage progress does not prove the handler never ran.
+      await client.unsafe(`update ${q(runTable)} set lease_expires_at=now()-interval '1 second' where id='safe-other'`);
+      await recoverExpiredMotorRunsWithSql(restartedQueueWorker, runTable);
+      const noStage = await client.unsafe(`select status,remote_outcome from ${q(runTable)} where id='safe-other'`);
+      if (noStage[0].status !== 'remote_unknown' || noStage[0].remote_outcome !== 'unknown') throw new Error('Reinício sem progresso não pode autorizar replay.');
       await restartedQueueWorker.end({ timeout: 3 });
       if (
         recovered !== 1 || stale[0]?.status !== 'remote_unknown' ||

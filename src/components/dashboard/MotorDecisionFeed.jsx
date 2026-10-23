@@ -307,7 +307,7 @@ export default function MotorDecisionFeed({ decisions, bidChanges, motorHealth, 
       {[
         ['Decisões nas últimas 24h', counts.recent_24h], ['Decisões históricas', counts.historical_total],
         ['Decisões bloqueadas', counts.blocked], ['Decisões confirmadas', counts.confirmed],
-        ['Ações enviadas (por decisão)', counts.sent], ['Ações ainda não confirmadas', counts.unconfirmed],
+        ['Decisões stale', counts.stale], ['Sem evidência de envio', counts.not_sent], ['Não enviadas (confirmado)', counts.confirmed_not_sent], ['Ações enviadas (por decisão)', counts.sent], ['Ações ainda não confirmadas', counts.unconfirmed],
       ].map(([label, value]) => <div key={label} className="rounded border border-[var(--border-color)] px-2 py-2"><strong>{decisionReadState.complete ? value : '—'}</strong> {label}</div>)}
       {!decisionReadState.complete && <p role="status" className="col-span-2">{recentDecisionMessage(decisionReadState, counts.recent_24h, counts.historical_total)}</p>}
     </div>

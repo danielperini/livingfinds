@@ -133,7 +133,7 @@ Deno.test('persistent scheduler states retry only after due time and stop termin
       now,
       6,
     ),
-    true,
+    false,
   );
   assertEquals(
     shouldDispatchRun(

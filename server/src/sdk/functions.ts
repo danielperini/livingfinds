@@ -1,3 +1,4 @@
+import { currentCorrelationId } from '../cycleContext.ts';
 /**
  * Functions — reimplementa `base44.functions.invoke(name, payload)`.
  * Chama o handler da função-alvo (já carregado no registry) em processo, montando um Request
@@ -20,7 +21,8 @@ function internalInvocationToken(): string {
 export function makeFunctions(serviceRole: boolean) {
   const invoke = async (name: string, payload: Json = {}): Promise<Json> => {
     const handler: FnHandler | undefined = registry.get(name);
-    const body = serviceRole ? { ...payload, _service_role: true } : { ...payload };
+    const correlated = { ...payload, correlation_id: currentCorrelationId() || String(payload.correlation_id || '').trim() || crypto.randomUUID() };
+    const body = serviceRole ? { ...correlated, _service_role: true } : correlated;
     const internalToken = serviceRole ? internalInvocationToken() : '';
     const headers: Record<string, string> = {
       'content-type': 'application/json',

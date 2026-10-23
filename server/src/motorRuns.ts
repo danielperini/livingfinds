@@ -79,24 +79,7 @@ export async function ensureMotorRunTable(): Promise<void> {
     await sql.unsafe(
       `create index if not exists motor_execution_runs_scope_idx on motor_execution_runs(account_scope, status, last_activity_at desc)`,
     );
-    // Older decision-only runs were incorrectly persisted with remote_outcome=unknown
-    // whenever the engine returned a failure. They cannot send campaign mutations;
-    // the queue executor is the sole campaign-write path. Reconcile only terminal
-    // failed planner rows. Keep timed-out/remote_unknown rows and executor failures
-    // blocked until a human or remote-state reconciler resolves them.
-    await sql.unsafe(
-      `update motor_execution_runs
-       set remote_outcome='not_attempted',
-           errors=errors || jsonb_build_array(jsonb_build_object(
-             'stage','remote_outcome_reconciliation',
-             'message','Terminal decision-only failure reconciled: this run did not send an Amazon campaign write.',
-             'at',now()
-           ))
-       where status='failed'
-         and remote_outcome='unknown'
-         and function_name = any($1::text[])`,
-      [['runCanonicalDecisionCycle', 'runUnifiedDecisionEngine', 'runStrategyEngine']] as any[],
-    );
+    // Legacy remote uncertainty is historical evidence. Startup never reconciles it implicitly.
     // Cross-process exclusivity is enforced by a PostgreSQL advisory transaction lock
     // in both enqueue and claim. Avoid adding a uniqueness constraint over legacy rows.
   })();
@@ -121,7 +104,7 @@ export async function enqueueMotorRun(input: {
   const requestKey = String(input.request_key || '').trim().slice(0, 180);
   if (!requestKey) throw new Error('request_key obrigatório para idempotência da execução.');
   const scope = String(input.account_id || 'default-account').trim().slice(0, 180);
-  const payload = { ...(input.payload || {}) };
+  const payload = { ...(input.payload || {}), correlation_id: String(input.payload?.correlation_id || '').trim() || crypto.randomUUID() };
   delete (payload as any)._motor_execution_run_id;
   delete (payload as any)._motor_execution_lease;
 
@@ -143,7 +126,7 @@ export async function enqueueMotorRun(input: {
     const inserted = await tx.unsafe(
       `insert into motor_execution_runs(id,request_key,function_name,account_scope,status,request_payload)
        values($1,$2,$3,$4,'queued',$5::jsonb) returning *`,
-      [id, requestKey, input.function_name, scope, JSON.stringify(payload)] as any[],
+      [id, requestKey, input.function_name, scope, payload] as any[],
     ) as unknown as DbRow[];
     return { run: inserted[0], reused: false };
   });
@@ -174,6 +157,11 @@ export async function reportMotorRunProgress(
   patch: Record<string, unknown>,
 ) {
   await ensureMotorRunTable();
+  return await reportMotorRunProgressWithSql(sql, id, leaseId, patch);
+}
+
+export async function reportMotorRunProgressWithSql(client: any, id: string, leaseId: string, patch: Record<string, unknown>, tableName = 'motor_execution_runs') {
+  const table = quoteRunTable(tableName);
   const stage = String(patch.stage || '').slice(0, 120);
   const stageStatus = String(patch.stage_status || '').slice(0, 40);
   const safeError = patch.error ? safeMotorError(patch.error) : null;
@@ -183,6 +171,7 @@ export async function reportMotorRunProgress(
   const stagePatch = stage
     ? {
       [stage]: {
+        correlation_id: String(patch.correlation_id || result?.correlation_id || ''),
         status: stageStatus || 'running',
         started_at: patch.started_at || null,
         completed_at: patch.completed_at || null,
@@ -201,18 +190,18 @@ export async function reportMotorRunProgress(
   ) {
     throw new Error('Status de execução inválido.');
   }
-  const rows = await sql.unsafe(
-    `update motor_execution_runs set
+  const rows = await client.unsafe(
+    `update ${table} set
       current_stage=coalesce($3,current_stage),
       status=coalesce($4,status),
       last_activity_at=now(),
       finished_at=case when $4 in ('completed','partial','failed','interrupted','remote_unknown') then now() else finished_at end,
-      stage_results=stage_results || $5::jsonb,
+      stage_results=stage_results || case when $3::text is null then $5::jsonb else jsonb_set($5::jsonb,ARRAY[$3,'correlation_id'],to_jsonb(coalesce(nullif($5::jsonb->$3->>'correlation_id',''),request_payload->>'correlation_id',id))) end,
       counters=counters || jsonb_build_object(
-        'stages_recorded', jsonb_object_length(stage_results || $5::jsonb),
-        'stages_completed', coalesce((counters->>'stages_completed')::integer,0) + case when $3='completed' then 1 else 0 end,
-        'stages_failed', coalesce((counters->>'stages_failed')::integer,0) + case when $3='failed' then 1 else 0 end,
-        'stages_remote_unknown', coalesce((counters->>'stages_remote_unknown')::integer,0) + case when $3='remote_unknown' then 1 else 0 end
+        'stages_recorded', (select count(*) from jsonb_object_keys(stage_results || $5::jsonb)),
+        'stages_completed', coalesce((counters->>'stages_completed')::integer,0) + case when $5::jsonb->$3->>'status'='completed' then 1 else 0 end,
+        'stages_failed', coalesce((counters->>'stages_failed')::integer,0) + case when $5::jsonb->$3->>'status'='failed' then 1 else 0 end,
+        'stages_remote_unknown', coalesce((counters->>'stages_remote_unknown')::integer,0) + case when $5::jsonb->$3->>'status'='remote_unknown' then 1 else 0 end
       ) || $6::jsonb,
       errors=case when $7::text is null then errors else errors || jsonb_build_array(jsonb_build_object('stage',$3,'message',$7::text,'at',now())) end,
       remote_outcome=coalesce($8,remote_outcome)
@@ -222,8 +211,8 @@ export async function reportMotorRunProgress(
       leaseId,
       stage || null,
       newStatus,
-      JSON.stringify(stagePatch),
-      JSON.stringify(patch.counters || {}),
+      stagePatch,
+      patch.counters || {},
       safeError,
       patch.remote_outcome || null,
     ] as any[],
@@ -250,7 +239,9 @@ export async function claimNextRunWithSql(
     ) as unknown as Array<{ acquired: boolean }>;
     if (!maintenance[0]?.acquired) return null;
     const candidates = await tx.unsafe(
-      `select id,account_scope from ${table} where status='queued' order by created_at asc for update skip locked limit 1`,
+      `select id,account_scope from ${table} q where status='queued' and jsonb_typeof(request_payload)='object'
+       and not exists(select 1 from ${table} b where (b.account_scope=q.account_scope or b.account_scope='default-account' or q.account_scope='default-account')
+         and (b.status in ('running','remote_unknown') or b.remote_outcome='unknown')) order by created_at asc for update skip locked limit 1`,
     ) as unknown as DbRow[];
     const candidate = candidates[0];
     if (!candidate) return null;
@@ -259,12 +250,13 @@ export async function claimNextRunWithSql(
       [`motor-run:${candidate.account_scope}`] as any[],
     );
     const active = await tx.unsafe(
-      `select id from ${table} where account_scope=$1 and (status in ('running','remote_unknown') or remote_outcome='unknown') limit 1`,
+      `select id from ${table} where (account_scope=$1 or account_scope='default-account' or $1='default-account') and (status in ('running','remote_unknown') or remote_outcome='unknown') limit 1`,
       [candidate.account_scope] as any[],
     ) as unknown as DbRow[];
     if (active[0]) return null;
     const rows = await tx.unsafe(
       `update ${table} set status='running',lease_id=$2,started_at=coalesce(started_at,now()),
+         request_payload=jsonb_set(request_payload,'{correlation_id}',to_jsonb(coalesce(nullif(btrim(request_payload->>'correlation_id'),''),id))),
          lease_expires_at=now()+($3::text||' milliseconds')::interval,attempt_count=attempt_count+1,last_activity_at=now()
        where id=$1 and status='queued' returning *`,
       [candidate.id, leaseId, LEASE_MS] as any[],
@@ -313,6 +305,7 @@ export function startMotorRunWorker(invoke: MotorInvoker): void {
       );
       const work = invoke(run.function_name as MotorFunction, {
         ...(run.request_payload || {}),
+        correlation_id: run.request_payload?.correlation_id || crypto.randomUUID(),
         _service_role: true,
         _motor_execution_run_id: id,
         _motor_execution_lease: leaseId,
@@ -331,13 +324,13 @@ export function startMotorRunWorker(invoke: MotorInvoker): void {
         const remoteOutcome = motorRemoteOutcome(run.function_name as MotorFunction, result);
         await sql.unsafe(
           `update motor_execution_runs set status=$3,finished_at=now(),last_activity_at=now(),lease_expires_at=null,
-            result_summary=$4::jsonb,remote_outcome=$5,errors=case when $6::text is null then errors else errors || jsonb_build_array(jsonb_build_object('stage',current_stage,'message',$6::text,'at',now())) end
+            result_summary=jsonb_build_object('correlation_id',request_payload->>'correlation_id') || $4::jsonb,remote_outcome=$5,errors=case when $6::text is null then errors else errors || jsonb_build_array(jsonb_build_object('stage',current_stage,'message',$6::text,'at',now())) end
            where id=$1 and lease_id=$2 and status='running'`,
           [
             id,
             leaseId,
             status,
-            JSON.stringify(summary),
+            summary,
             remoteOutcome,
             result.error ? safeMotorError(result.error) : null,
           ] as any[],
@@ -348,7 +341,7 @@ export function startMotorRunWorker(invoke: MotorInvoker): void {
         await sql.unsafe(
           `update motor_execution_runs set status=$3,finished_at=now(),last_activity_at=now(),lease_expires_at=null,
             remote_outcome=$4,errors=errors || jsonb_build_array(jsonb_build_object('stage',current_stage,'message',$5::text,'at',now())),
-            result_summary=jsonb_build_object('message',$5::text,'partial_stages',stage_results)
+            result_summary=jsonb_build_object('correlation_id',request_payload->>'correlation_id','message',$5::text,'partial_stages',stage_results)
            where id=$1 and lease_id=$2 and status='running'`,
           [
             id,
@@ -401,8 +394,8 @@ export async function recoverExpiredMotorRunsWithSql(
 ): Promise<number> {
   const table = quoteRunTable(tableName);
   const rows = await client.unsafe(
-    `update ${table} set status=case when current_stage is null then 'interrupted' else 'remote_unknown' end,finished_at=now(),last_activity_at=now(),lease_expires_at=null,
-      remote_outcome=case when current_stage is null then 'not_attempted' else 'unknown' end,
+    `update ${table} set status='remote_unknown',finished_at=now(),last_activity_at=now(),lease_expires_at=null,
+      remote_outcome='unknown',
       errors=errors || jsonb_build_array(jsonb_build_object('stage',current_stage,'message','process_restart_or_lease_expired; no automatic replay','at',now()))
     where status='running' and lease_expires_at < now() returning id`,
   ) as unknown as DbRow[];

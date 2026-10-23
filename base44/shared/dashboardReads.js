@@ -27,6 +27,10 @@ export function dashboardDecisionCounts(decisions, now = Date.now()) {
   // attempt_count/last_attempt_at also record local gates; they never prove sending.
   const sent = (row) => Boolean(row.amazon_request_id || row.request_id || row.sent_at || row.executed_at || row.remote_outcome === 'sent_unconfirmed' || confirmed(row));
   return { recent_24h: rows.filter(recent).length, historical_total: rows.length,
+    last_decision_at: rows.map(row => row.created_at || row.created_date).filter(value => Number.isFinite(Date.parse(value))).sort((a,b) => Date.parse(b)-Date.parse(a))[0] || null,
+    stale: rows.filter(row => !recent(row)).length,
+    not_sent: rows.filter(row => !sent(row)).length,
+    confirmed_not_sent: rows.filter(row => row.remote_outcome !== 'unknown' && row.status !== 'remote_unknown' && (row.remote_outcome === 'not_attempted' || row.execution_status === 'not_sent')).length,
     blocked: rows.filter((row) => ['blocked', 'remote_unknown'].includes(row.status) || row.remote_outcome === 'unknown').length,
     confirmed: rows.filter(confirmed).length, sent: rows.filter(sent).length,
     unconfirmed: rows.filter((row) => sent(row) && !confirmed(row)).length,

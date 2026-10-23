@@ -1,12 +1,12 @@
+import { groupOperationalAlerts, decisionRecoveryEligibility } from '../../../base44/shared/operationalState.js';
 import { readAllDashboardPages } from '../../../base44/shared/dashboardReads.js';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { loadMotorDashboardStatus, refreshMotorDashboard } from '@/lib/motorDashboardRead';
 import MotorOperationalReadout from './MotorOperationalReadout';
 import { base44 } from '@/api/base44Client';
-import { RefreshCw, Loader2, AlertTriangle, CheckCircle2, ShieldAlert } from 'lucide-react';
+import { RefreshCw, Loader2 } from 'lucide-react';
 import MetricCard from '@/components/ui/MetricCard';
-import DataFreshnessBadge from '@/components/ui/DataFreshnessBadge';
 import MotorDecisionFeed from '@/components/dashboard/MotorDecisionFeed';
 import { isDecisionQueueOverdue } from '@/lib/operationalQueueHealth';
 
@@ -24,153 +24,47 @@ function pctChange(curr, prev) {
   return ((curr - prev) / prev) * 100;
 }
 
-function FreshnessSource({ label, timestamp }) {
+function FreshnessSource({ label, timestamp, coverage }) {
   return (
     <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-theme-card-2 border border-[var(--border-color)]">
       <span className="text-[11px] text-theme-muted font-medium">{label}</span>
-      <DataFreshnessBadge timestamp={timestamp} variant="full" />
+      <span className="text-[11px]">{timestamp ? new Date(timestamp).toLocaleString('pt-BR') : 'sem timestamp'} · {coverage?.status === 'fresh' ? 'cobertura recente completa' : 'cobertura incompleta ou não verificada'} ({coverage?.coverage_percent ?? '—'}%)</span>
     </div>
   );
 }
 
-function AttentionCard({ alert, onResolve, resolving }) {
-  const severity = String(alert?.severity || 'medium').toLowerCase();
-  const tone = severity === 'critical' ? 'danger' : 'warning';
-  const ring = severity === 'critical' ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50';
-  const Icon = severity === 'critical' ? ShieldAlert : AlertTriangle;
-  const iconColor = severity === 'critical' ? 'text-red-500' : 'text-amber-500';
-  return (
-    <div className={`rounded-2xl border p-4 ${ring}`}>
-      <div className="flex items-start gap-2">
-        <Icon className={`w-4 h-4 ${iconColor} flex-shrink-0 mt-0.5`} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-3">
-            <p className="text-sm font-semibold text-theme-primary">{alert?.title || 'Alerta'}</p>
-            <button
-              type="button"
-              onClick={() => onResolve?.(alert.id)}
-              disabled={resolving}
-              aria-label={`Resolver alerta ${alert?.title || ''}`}
-              className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-white/70 px-2 py-1 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-60"
-            >
-              {resolving ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
-              Resolver
-            </button>
-          </div>
-          {alert?.asin && <p className="text-[11px] font-mono text-[#0066CC] mt-0.5">{alert.asin}</p>}
-          <p className="text-xs text-theme-secondary mt-1 leading-relaxed">{alert?.message || alert?.details || 'Verifique o detalhe do alerta.'}</p>
-          {alert?.metric_name && (
-            <p className="text-[10px] text-theme-muted mt-1.5">
-              {alert.metric_name}: {alert.metric_value != null ? alert.metric_value : '—'}
-              {alert.threshold_value != null ? ` · limite: ${alert.threshold_value}` : ''}
-            </p>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+function AttentionCard({ alert }) {
+  return <div className="rounded-xl border border-amber-200 p-3">
+    <p className="font-semibold">{alert.title || alert.alert_type || 'Alerta'} · {alert.classification}</p>
+    <p>{alert.asin || 'Conta'} · campanha {alert.campaign_id || '—'} · {alert.occurrences} ocorrência(s)</p>
+    <p className="text-xs">{typeof alert.message === 'string' ? alert.message : typeof alert.details === 'string' ? alert.details : 'Consultar evidência técnica.'}</p>
+    {alert.classification === 'remote_unknown' && <p>Reconciliação pendente. Replay bloqueado por segurança.</p>}
+  </div>;
 }
 
 function AttentionPanel({ accountId, decisions = [] }) {
-  const [alerts, setAlerts] = useState(null);
-  const [readError, setReadError] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [resolvingId, setResolvingId] = useState(null);
-  const [resolveError, setResolveError] = useState('');
-
+  const [state, setState] = useState({ loading: true, error: '', rows: [] });
   useEffect(() => {
-    let mounted = true;
-    setLoading(true);
-    setReadError('');
-    (async () => {
-      try {
-        const qs = accountId ? { amazon_account_id: accountId, status: 'active' } : { status: 'active' };
-        const [criticalRows, highRows] = await Promise.all([
-          readAllDashboardPages(base44.entities.Alert, { filter: { ...qs, severity: 'critical' } }),
-          readAllDashboardPages(base44.entities.Alert, { filter: { ...qs, severity: 'high' } }),
-        ]);
-        if (!mounted) return;
-        const byId = new Map(
-          [...criticalRows, ...highRows].map(alert => [alert.id, alert])
-        );
-        setAlerts([...byId.values()]);
-      } catch (error) {
-        if (mounted) setReadError(error.message || 'Falha ao consultar alertas');
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    })();
-    return () => { mounted = false; };
+    if (!accountId) return;
+    let active = true;
+    setState({ loading: true, error: '', rows: [] });
+    readAllDashboardPages(base44.entities.Alert, { filter: { amazon_account_id: accountId } })
+      .then(rows => { if (active) setState({ loading: false, error: '', rows }); })
+      .catch(error => { if (active) setState({ loading: false, error: error.message, rows: [] }); });
+    return () => { active = false; };
   }, [accountId]);
-
-  const resolveAlert = async (alertId) => {
-    if (!alertId || resolvingId) return;
-    setResolvingId(alertId);
-    setResolveError('');
-    try {
-      await base44.entities.Alert.update(alertId, {
-        status: 'resolved',
-        resolved_at: new Date().toISOString(),
-        resolution_reason: 'manual_resolve',
-      });
-      setAlerts(current => (current || []).filter(alert => alert.id !== alertId));
-    } catch (error) {
-      setResolveError(error?.message || 'Não foi possível resolver o alerta.');
-    } finally {
-      setResolvingId(null);
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-6">
-        <Loader2 className="w-4 h-4 text-slate-400 animate-spin" />
-      </div>
-    );
-  }
-  if (readError) return <p role="alert" className="text-xs text-red-600">Não foi possível verificar os alertas: {readError}</p>;
-  const overdueQueue = (decisions || []).filter((decision) =>
-    isDecisionQueueOverdue(decision, Date.now())
-  );
-  if ((!alerts || alerts.length === 0) && overdueQueue.length === 0) {
-    return (
-      <div className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-        <CheckCircle2 className="w-5 h-5 text-emerald-500 flex-shrink-0" />
-        <div>
-          <p className="text-sm font-semibold text-emerald-700">Nenhum alerta crítico registrado</p>
-          <p className="text-xs text-emerald-600/80 mt-0.5">Nenhum alerta crítico ou de alta severidade ativo.</p>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <>
-      {resolveError && <p className="mb-3 text-xs text-red-600">{resolveError}</p>}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {overdueQueue.length > 0 && (
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm font-semibold text-theme-primary">Fila Amazon atrasada</p>
-                <p className="text-xs text-theme-secondary mt-1 leading-relaxed">
-                  {overdueQueue.length} decisão(ões) executáveis estão vencidas para envio ou nova tentativa há mais de 15 minutos. Itens concluídos, bloqueados ou aguardando aprovação não entram nesta contagem.
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-        {alerts.slice(0, 6).map(a => (
-          <AttentionCard
-            key={a.id}
-            alert={a}
-            onResolve={resolveAlert}
-            resolving={resolvingId === a.id}
-          />
-        ))}
-      </div>
-    </>
-  );
+  if (state.loading) return <p>Consultando alertas e evidências…</p>;
+  if (state.error) return <p role="alert">Falha técnica na leitura de alertas: {state.error}</p>;
+  const groups = groupOperationalAlerts(state.rows);
+  const overdue = decisions.filter(row => isDecisionQueueOverdue(row) && decisionRecoveryEligibility(row).safe);
+  return <div className="space-y-3 text-xs">
+    <p>{groups.active.length} alertas acionáveis · {groups.reconciliation.length} pendentes de reconciliação · {groups.history.length} registros no histórico</p>
+    {overdue.length > 0 && <p role="alert">{overdue.length} propostas recentes sem evidência de envio estão atrasadas; elegibilidade ainda deve ser validada pelo executor.</p>}
+    {groups.active.length === 0 && <p>Nenhum alerta acionável com evidência recente. Isso não comprova saúde das fontes.</p>}
+    <div className="grid md:grid-cols-2 gap-3">{groups.active.map(row => <AttentionCard key={row.id} alert={row} />)}</div>
+    {groups.reconciliation.length > 0 && <section aria-label="Pendente de reconciliação"><p>Estado remoto desconhecido</p>{groups.reconciliation.map(row => <AttentionCard key={row.id} alert={row} />)}</section>}
+    <details><summary>Histórico preservado ({groups.history.length})</summary><div className="max-h-64 overflow-auto">{groups.history.map((row,index) => <p key={`${row.id}-${index}`}>{row.title || row.alert_type} · {row.asin} · {row.campaign_id} · {row.classification}</p>)}</div></details>
+  </div>;
 }
 
 /**
@@ -272,9 +166,9 @@ export default function DecisionalOverview({
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap xl:justify-end">
-            <FreshnessSource label="Ads API" timestamp={timestamps.ads} />
-            <FreshnessSource label="SP-API" timestamp={timestamps.spApi} />
-            <FreshnessSource label="Motor" timestamp={timestamps.motor} />
+            <FreshnessSource label="Ads API" timestamp={timestamps.ads} coverage={motorHealth.data?.data_freshness?.campaigns} />
+            <FreshnessSource label="SP-API" timestamp={timestamps.spApi} coverage={motorHealth.data?.data_freshness?.products} />
+            <FreshnessSource label="Motor" timestamp={timestamps.motor} coverage={motorHealth.data?.data_freshness?.decisions} />
             <button
               type="button"
               onClick={handleRefresh}

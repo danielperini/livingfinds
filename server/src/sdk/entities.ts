@@ -1,3 +1,4 @@
+import { currentCorrelationId } from '../cycleContext.ts';
 /**
  * Camada de Entidades — reimplementa `base44.entities.<Entity>.<método>` sobre Postgres.
  *
@@ -231,6 +232,7 @@ export class EntityRepo {
   }
 
   async create(payload: Row = {}): Promise<Row> {
+    if (currentCorrelationId() && !payload.correlation_id) payload = { ...payload, correlation_id: currentCorrelationId() };
     await ensureTable(this.table);
     if (QUALITY_ENTITIES.has(this.entity)) {
       payload = annotateSearchTerm(payload, this.entity);
@@ -284,7 +286,7 @@ export class EntityRepo {
       throw new Error('Operação idempotente disponível apenas para OptimizationDecision.');
     }
     await ensureTable(this.table);
-    return await createOptimizationDecisionIdempotentWithSql(sql, this.table, payload);
+    return await createOptimizationDecisionIdempotentWithSql(sql, this.table, { ...payload, correlation_id: payload.correlation_id || currentCorrelationId() });
   }
 
   async bulkCreate(items: Row[] = []): Promise<Row[]> {

@@ -1,3 +1,4 @@
+import { decisionRecoveryEligibility } from '../../base44/shared/operationalState.js';
 import { dailyMotorReadModel } from './motorDashboardPolicy.ts';
 import { safeMotorError } from './motorRunPolicy.ts';
 import { dashboardDecisionCounts } from '../../base44/shared/dashboardReads.js';
@@ -20,21 +21,30 @@ export async function readDailyMotorWithSql(sql: ReadSql, input: { today: string
     catch (error) { errors.push({ source, error: safeMotorError(error) }); return null; }
   };
   const [history, active, unknown] = await Promise.all([
-    read('scheduler', `select slot_key,status,attempt_count,recovery_count,started_at,finished_at,updated_at,last_error
-      from ${quoted(tables.scheduler)} where function_name='runCanonicalDecisionCycle' order by slot_key desc,started_at desc nulls last limit 1`, []),
-    read('current_run', `select id,status,started_at,lease_expires_at,last_activity_at,result_summary->>'correlation_id' as correlation_id
-      from ${quoted(tables.runs)} where status='running' and ($1::text is null or account_scope=$1 or account_scope='default-account')
+    read('scheduler', `select slot_key,status,attempt_count,recovery_count,started_at,finished_at,updated_at,last_error,
+      to_jsonb(s)->>'correlation_id' as correlation_id
+      from ${quoted(tables.scheduler)} s where function_name='runCanonicalDecisionCycle' order by slot_key desc,started_at desc nulls last limit 1`, []),
+    read('current_run', `select id,status,started_at,lease_expires_at,last_activity_at,coalesce(result_summary->>'correlation_id',to_jsonb(r)->'request_payload'->>'correlation_id') as correlation_id
+      from ${quoted(tables.runs)} r where status='running' and ($1::text is null or account_scope=$1 or account_scope='default-account')
       order by started_at desc limit 1`, [input.accountId || null]),
-    read('unresolved_run', `select id,status,remote_outcome,started_at,finished_at,result_summary->>'correlation_id' as correlation_id
-      from ${quoted(tables.runs)} where (remote_outcome='unknown' or status='remote_unknown')
+    read('unresolved_run', `select id,status,remote_outcome,started_at,finished_at,coalesce(result_summary->>'correlation_id',to_jsonb(r)->'request_payload'->>'correlation_id') as correlation_id
+      from ${quoted(tables.runs)} r where (remote_outcome='unknown' or status='remote_unknown')
       and ($1::text is null or account_scope=$1 or account_scope='default-account') order by started_at desc nulls last limit 1`, [input.accountId || null]),
   ]);
+  const jobFailures = await read('scheduler_jobs', `select s.function_name,s.slot_key,s.status,s.attempt_count,s.last_error,s.finished_at,s.updated_at,
+    (select max(n.updated_at) from ${quoted(tables.scheduler)} n where n.status='succeeded' and n.updated_at>s.updated_at
+      and coalesce(to_jsonb(n)->>'job_key',n.function_name)=coalesce(to_jsonb(s)->>'job_key',s.function_name)) as recovered_at,
+    to_jsonb(s)->>'correlation_id' as correlation_id from ${quoted(tables.scheduler)} s
+    where status in ('failed','exhausted') and last_error is not null order by updated_at desc limit 101`, []);
   const model = dailyMotorReadModel({ ...input, latest: history?.[0], current: active?.[0], unknown: unknown?.[0], sourceErrors: errors });
   const cycleDate = (row: any) => row?.started_at ? new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo',
     year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(row.started_at)) : null;
-  // Do not attach an older unresolved run's correlation to a newer daily cycle.
-  const related = [active?.[0], unknown?.[0]].find((row) => row && cycleDate(row) === model.last_cycle_date);
-  return { ...model, correlation_id: related?.correlation_id || model.correlation_id,
+  // A shared calendar date is not causal linkage. Keep missing legacy correlation explicit.
+  const failures = (jobFailures || []).slice(0,100).map(row => ({ ...row, last_error: safeMotorError(row.last_error),
+    classification: /remote.*unknown|deployment_interrupted|automatic replay blocked/i.test(row.last_error) ? 'remote_unknown'
+      : row.recovered_at ? 'resolved' : row.slot_key?.includes(input.today) ? 'technical_failure' : 'historical' }));
+  return { ...model, states: [...new Set([...model.states, ...(failures.some(row => row.classification === 'technical_failure') ? ['scheduler_error'] : [])])],
+    failed_jobs_limit: 100, failed_jobs_has_more: (jobFailures?.length || 0) > 100, failed_jobs: failures, correlation_id: model.correlation_id,
     unresolved_run: unknown?.[0] ? { id: unknown[0].id, date: cycleDate(unknown[0]),
       correlation_id: unknown[0].correlation_id, remote_outcome: 'unknown', replay: 'blocked', reconciliation: 'pending' } : null };
 }
@@ -58,15 +68,18 @@ export async function readDashboardDocuments(sql: ReadSql, table: string, accoun
 export function sourceFreshness(rows: any[], fields: string[], now: number) {
   const times = rows.flatMap((row) => fields.map((field) => Date.parse(row[field] || ''))).filter((at) => Number.isFinite(at) && at <= now);
   const last = times.length ? Math.max(...times) : null;
-  const staleRecords = rows.filter((row) => !fields.some((field) => {
-    const at = Date.parse(row[field] || '');
-    return Number.isFinite(at) && at <= now && now - at <= 45 * 60_000;
-  })).length;
-  return { latest_at: last === null ? null : new Date(last).toISOString(), stale_records: staleRecords,
-    total_records: rows.length,
+  const recordTimes = rows.map(row => fields.map(field => Date.parse(row[field] || '')).filter(at => Number.isFinite(at) && at <= now));
+  const missing = recordTimes.filter(times => times.length === 0).length;
+  const recent = recordTimes.filter(times => times.some(at => now - at <= 45 * 60_000)).length;
+  const old = rows.length - missing - recent;
+  return { latest_at: last === null ? null : new Date(last).toISOString(),
+    stale_records: old + missing, old_records: old, missing_timestamp_records: missing, recent_records: recent,
+    total_records: rows.length, coverage_percent: rows.length ? Math.round(recent / rows.length * 10000) / 100 : 0,
     latest_status: last !== null && now - last <= 45 * 60_000 ? 'fresh' : 'data_stale',
     age_seconds: last === null ? null : Math.floor((now - last) / 1000),
-    status: last === null || staleRecords > 0 ? 'data_stale' : 'fresh', threshold_minutes: 45 };
+    status: !rows.length ? 'no_data' : old + missing > 0 ? 'data_stale' : 'fresh', threshold_minutes: 45,
+    interpretation: 'Timestamp antigo demonstra idade do registro; falha de sincronização exige evidência do job.' };
+
 }
 
 export async function getMotorDashboardWithSql(sql: ReadSql, input: { accountId: string; today: string; due: boolean; scheduler: any; now?: number }, tables: Tables = motorDashboardTables) {
@@ -82,13 +95,21 @@ export async function getMotorDashboardWithSql(sql: ReadSql, input: { accountId:
     campaigns: campaigns ? sourceFreshness(campaigns, ['last_api_sync_at', 'last_sync_at', 'synced_at'], now) : null,
     products: products ? sourceFreshness(products, ['last_catalog_sync_at', 'last_sync_at', 'synced_at'], now) : null,
     decisions: decisions ? sourceFreshness(decisions, ['evaluated_at', 'created_at', 'created_date'], now) : null,
-    inventory: products ? sourceFreshness(products, ['inventory_snapshot_at', 'last_catalog_sync_at'], now) : null,
+    inventory: products ? sourceFreshness(products, ['inventory_snapshot_at', 'last_inventory_sync_at'], now) : null,
   };
   const states = [...daily.states];
   if (counts?.recent_24h === 0) states.push('no_recent_decisions');
   if (Object.values(dataFreshness).some((source) => !source || source.status === 'data_stale')) states.push('data_stale');
   return { ok: errors.length === 0 && daily.source_errors.length === 0, checked_at: new Date(now).toISOString(),
-    account_id: input.accountId, daily_motor: daily, scheduler: input.scheduler, states: [...new Set(states)],
+    account_id: input.accountId, daily_motor: daily, scheduler: { ...input.scheduler, healthy: input.scheduler?.healthy === true && !daily.states.includes('scheduler_error') }, states: [...new Set(states)],
+    service: { status: 'responding', database_read: errors.length === 0 && daily.source_errors.length === 0 },
+    decision_recovery: decisions ? {
+      execution_allowed: daily.remote_outcome !== 'unknown' && daily.reconciliation !== 'pending',
+      blocked_by_remote_unknown: daily.remote_outcome === 'unknown' || daily.reconciliation === 'pending',
+      pending: decisions.filter(row => ['approved','waiting_retry','scheduled'].includes(row.status)).length,
+      safe_unsent: decisions.filter(row => ['approved','waiting_retry','scheduled'].includes(row.status) && decisionRecoveryEligibility(row, now).safe).length,
+      requires_new_collection: decisions.filter(row => ['approved','waiting_retry','scheduled'].includes(row.status) && decisionRecoveryEligibility(row, now).reason === 'new_collection_and_decision_required').length,
+    } : null,
     decision_counts: counts, data_freshness: dataFreshness,
     source_counts: { raw_campaign_rows: campaigns?.length ?? null,
       enabled_rows: campaigns?.filter((row) => ['enabled', 'active'].includes(String(row.state || row.status || '').toLowerCase())).length ?? null,

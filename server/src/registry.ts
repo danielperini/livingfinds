@@ -1,3 +1,4 @@
+import { withCycleContext } from './cycleContext.ts';
 /**
  * Registry — carrega as 311 funções Deno sem modificá-las.
  *
@@ -78,12 +79,20 @@ export async function loadFunctions(): Promise<{ loaded: number; failed: string[
       if (typeof handler === 'function') {
         registry.set(name, async (req) => {
           const body = await req.clone().json().catch(() => ({}));
-          return await withTermQualityRun(async () => await handler(req), async (summary) => {
+          return await withCycleContext(body, async (correlated) => {
+          const request = new Request(req, { body: JSON.stringify(correlated) });
+          return await withTermQualityRun(async () => {
+            const response = await handler(request);
+            const data = await response.clone().json().catch(() => null);
+            return data && typeof data === 'object' && !Array.isArray(data)
+              ? Response.json({ ...data, correlation_id: correlated.correlation_id }, { status: response.status, headers: response.headers }) : response;
+          }, async (summary) => {
             await new EntityRepo('SearchTermQualityCycle').create({ ...summary,
               source: name, amazon_account_id: body.amazon_account_id || null,
-              correlation_id: body.correlation_id || null,
+              correlation_id: correlated.correlation_id,
               completed_at: new Date().toISOString(),
             });
+          });
           });
         });
         loaded++;
