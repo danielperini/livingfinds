@@ -55,7 +55,7 @@ export async function readDashboardDocuments(sql: ReadSql, table: string, accoun
   throw new Error('dashboard_read_page_limit');
 }
 
-function freshness(rows: any[], fields: string[], now: number) {
+export function sourceFreshness(rows: any[], fields: string[], now: number) {
   const times = rows.flatMap((row) => fields.map((field) => Date.parse(row[field] || ''))).filter((at) => Number.isFinite(at) && at <= now);
   const last = times.length ? Math.max(...times) : null;
   const staleRecords = rows.filter((row) => !fields.some((field) => {
@@ -63,6 +63,8 @@ function freshness(rows: any[], fields: string[], now: number) {
     return Number.isFinite(at) && at <= now && now - at <= 45 * 60_000;
   })).length;
   return { latest_at: last === null ? null : new Date(last).toISOString(), stale_records: staleRecords,
+    total_records: rows.length,
+    latest_status: last !== null && now - last <= 45 * 60_000 ? 'fresh' : 'data_stale',
     age_seconds: last === null ? null : Math.floor((now - last) / 1000),
     status: last === null || staleRecords > 0 ? 'data_stale' : 'fresh', threshold_minutes: 45 };
 }
@@ -77,10 +79,10 @@ export async function getMotorDashboardWithSql(sql: ReadSql, input: { accountId:
   const [decisions, campaigns, products] = [get(0), get(1), get(2)];
   const counts = decisions ? dashboardDecisionCounts(decisions, now) : null;
   const dataFreshness = {
-    campaigns: campaigns ? freshness(campaigns, ['last_api_sync_at', 'last_sync_at', 'synced_at'], now) : null,
-    products: products ? freshness(products, ['last_catalog_sync_at', 'last_sync_at', 'synced_at'], now) : null,
-    decisions: decisions ? freshness(decisions, ['evaluated_at', 'created_at', 'created_date'], now) : null,
-    inventory: products ? freshness(products, ['inventory_snapshot_at', 'last_catalog_sync_at'], now) : null,
+    campaigns: campaigns ? sourceFreshness(campaigns, ['last_api_sync_at', 'last_sync_at', 'synced_at'], now) : null,
+    products: products ? sourceFreshness(products, ['last_catalog_sync_at', 'last_sync_at', 'synced_at'], now) : null,
+    decisions: decisions ? sourceFreshness(decisions, ['evaluated_at', 'created_at', 'created_date'], now) : null,
+    inventory: products ? sourceFreshness(products, ['inventory_snapshot_at', 'last_catalog_sync_at'], now) : null,
   };
   const states = [...daily.states];
   if (counts?.recent_24h === 0) states.push('no_recent_decisions');

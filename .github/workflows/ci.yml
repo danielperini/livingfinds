@@ -182,6 +182,8 @@ jobs:
         run: deno test --node-modules-dir=auto server/src/motorRunPolicy.test.ts
       - name: Test current and historical motor read models without network
         run: deno test server/src/motorDashboardPolicy.test.ts server/src/motorDashboardProxy.test.ts
+      - name: Test full stock guard evidence and safe simulation without network
+        run: deno test --config server/tests/stockGuard/deno.json server/tests/stockGuard/paging.test.ts
       - name: Test canonical campaign audit incident without external access
         run: deno test --config server/tests/canonicalIncident/deno.json --allow-env=MOTOR_STAGE_TIMEOUT_MS server/tests/canonicalIncident/incident.test.ts
       - name: Test scheduler and Hostinger OpenAI routing

@@ -1,3 +1,4 @@
+import { readAllDashboardPages } from '../../shared/dashboardReads.js';
 import { availableAdsStock, hasFreshAdsInventory } from '../../shared/stockAdsPolicy.ts';
 import { campaignCoverageEligible } from '../../shared/campaignCoverageEligibility.ts';
 import { belongsToStockCampaignAlert, planStockCampaignAlertReconciliation } from '../../shared/stockCampaignAlertPolicy.js';
@@ -97,12 +98,10 @@ Deno.serve(async (req) => {
 
     // ── 2. Carregar todos os produtos da conta ────────────────────────────
     const [allProducts, campaigns, kickoffQueue, productAds] = await Promise.all([
-      base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, '-updated_date', 500),
-      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 2000),
-      base44.asServiceRole.entities.ProductKickoffQueue.filter(
-        { amazon_account_id: aid }, '-created_date', 100
-      ).catch(() => []),
-      base44.asServiceRole.entities.ProductAd.filter({ amazon_account_id: aid }, '-synced_at', 5000).catch(() => []),
+      readAllDashboardPages(base44.asServiceRole.entities.Product, { filter: { amazon_account_id: aid } }),
+      readAllDashboardPages(base44.asServiceRole.entities.Campaign, { filter: { amazon_account_id: aid } }),
+      readAllDashboardPages(base44.asServiceRole.entities.ProductKickoffQueue, { filter: { amazon_account_id: aid } }),
+      readAllDashboardPages(base44.asServiceRole.entities.ProductAd, { filter: { amazon_account_id: aid } }),
     ]);
 
     // ── Índices auxiliares ────────────────────────────────────────────────
@@ -274,9 +273,7 @@ Deno.serve(async (req) => {
     // acionável apenas se ainda houver campanha ativa; alertas legados são
     // resolvidos depois da pausa confirmada ou quando o estoque retorna.
     let oosCampaignsActive = 0;
-    const activeAlerts = await base44.asServiceRole.entities.Alert.filter(
-      { amazon_account_id: aid, status: 'active' }, '-created_at', 1000
-    ).catch(() => []);
+    const activeAlerts = await readAllDashboardPages(base44.asServiceRole.entities.Alert, { filter: { amazon_account_id: aid, status: 'active' } });
     for (const [sku, camps] of activeCampaignsBySku.entries()) {
       const skuProducts = productsBySku.get(sku) || [];
       const product = skuProducts.length === 1 ? skuProducts[0] : null;
@@ -359,6 +356,8 @@ Deno.serve(async (req) => {
       stock_guard_confirmed: dryRun ? null : stockGuardConfirmed,
       kickoff_execution: kickoffExecution,
       dry_run: dryRun,
+      source_pagination_complete: true,
+      source_counts: { products: allProducts.length, campaigns: campaigns.length, product_ads: productAds.length, kickoff_queue: kickoffQueue.length, active_alerts: activeAlerts.length },
       in_amazon_window: inWindow,
       scheduled_for: inWindow ? 'now' : scheduledFor,
       stats: { ...stats, oos_with_active_campaign: oosCampaignsActive },
@@ -366,6 +365,6 @@ Deno.serve(async (req) => {
 
   } catch (error: any) {
     console.error('[checkInventoryChangesAndKickoff]', error.message);
-    return Response.json({ ok: false, error: error.message, inventory_sync_confirmed: inventorySyncConfirmed === true, stock_guard_confirmed: stockGuardConfirmed === true }, { status: 500 });
+    return Response.json({ ok: false, error: error.message, inventory_sync_confirmed: inventorySyncConfirmed === true, stock_guard_confirmed: false, source_pagination_complete: false }, { status: 500 });
   }
 });
