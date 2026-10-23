@@ -12,9 +12,10 @@ import { join, extname } from 'jsr:@std/path@1';
 import { contentType } from 'jsr:@std/media-types@1';
 import { loadFunctions, registry } from './registry.ts';
 import { getDailyMotorRunStatus, getSchedulerHealth, startScheduler } from './scheduler.ts';
-import { healthcheck, query } from './db.ts';
+import { healthcheck, query, sql } from './db.ts';
 import { makeEntities } from './sdk/entities.ts';
 import { makeIntegrations } from './sdk/integrations.ts';
+import { getMotorDashboardWithSql, listMotorCycleEvidenceWithSql } from './motorDashboard.ts';
 import { makeEnvironmentStatusResponse } from './environmentStatus.ts';
 import { enqueueMotorRun, getMotorRun, isMotorFunction, listMotorRuns, reportMotorRunProgress, startMotorRunWorker } from './motorRuns.ts';
 import { finishOptimizationDecisionExecution, renewOptimizationDecisionExecution, reserveOptimizationDecisionExecution } from './decisionExecutionClaims.ts';
@@ -347,6 +348,26 @@ async function handler(req: Request): Promise<Response> {
       motor_worker: { enabled: Deno.env.get('ENABLE_MOTOR_RUN_WORKER') !== 'false' },
       daily_motor: dailyMotor,
     });
+  }
+  if ((path === '/api/motor-status' || path === '/api/motor-cycle-evidence') && req.method === 'GET') {
+    if (!await apiAuthorized(req)) return json({ ok: false, error: 'Não autorizado' }, 401);
+    const accountId = url.searchParams.get('account_id');
+    if (!accountId) return json({ ok: false, error: 'account_id obrigatório' }, 400);
+    try {
+      if (path === '/api/motor-cycle-evidence') return json(await listMotorCycleEvidenceWithSql(sql as any, {
+        accountId, date: url.searchParams.get('date') || '', correlationId: url.searchParams.get('correlation_id') || undefined,
+        source: url.searchParams.get('source') || 'decisions', offset: Number(url.searchParams.get('offset') || 0),
+      }));
+      const now = new Date();
+      const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo',
+        year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(now).map((part) => [part.type, part.value]));
+      return json(await getMotorDashboardWithSql(sql as any, { accountId,
+        today: `${parts.year}-${parts.month}-${parts.day}`, due: Number(parts.hour) * 60 + Number(parts.minute) >= 85,
+        scheduler: getSchedulerHealth(), now: now.getTime(),
+      }));
+    } catch (error) {
+      return json({ ok: false, read_only: true, error: 'Falha ao ler diagnóstico do motor.', detail: String((error as Error).message).slice(0, 300) }, 503);
+    }
   }
   if (path === '/internal/optimization-decision-claims/reserve' && req.method === 'POST') {
     if (!await apiAuthorized(req)) return json({ ok: false, error: 'Não autorizado' }, 401);

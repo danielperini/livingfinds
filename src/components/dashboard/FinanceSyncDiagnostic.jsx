@@ -1,3 +1,4 @@
+import { readAllDashboardPages } from '../../../base44/shared/dashboardReads.js';
 /**
  * FinanceSyncDiagnostic — Painel de diagnóstico do sync de Finance Events
  * Mostra o que foi sincronizado vs o que o Seller Central deveria mostrar.
@@ -68,19 +69,17 @@ export default function FinanceSyncDiagnostic({ accountId }) {
   const loadData = useCallback(async () => {
     if (!accountId) return;
     setLoading(true);
+    try {
     const [records, logs] = await Promise.all([
-      base44.asServiceRole.entities.SalesDaily.filter(
-        { amazon_account_id: accountId, date: yesterday }, null, 10
-      ).catch(() => []),
-      base44.asServiceRole.entities.SyncExecutionLog.filter(
-        { amazon_account_id: accountId, operation: 'syncFinanceEventsFromSpApi' }, '-created_date', 1
-      ).catch(() => []),
+      readAllDashboardPages(base44.entities.SalesDaily, { filter: { amazon_account_id: accountId, date: yesterday } }),
+      base44.entities.SyncExecutionLog.filter({ amazon_account_id: accountId, operation: 'syncFinanceEventsFromSpApi' }, '-created_date', 1),
     ]);
     // Preferir registro sem asin (agregado)
     const aggRec = records.find(r => !r.asin) || records[0] || null;
     setData(aggRec);
     setSyncLog(logs[0] || null);
-    setLoading(false);
+    } catch (error) { setSyncResult({ ok: false, error: `Falha na leitura: ${error.message}` }); }
+    finally { setLoading(false); }
   }, [accountId, yesterday]);
 
   useEffect(() => {

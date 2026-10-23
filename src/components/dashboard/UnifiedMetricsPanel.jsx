@@ -1,3 +1,4 @@
+import { readAllDashboardPages } from '../../../base44/shared/dashboardReads.js';
 /**
  * UnifiedMetricsPanel
  * Blocos novos do Dashboard com dados dos Relatórios Unificados Amazon.
@@ -5,7 +6,7 @@
  */
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { ShieldAlert, TrendingUp, PieChart, ShoppingCart, Zap, AlertTriangle, CheckCircle, Info } from 'lucide-react';
+import { ShieldAlert, PieChart, ShoppingCart, Zap } from 'lucide-react';
 
 const fmt = (v, dec = 1) => Number(v || 0).toFixed(dec).replace('.', ',');
 const fmtPct = (v, dec = 1) => `${fmt(v * 100, dec)}%`;
@@ -48,8 +49,8 @@ export default function UnifiedMetricsPanel({ amazonAccountId }) {
         const cutoff = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
 
         const [unifiedRaw, reconRaw, account] = await Promise.all([
-          base44.entities.UnifiedAdsMetricsDaily.filter({ amazon_account_id: amazonAccountId }, '-date', 300),
-          base44.entities.UnifiedMetricsReconciliation.filter({ amazon_account_id: amazonAccountId }, '-date', 100),
+          readAllDashboardPages(base44.entities.UnifiedAdsMetricsDaily, { filter: { amazon_account_id: amazonAccountId } }),
+          readAllDashboardPages(base44.entities.UnifiedMetricsReconciliation, { filter: { amazon_account_id: amazonAccountId } }),
           base44.entities.AmazonAccount.filter({ id: amazonAccountId }),
         ]);
 

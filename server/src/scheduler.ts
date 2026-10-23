@@ -5,6 +5,7 @@
  * configurado. Locks PostgreSQL de sessão impedem concorrência entre réplicas e
  * acionadores locais; a conexão fica reservada no pool isolado do scheduler durante a execução.
  */
+import { readDailyMotorWithSql } from './motorDashboard.ts';
 import { join } from 'jsr:@std/path@1';
 import { makeFunctions } from './sdk/functions.ts';
 import { schedulerSql } from './db.ts';
@@ -150,30 +151,9 @@ export async function getDailyMotorRunStatus(timezone = 'America/Sao_Paulo') {
   const day = `${local.year}-${String(local.mon).padStart(2, '0')}-${
     String(local.dom).padStart(2, '0')
   }`;
-  const rows = await schedulerSql.unsafe(
-    `
-    select status,attempt_count,recovery_count,started_at,finished_at,next_attempt_at,last_error
-    from scheduler_job_runs
-    where function_name='runCanonicalDecisionCycle' and slot_key=$1
-    limit 1
-  `,
-    [day],
-  );
-  const run = rows[0] as Record<string, unknown> | undefined;
-  const due = local.hour * 60 + local.min >= 85;
-  return {
-    date: day,
-    scheduled_local_time: '01:25',
-    due,
-    status: String(run?.status || (due ? 'missing' : 'not_due')),
-    attempts: Number(run?.attempt_count || 0),
-    recovery_count: Number(run?.recovery_count || 0),
-    started_at: run?.started_at ?? null,
-    finished_at: run?.finished_at ?? null,
-    next_attempt_at: run?.next_attempt_at ?? null,
-    last_error: run?.last_error ?? null,
-    confirmed_success: run?.status === 'succeeded',
-  };
+  return await readDailyMotorWithSql(schedulerSql as any, {
+    today: day, due: local.hour * 60 + local.min >= 85, scheduler: getSchedulerHealth(),
+  });
 }
 
 function safeError(value: unknown): string {
@@ -212,7 +192,7 @@ async function ensureRunLedger(): Promise<void> {
 
 async function getRun(jobKey: string, slotKey: string) {
   const rows = await schedulerSql.unsafe(
-    'select status, attempt_count, recovery_count, next_attempt_at, started_at, finished_at from scheduler_job_runs where job_key=$1 and slot_key=$2 limit 1',
+    'select status, attempt_count, recovery_count, next_attempt_at, started_at, finished_at, last_error from scheduler_job_runs where job_key=$1 and slot_key=$2 limit 1',
     [jobKey, slotKey],
   );
   return rows[0] as unknown as {
@@ -222,6 +202,7 @@ async function getRun(jobKey: string, slotKey: string) {
     next_attempt_at: string | null;
     started_at: string | null;
     finished_at: string | null;
+    last_error: string | null;
   } | undefined;
 }
 
@@ -371,6 +352,9 @@ export async function startScheduler(): Promise<void> {
                 `${job.function} status=${
                   response?.status ?? 'unknown'
                 } returned unsuccessful or partial result`;
+            }
+            if (response?.data?.remote_outcome === 'unknown' || response?.remote_outcome === 'unknown') {
+              errorText = `remote_unknown; automatic replay blocked; ${errorText || 'remote reconciliation required'}`.slice(0, 500);
             }
           } catch (error) {
             errorText = safeError(error);

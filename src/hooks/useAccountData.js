@@ -20,6 +20,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
+import { readAllDashboardPages } from '../../base44/shared/dashboardReads.js';
 import { loadAllCampaigns } from '@/lib/campaignUtils';
 
 const STALE_5MIN = 5 * 60 * 1000;
@@ -29,7 +30,8 @@ const STALE_2MIN = 2 * 60 * 1000;
 // ── Resolve a conta ativa do usuário atual ──────────────────────────────────
 async function fetchAccount() {
   const me = await base44.auth.me();
-  const accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id }, '-updated_date', 5);
+  const accounts = await readAllDashboardPages(base44.entities.AmazonAccount, { filter: { user_id: me.id } });
+  accounts.sort((a,b) => String(b.updated_date || '').localeCompare(String(a.updated_date || '')));
   return {
     user: me,
     account: accounts.find(a => a.status === 'connected') || accounts[0] || null,
@@ -41,6 +43,7 @@ async function fetchAccount() {
 // de runDeterministicDecisionEngine, garantindo consistência Dashboard↔Motor.
 async function fetchCanonicalContext(accountId) {
   const res = await base44.functions.invoke('getCanonicalAccountContext', { amazon_account_id: accountId });
+  if (res?.data?.ok === false) throw new Error(res.data.error || 'Contexto canônico indisponível');
   return res?.data || null;
 }
 
@@ -50,36 +53,29 @@ async function fetchCampaigns(accountId) {
 }
 
 async function fetchMetricsDaily(accountId) {
-  return base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: accountId }, '-date', 5000);
+  return readAllDashboardPages(base44.entities.CampaignMetricsDaily, { filter: { amazon_account_id: accountId } });
 }
 
 async function fetchProducts(accountId) {
-  return base44.entities.Product.filter({ amazon_account_id: accountId }, '-fba_inventory', 500);
+  return readAllDashboardPages(base44.entities.Product, { filter: { amazon_account_id: accountId } });
 }
 
 async function fetchSalesDaily(accountId) {
   const since90 = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
-  return base44.entities.SalesDaily.filter(
-    { amazon_account_id: accountId, date: { $gte: since90 } },
-    '-date',
-    3000
-  );
+  return readAllDashboardPages(base44.entities.SalesDaily, { filter: { amazon_account_id: accountId, date: { $gte: since90 } } });
 }
 
 async function fetchDecisions(accountId) {
-  const [pending, all] = await Promise.all([
-    base44.entities.OptimizationDecision.filter({ amazon_account_id: accountId, status: 'pending' }, '-created_at', 10),
-    base44.entities.OptimizationDecision.filter({ amazon_account_id: accountId }, '-created_at', 5000),
-  ]);
-  return { pending, all };
+  const all = await readAllDashboardPages(base44.entities.OptimizationDecision, { filter: { amazon_account_id: accountId } });
+  return { pending: all.filter((row) => row.status === 'pending'), all };
 }
 
 async function fetchBidChanges(accountId) {
-  return base44.entities.AdsBidChangeLog.filter({ amazon_account_id: accountId }, '-created_at', 5000);
+  return readAllDashboardPages(base44.entities.AdsBidChangeLog, { filter: { amazon_account_id: accountId } });
 }
 
 async function fetchSyncRuns(accountId) {
-  return base44.entities.SyncExecutionLog.filter({ amazon_account_id: accountId }, '-started_at', 5);
+  return readAllDashboardPages(base44.entities.SyncExecutionLog, { filter: { amazon_account_id: accountId } });
 }
 
 async function fetchAutopilotConfig(accountId) {
@@ -219,8 +215,8 @@ export function useAccountData() {
   const error =
     accountQuery.error?.message ||
     campaignsQuery.error?.message ||
-    metricsDailyQuery.error?.message ||
-    null;
+    metricsDailyQuery.error?.message || productsQuery.error?.message || salesDailyQuery.error?.message ||
+    decisionsQuery.error?.message || bidChangesQuery.error?.message || syncRunsQuery.error?.message || canonicalContextQuery.error?.message || null;
 
   return {
     // Identidade
@@ -241,6 +237,8 @@ export function useAccountData() {
     // Decisões
     decisions: decisionsQuery.data?.pending ?? [],
     allDecisions: decisionsQuery.data?.all ?? [],
+    decisionReadState: { complete: decisionsQuery.isSuccess && !decisionsQuery.isFetching && !decisionsQuery.isError,
+      loading: decisionsQuery.isFetching, error: decisionsQuery.error?.message || null },
 
     // Atividade e configuração
     bidChanges: bidChangesQuery.data ?? [],
@@ -277,6 +275,7 @@ export function useAccountData() {
 export function invalidateAccountData(queryClient, accountId) {
   const keys = [
     ['account'],
+    ['motorStatus', accountId],
     ['canonicalContext', accountId],
     ['campaigns', accountId],
     ['metricsDaily', accountId],

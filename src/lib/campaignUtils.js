@@ -4,7 +4,7 @@
 
 import { base44 } from '@/api/base44Client';
 
-const PAGE_SIZE = 500;
+import { readAllDashboardPages } from '../../base44/shared/dashboardReads.js';
 
 function timestampOf(campaign = {}) {
   const values = [
@@ -24,20 +24,7 @@ function timestampOf(campaign = {}) {
 
 export async function loadAllCampaigns(amazonAccountId, extraFilter = {}, options = {}) {
   const { includeExcluded = false } = options;
-  const allCampaigns = [];
-  let offset = 0;
-
-  while (true) {
-    const page = await base44.entities.Campaign.filter(
-      { amazon_account_id: amazonAccountId, ...extraFilter },
-      '-created_date',
-      PAGE_SIZE,
-      offset
-    );
-    allCampaigns.push(...page);
-    if (page.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
-  }
+  const allCampaigns = await readAllDashboardPages(base44.entities.Campaign, { filter: { amazon_account_id: amazonAccountId, ...extraFilter } });
 
   const byCampaignId = new Map();
   allCampaigns.forEach((campaign) => {

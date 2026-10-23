@@ -17,7 +17,13 @@ export type SchedulerRun = {
   started_at?: string | null;
   finished_at?: string | null;
   recovery_count?: number;
+  last_error?: string | null;
+  remote_outcome?: string;
 };
+
+export function schedulerReplayBlocked(run: SchedulerRun | null | undefined): boolean {
+  return run?.remote_outcome === 'unknown' || /remote_unknown|remote[ _](state|outcome).*?(unknown|not confirmed)|(?:estado|resultado) remoto desconhecido|automatic replay blocked/i.test(run?.last_error || '');
+}
 
 export function isDailyCycleExecutionConfirmedResponse(response: any): boolean {
   if (!response || response.ok !== true) return false;
@@ -80,6 +86,7 @@ export function shouldDispatchRun(
   nowMs: number,
   maxAttempts: number,
 ): boolean {
+  if (schedulerReplayBlocked(run)) return false;
   if (!run) return true;
   if (run.status === 'succeeded' || run.status === 'exhausted') return false;
   if (run.status === 'running') {
@@ -100,6 +107,7 @@ export function shouldRecoverDailyCatchUpRun(
   cooldownMs = 60 * 60_000,
   maxRecoveries = 4,
 ): boolean {
+  if (schedulerReplayBlocked(run)) return false;
   if (job.catch_up_daily !== true || run?.status !== 'exhausted') return false;
   if (Number(run.recovery_count || 0) >= maxRecoveries) return false;
   const finishedAt = Date.parse(String(run.finished_at || ''));

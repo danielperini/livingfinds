@@ -1,3 +1,4 @@
+import { readAllDashboardPages } from '../../../base44/shared/dashboardReads.js';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer,
@@ -94,11 +95,11 @@ export default function LivePerformanceChart() {
       const since = brazilDate(-(RANGE_DAYS - 1));
 
       const [daily, hourly, sales, bidChanges, decisions] = await Promise.all([
-        base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: account.id, date: { $gte: since } }, '-date', 5000),
-        base44.entities.UnifiedAdsMetricsHourly.filter({ amazon_account_id: account.id, date: { $gte: brazilDate(-2) } }, '-date', 8000).catch(() => []),
-        base44.entities.SalesDaily.filter({ amazon_account_id: account.id, date: { $gte: since } }, '-date', 3000),
-        base44.entities.AdsBidChangeLog.filter({ amazon_account_id: account.id }, '-created_at', 5000).catch(() => []),
-        base44.entities.OptimizationDecision.filter({ amazon_account_id: account.id }, '-created_at', 5000).catch(() => []),
+        readAllDashboardPages(base44.entities.CampaignMetricsDaily, { filter: { amazon_account_id: account.id, date: { $gte: since } } }),
+        readAllDashboardPages(base44.entities.UnifiedAdsMetricsHourly, { filter: { amazon_account_id: account.id, date: { $gte: brazilDate(-2) } } }),
+        readAllDashboardPages(base44.entities.SalesDaily, { filter: { amazon_account_id: account.id, date: { $gte: since } } }),
+        readAllDashboardPages(base44.entities.AdsBidChangeLog, { filter: { amazon_account_id: account.id } }),
+        readAllDashboardPages(base44.entities.OptimizationDecision, { filter: { amazon_account_id: account.id } }),
       ]);
 
       setState({ loading: false, refreshing: false, error: null, loadedAt: new Date(), data: { accountId: account.id, daily, hourly, sales, bidChanges, decisions } });

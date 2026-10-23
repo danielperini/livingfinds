@@ -1,3 +1,4 @@
+import { readAllDashboardPages } from '../../../base44/shared/dashboardReads.js';
 import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import { AlertTriangle, CheckCircle, RefreshCw, Wrench, ChevronDown, ChevronUp, Clock, Zap } from 'lucide-react';
@@ -68,9 +69,7 @@ export default function SyncFailureMonitor({ amazonAccountId }) {
       const sinceMs = Date.now() - 7 * 86400000;
       // Precisamos ler sucesso + erro. Consultar só status=error mantinha falhas
       // já recuperadas eternamente no painel.
-      const all = await base44.entities.SyncExecutionLog.filter(
-        { amazon_account_id: amazonAccountId }, '-created_date', 500
-      );
+      const all = await readAllDashboardPages(base44.entities.SyncExecutionLog, { filter: { amazon_account_id: amazonAccountId } });
       const recent = (all || []).filter(log => logTime(log) >= sinceMs);
       const rawErrors = recent.filter(log => String(log.status).toLowerCase() === 'error');
       setHistoricalErrors(rawErrors.length);

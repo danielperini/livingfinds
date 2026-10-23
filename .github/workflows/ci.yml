@@ -34,6 +34,8 @@ jobs:
         run: node --test src/lib/motorLabels.test.js
       - name: Test daily motor status messaging
         run: node --test src/lib/dailyMotorStatus.test.js
+      - name: Test read-only motor dashboard paging, history and refresh
+        run: node --test src/lib/motorDashboardRead.test.js
       - name: Test daily growth cycle recovery contract
         run: node --test src/lib/proactiveGrowthCycle.test.js
       - name: Test post-deploy Amazon workflow isolation
@@ -178,6 +180,8 @@ jobs:
           deno test --node-modules-dir=auto base44/shared/searchTermWastePolicy.test.ts
       - name: Test durable motor run outcome policy
         run: deno test --node-modules-dir=auto server/src/motorRunPolicy.test.ts
+      - name: Test current and historical motor read models without network
+        run: deno test server/src/motorDashboardPolicy.test.ts server/src/motorDashboardProxy.test.ts
       - name: Test canonical campaign audit incident without external access
         run: deno test --config server/tests/canonicalIncident/deno.json --allow-env=MOTOR_STAGE_TIMEOUT_MS server/tests/canonicalIncident/incident.test.ts
       - name: Test scheduler and Hostinger OpenAI routing
@@ -217,6 +221,7 @@ jobs:
           --allow-net=localhost,127.0.0.1 --allow-read=server/migrations
           --node-modules-dir=auto server/src/reliability.postgres.test.ts
           server/src/migrations.postgres.test.ts
+          server/src/motorDashboard.postgres.test.ts
 
   agents-sdk:
     runs-on: ubuntu-latest
