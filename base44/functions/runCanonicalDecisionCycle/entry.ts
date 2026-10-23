@@ -51,9 +51,23 @@ Deno.serve(async(request)=>{
       max_candidates:body.max_economic_evidence_candidates??100,
     });
 
+    const aiReview=await invoke(base44,'runCanonicalAIDecisionReview',{
+      amazon_account_id:body.amazon_account_id||null,
+      effective_settings: body.effective_settings || null,
+      economic_evidence:economicEvidence,
+      unified_engine:engine,
+      data_freshness: body.data_freshness || null,
+      ai_review_enabled: body.ai_review_enabled,
+      dry_run:body.dry_run===true,
+      _service_role:true,
+      correlation_id:correlationId,
+      trigger_type:body.trigger_type||'canonical_decision_cycle',
+    });
+
     const engine=await invoke(base44,'runUnifiedDecisionEngine',{
       ...common,
       economic_evidence_policy_run:economicEvidence,
+      ai_review: aiReview,
       _canonical_orchestrator:'runCanonicalDecisionCycle',
     });
 
@@ -79,8 +93,8 @@ Deno.serve(async(request)=>{
           trigger_type:'canonical_pre_execution_arbitration',
         });
 
-    const stageResults: Record<string, any> = { economic_evidence: economicEvidence, unified_engine: engine, reconciliation, arbitration };
-    const failedStageNames = collectUnconfirmedCycleStages(stageResults, ['economic_evidence', 'unified_engine', 'reconciliation', 'arbitration']);
+    const stageResults: Record<string, any> = { economic_evidence: economicEvidence, unified_engine: engine, ai_review: aiReview, reconciliation, arbitration };
+    const failedStageNames = collectUnconfirmedCycleStages(stageResults, ['economic_evidence', 'unified_engine', 'ai_review', 'reconciliation', 'arbitration']);
     const failedStages = failedStageNames
       .map((stage) => describeUnconfirmedCycleStage(stage, stageResults[stage]));
     const shouldSupervise = body.daily_close === true || failedStages.length > 0;
@@ -97,6 +111,7 @@ Deno.serve(async(request)=>{
             trigger_type: body.trigger_type || 'canonical_decision_cycle',
             economic_evidence: compactStage(economicEvidence),
             unified_engine: compactStage(engine),
+            ai_review: compactStage(aiReview),
             reconciliation: compactStage(reconciliation),
             arbitration: compactStage(arbitration),
           },
@@ -141,6 +156,7 @@ Deno.serve(async(request)=>{
       correlation_id:correlationId,
       economic_evidence:economicEvidence,
       unified_engine:engine,
+      ai_review: aiReview,
       pre_execution_reconciliation:reconciliation,
       pre_execution_arbitration:arbitration,
       v6sia_supervision: supervision,

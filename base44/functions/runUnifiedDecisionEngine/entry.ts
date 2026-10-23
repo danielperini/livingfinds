@@ -159,12 +159,16 @@ Deno.serve(async (request) => {
 
     const deterministic = await invokeTracked('runDeterministicDecisionEngine', {
       ...common,
+      ai_review: body.ai_review || null,
       skip_economic_bid_budget: true,
       skip_direct_execution: true,
       daily_close: dailyClose,
       snapshot_run_id: snapshotRunId,
     });
-    const decisionV3Shadow = await invokeTracked('runDecisionArbiterV3', common);
+    const decisionV3Shadow = await invokeTracked('runDecisionArbiterV3', {
+      ...common,
+      ai_review: body.ai_review || null,
+    });
 
     const salesRecovery = body.skip_sales_recovery === true || dailyClose
       ? { ok: true, skipped: true }
