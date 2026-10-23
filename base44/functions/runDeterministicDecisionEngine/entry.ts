@@ -679,6 +679,11 @@ function rankByMarginalAcos(items: { id: string; spend: number; sales: number; o
 // ── Utilitários ───────────────────────────────────────────────────────────────
 function uuid(): string { return `${Date.now()}-${Math.random().toString(36).slice(2)}`; }
 function clamp(v: number, min: number, max: number): number { return Math.min(max, Math.max(min, v)); }
+function configuredNumber(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
 
 // ── HANDLER PRINCIPAL ─────────────────────────────────────────────────────────
 Deno.serve(async (req) => {
@@ -734,7 +739,7 @@ Deno.serve(async (req) => {
           max_cpc: Number(ps.max_cpc ?? 0),
           max_bid_increase_pct: psReq(ps.max_bid_increase_pct, FB.MAX_INCREASE_PCT * 100) / 100,
           max_bid_decrease_pct: psReq(ps.max_bid_decrease_pct, FB.MAX_DECREASE_PCT * 100) / 100,
-          daily_budget_cap: psReq(ps.daily_budget_limit, FB.DAILY_BUDGET_CAP),
+          daily_budget_cap: configuredNumber(ps.daily_budget_limit ?? ps.daily_budget_global ?? ps.account_daily_budget_limit),
           min_campaign_budget: psReq(ps.minimum_campaign_budget, 15),
           pacing_enabled: Boolean(ps.pacing_enabled ?? true),
           safety_factor: FB.SAFETY_FACTOR,
@@ -771,7 +776,7 @@ Deno.serve(async (req) => {
             max_cpc: Number(cfg.maximum_cpc ?? 0),
             max_bid_increase_pct: Number(cfg.max_bid_increase_pct ?? FB.MAX_INCREASE_PCT * 100) / 100,
             max_bid_decrease_pct: Number(cfg.max_bid_decrease_pct ?? FB.MAX_DECREASE_PCT * 100) / 100,
-            daily_budget_cap: Number(cfg.total_daily_budget ?? cfg.daily_budget_limit ?? FB.DAILY_BUDGET_CAP),
+            daily_budget_cap: configuredNumber(cfg.total_daily_budget ?? cfg.daily_budget_limit ?? cfg.daily_budget_global ?? cfg.account_daily_budget_limit),
             min_campaign_budget: 15, pacing_enabled: true,
             safety_factor: FB.SAFETY_FACTOR, min_confidence: FB.MIN_CONFIDENCE,
             cooldown_hours: FB.COOLDOWN_HOURS, maturation_hours: FB.MATURATION_HOURS,
@@ -796,7 +801,7 @@ Deno.serve(async (req) => {
         min_bid: FB.MIN_BID, max_bid: FB.MAX_BID, max_cpc: 0,
         max_bid_increase_pct: FB.MAX_INCREASE_PCT,
         max_bid_decrease_pct: FB.MAX_DECREASE_PCT,
-        daily_budget_cap: FB.DAILY_BUDGET_CAP,
+        daily_budget_cap: null,
         min_campaign_budget: 15, pacing_enabled: true,
         safety_factor: FB.SAFETY_FACTOR, min_confidence: FB.MIN_CONFIDENCE,
         cooldown_hours: FB.COOLDOWN_HOURS, maturation_hours: FB.MATURATION_HOURS,
@@ -847,6 +852,24 @@ Deno.serve(async (req) => {
     } else {
       settings.daily_budget_cap_configured = false;
       settings.daily_budget_cap_source = 'missing';
+    }
+
+    if (settings.daily_budget_cap_configured !== true || settings.daily_budget_cap === null) {
+      return Response.json({
+        ok: false,
+        blocked: true,
+        reason: 'MISSING_DAILY_BUDGET_LIMIT',
+        message: 'Motor bloqueado: configure o limite diário da conta antes de criar decisões de orçamento ou crescimento.',
+        source: settings.source || 'unknown',
+        source_id: settings.source_id || null,
+        effective_settings: {
+          objective: accountGoalPolicy.primaryObjective,
+          target_acos: accountGoalPolicy.effectiveTargets.targetAcos,
+          maximum_acos: accountGoalPolicy.effectiveTargets.maximumAcos,
+          maximum_daily_spend: accountGoalPolicy.effectiveTargets.maximumDailySpend,
+          daily_budget_cap_source: settings.daily_budget_cap_source,
+        },
+      }, { status: 409 });
     }
     settings.max_bid_increase_pct = Math.min(
       settings.max_bid_increase_pct,
