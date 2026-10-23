@@ -68,14 +68,22 @@ Deno.serve(async(request)=>{
       })));
     const aiReview = { ok: aiReviewRuns.every((run: any) => run?.ok !== false), proposal_only: true, runs: aiReviewRuns };
 
-    const engine=await invoke(base44,'runUnifiedDecisionEngine',{
+    const engine=economicEvidence.remote_outcome === 'unknown'
+      ? { ok: false, skipped: true, remote_outcome: 'unknown', blocked_by: 'economic_evidence' }
+      : await invoke(base44,'runUnifiedDecisionEngine',{
       ...common,
       economic_evidence_policy_run:economicEvidence,
       ai_review: aiReview,
       _canonical_orchestrator:'runCanonicalDecisionCycle',
     });
 
-    const reconciliation=body.dry_run===true
+    // Timeout detection does not cancel the underlying handler. Never start
+    // queue reconciliation/arbitration while a previous remote write is unknown.
+    const remoteUnknown = economicEvidence.remote_outcome === 'unknown' || engine.remote_outcome === 'unknown';
+    const blockedBy = engine.blocked_by || 'unconfirmed_remote_stage';
+    const remoteBlocked = { ok: false, skipped: true, blocked: true, blocked_by: blockedBy,
+      reason: 'remote_reconciliation_required', remote_outcome: 'unknown' };
+    const reconciliation=remoteUnknown ? remoteBlocked : body.dry_run===true
       ? {ok:true,skipped:true,reason:'dry_run'}
       : await invoke(base44,'reconcileEconomicEvidenceDecisions',{
           amazon_account_id:body.amazon_account_id||null,
@@ -87,7 +95,7 @@ Deno.serve(async(request)=>{
 
     // O árbitro é o último gate antes da fila executável. Todas as regras podem
     // propor; somente uma mutação líquida por entidade permanece aprovada.
-    const arbitration=body.dry_run===true
+    const arbitration=remoteUnknown ? remoteBlocked : body.dry_run===true
       ? {ok:true,skipped:true,reason:'dry_run'}
       : await invoke(base44,'arbitrateCanonicalDecisionConflicts',{
           amazon_account_id:body.amazon_account_id||null,
@@ -141,6 +149,7 @@ Deno.serve(async(request)=>{
       error_message: !cycleOutcome.core_ok ? JSON.stringify(failedStages).slice(0, 900) : null,
         result_summary: JSON.stringify({
           engine_version: 'V6SIA', correlation_id: correlationId,
+          ...(remoteUnknown ? { remote_outcome: 'unknown', blocked_by: blockedBy } : {}),
           stages: Object.fromEntries(Object.entries(stageResults).map(([name, result]: [string, any]) => [name, result?.ok === false ? 'failed' : result?.skipped ? 'skipped' : 'ok'])),
           stage_failures: failedStages,
           supervision_status: supervision?.status || (supervision?.skipped ? 'skipped' : supervision?.ok === false ? 'failed' : 'ok'),
@@ -155,6 +164,7 @@ Deno.serve(async(request)=>{
       core_stages_ok: cycleOutcome.core_ok,
       supervision_ok: cycleOutcome.supervision_ok,
       partial: cycleOutcome.partial,
+      ...(remoteUnknown ? { remote_outcome: 'unknown', blocked_by: blockedBy } : {}),
       engine:'canonical-decision-cycle',
       engine_version:'V6SIA',
       correlation_id:correlationId,

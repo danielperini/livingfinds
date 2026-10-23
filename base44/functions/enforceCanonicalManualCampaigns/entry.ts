@@ -364,12 +364,12 @@ Deno.serve(async (request) => {
     const accountId = account.id;
 
     const [campaigns, keywords, products] = await Promise.all([
-      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, '-created_at', 5000).catch(() => []),
-      base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: accountId }, '-created_at', 15000).catch(() => []),
-      base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, null, 2000).catch(() => []),
+      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, '-created_at', 5000),
+      base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: accountId }, '-created_at', 15000),
+      base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, null, 2000),
     ]);
 
-    const productByAsin = new Map(products.filter((p: any) => p.asin).map((p: any) => [String(p.asin).toUpperCase(), p]));
+    const productByAsin = new Map<string, any>(products.filter((p: any) => p.asin).map((p: any) => [String(p.asin).toUpperCase(), p]));
 
     const kwByCampaign = new Map<string, any[]>();
     for (const kw of keywords) {
@@ -431,6 +431,28 @@ Deno.serve(async (request) => {
       if ((c.keyword_count || 0) > 1) {
         auditViaApi.push({ campaign: c, cid, localKws: exactKws, asin: String(c.asin || '').toUpperCase(), was_paused: isPaused });
       }
+    }
+
+    // The canonical cycle audits structure; migration is a separate, explicit
+    // operation. Return before API reads, retry processing or any local/remote
+    // writes. A dry run must use the same read-only boundary.
+    if (body.audit_only === true || body.dry_run === true || body._canonical_orchestrator === 'runUnifiedDecisionEngine') {
+      return Response.json({
+        ok: true,
+        audit_only: true,
+        evidence_scope: 'local_snapshot',
+        remote_outcome: 'not_attempted',
+        campaigns_scanned: manualActive.length,
+        campaigns_multi_keyword_found: multiKeywordCampaigns.length,
+        campaigns_requiring_remote_verification: auditViaApi.length,
+        migration_required: multiKeywordCampaigns.length > 0 || auditViaApi.length > 0,
+        candidates: [...multiKeywordCampaigns, ...auditViaApi].slice(0, 50).map((item: any) => ({
+          campaign_id: item.cid, asin: item.asin,
+          requires_remote_verification: !item.exactKws,
+        })),
+        executed: 0,
+        confirmed: 0,
+      });
     }
 
     // ── Auditar via Amazon API campanhas suspeitas ────────────────────────────
