@@ -1,3 +1,4 @@
+import { readAllDashboardPages } from '../../shared/dashboardReads.js';
 import { campaignStateConfirmed, isStockCampaignPause } from '../../shared/inventorySyncPolicy.ts';
 // autoStockCampaignGuard
 // 1. Sincroniza o estado REAL de cada campanha direto na Amazon API
@@ -15,7 +16,7 @@ import { availableAdsStock, stockAdsDecision, hasFreshAdsInventory } from '../..
 import { manualKickoffCanComplete, shouldReactivateForManualKickoff } from '../../shared/manualKickoffReactivationPolicy.ts';
 import { deduplicateActiveAlerts, getAlertAsin, getAlertSku, planOperationalAlertCleanup } from '../../shared/operationalAlertCleanup.js';
 
-function adsBase(region) {
+function adsBase(region: string | undefined) {
   const r = String(region || 'NA').toUpperCase();
   if (r.includes('EU')) return 'https://advertising-api-eu.amazon.com';
   if (r.includes('FE')) return 'https://advertising-api-fe.amazon.com';
@@ -35,7 +36,7 @@ async function getAdsToken(base44: any, account: any): Promise<string> {
 }
 
 // Busca todas as campanhas da Amazon em um determinado estado e retorna Map<campaignId, state>
-async function fetchCampaignStates(token, profileId, region) {
+async function fetchCampaignStates(token: string, profileId: string, region: string) {
   const base = adsBase(region);
   const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
   const stateMap = new Map(); // campaignId → 'enabled' | 'paused' | 'archived'
@@ -43,7 +44,7 @@ async function fetchCampaignStates(token, profileId, region) {
   for (const stateFilter of ['ENABLED', 'PAUSED']) {
     let nextToken = null;
     do {
-      const body = { stateFilter: { include: [stateFilter] }, maxResults: 500 };
+      const body: Record<string, unknown> = { stateFilter: { include: [stateFilter] }, maxResults: 500 };
       if (nextToken) body.nextToken = nextToken;
       const res = await fetch(`${base}/sp/campaigns/list`, {
         method: 'POST',
@@ -69,7 +70,7 @@ async function fetchCampaignStates(token, profileId, region) {
 }
 
 // Envia comando de PAUSE ou ENABLE para a Amazon
-async function sendCampaignStateChange(token, profileId, region, campaignId, targetState) {
+async function sendCampaignStateChange(token: string, profileId: string, region: string, campaignId: string, targetState: string) {
   const base = adsBase(region);
   const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
   const body = { campaigns: [{ campaignId: String(campaignId), state: targetState.toUpperCase() }] };
@@ -107,14 +108,30 @@ Deno.serve(async (req) => {
     const results = [];
 
     for (const account of accounts) {
-      const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
-      const region = account.region || 'NA';
-      const accountLog = { account_id: account.id, paused: 0, paused_one_unit: 0, paused_not_buyable: 0, activated: 0, synced: 0, unlocked: 0, alerts_resolved: 0, duplicate_alerts_resolved: 0, errors: [] };
 
+      const region = account.region || 'NA';
+      const accountLog = { account_id: account.id, paused: 0, paused_one_unit: 0, paused_not_buyable: 0, activated: 0, synced: 0, unlocked: 0, alerts_resolved: 0, duplicate_alerts_resolved: 0, errors: [] as any[] };
+
+      // Read complete local evidence before any remote mutation. A failed page
+      // aborts this guard instead of pretending the account has no campaigns.
+      const [localCampaignRows, productAds, products] = await Promise.all([
+        readAllDashboardPages(db.entities.Campaign, { filter: { amazon_account_id: account.id } }),
+        readAllDashboardPages(db.entities.ProductAd, { filter: { amazon_account_id: account.id } }),
+        readAllDashboardPages(db.entities.Product, { filter: { amazon_account_id: account.id } }),
+      ]);
+      if (body.dry_run === true || body.audit_only === true) {
+        results.push({ ...accountLog, audit_only: true, remote_outcome: 'not_attempted',
+          source_pagination_complete: true,
+          source_counts: { campaigns: localCampaignRows.length, products: products.length, product_ads: productAds.length },
+          stock_guard_confirmed: false });
+        continue;
+      }
+
+      const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
       let token = null;
       try {
         token = await getAdsToken(base44, account);
-      } catch (e) {
+      } catch (e: any) {
         accountLog.errors.push({ step: 'token', error: e.message });
         results.push(accountLog);
         continue;
@@ -125,10 +142,6 @@ Deno.serve(async (req) => {
       console.log(`[guard] account=${account.id} amazon campaigns found=${amazonStates.size}`);
 
       // 2. Atualizar state local de todas as campanhas conforme Amazon
-      const [localCampaignRows, productAds] = await Promise.all([
-        db.entities.Campaign.filter({ amazon_account_id: account.id }, null, 2000).catch(() => []),
-        db.entities.ProductAd.filter({ amazon_account_id: account.id }, '-synced_at', 5000).catch(() => []),
-      ]);
       const productAdSkusByCampaign = new Map<string, Set<string>>();
       for (const ad of productAds) {
         const campaignId = String(ad.campaign_id || '').trim();
@@ -162,7 +175,7 @@ Deno.serve(async (req) => {
       accountLog.synced = syncUpdates.length;
 
       // 3. Buscar produtos ativos com campanha
-      const products = await db.entities.Product.filter({ amazon_account_id: account.id }, null, 2000).catch(() => []);
+
 
       for (const product of products) {
         if (product.status === 'archived') continue;
@@ -201,7 +214,7 @@ Deno.serve(async (req) => {
                 last_pause_reason: 'USER_MANUAL_PRODUCT_LOCK',
                 synced_at: now,
               });
-            } catch (e) {
+            } catch (e: any) {
               accountLog.errors.push({ asin: product.asin, sku: product.sku, campaign_id: aid, step: 'enforce_manual_pause', error: e.message });
             }
           }
@@ -235,7 +248,7 @@ Deno.serve(async (req) => {
                 state: 'paused', status: 'paused', amazon_status: 'paused', is_operational: false,
                 last_pause_reason: offer.reason, synced_at: now,
               });
-            } catch (e) {
+            } catch (e: any) {
               accountLog.errors.push({ asin: product.asin, sku: product.sku, campaign_id: aid, step: 'enforce_offer_availability', error: e.message });
             }
           }
@@ -292,7 +305,7 @@ Deno.serve(async (req) => {
             accountLog.paused++;
             if (isOneUnit) accountLog.paused_one_unit++;
             console.log(`[guard] PAUSED asin=${product.asin} fba=${fba}`);
-          } catch (e) {
+          } catch (e: any) {
             accountLog.errors.push({ asin: product.asin, sku: product.sku, step: 'pause', error: e.message });
           }
         }
@@ -341,7 +354,7 @@ Deno.serve(async (req) => {
                 manual_kickoff_last_checked_at: new Date().toISOString(),
               }).catch(() => {});
             }
-          } catch (e) {
+          } catch (e: any) {
             accountLog.errors.push({ asin: product.asin, sku: product.sku, step: 'activate', error: e.message });
           }
         }
@@ -352,7 +365,7 @@ Deno.serve(async (req) => {
             await db.entities.Product.update(product.id, { campaign_status: 'active', pause_reason: null });
             accountLog.unlocked++;
             console.log(`[guard] UNLOCKED (already active) asin=${product.asin} fba=${fba}`);
-          } catch (e) {
+          } catch (e: any) {
             accountLog.errors.push({ asin: product.asin, sku: product.sku, step: 'unlock', error: e.message });
           }
         }
@@ -377,7 +390,7 @@ Deno.serve(async (req) => {
       }
       const activeAlerts: any[] = [];
       for (const status of ['active', 'acknowledged']) {
-        const rows = await db.entities.Alert.filter({ amazon_account_id: account.id, status }, '-created_at', 1000).catch(() => []);
+        const rows = await readAllDashboardPages(db.entities.Alert, { filter: { amazon_account_id: account.id, status } });
         activeAlerts.push(...rows);
       }
       const canonicalAlertIds = new Set(deduplicateActiveAlerts(activeAlerts).map(alert => alert.id));
@@ -433,9 +446,10 @@ Deno.serve(async (req) => {
       duplicate_alerts_resolved: acc.duplicate_alerts_resolved + r.duplicate_alerts_resolved,
     }), { paused: 0, paused_one_unit: 0, activated: 0, synced: 0, unlocked: 0, alerts_resolved: 0, duplicate_alerts_resolved: 0 });
 
-    return Response.json({ ok: results.every(r => r.errors.length === 0), ...totals, accounts: results });
-  } catch (error) {
+    return Response.json({ ok: results.every(r => r.errors.length === 0), ...totals, accounts: results,
+      ...(body.dry_run === true || body.audit_only === true ? { audit_only: true, stock_guard_confirmed: false, remote_outcome: 'not_attempted' } : {}) });
+  } catch (error: any) {
     console.error('[guard] erro crítico:', error?.message);
-    return Response.json({ error: error.message }, { status: 500 });
+    return Response.json({ ok: false, error: error.message, stock_guard_confirmed: false, source_pagination_complete: false }, { status: 500 });
   }
 });

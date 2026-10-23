@@ -1,0 +1,4 @@
+{
+  "imports": { "npm:@base44/sdk@0.8.31": "../canonicalIncident/sdkMock.ts" },
+  "lock": false
+}

@@ -36,7 +36,9 @@ export default function MotorOperationalReadout({ data, error, accountId }) {
       <div className="grid grid-cols-2 gap-2">
         {[['campaigns', 'Campanhas'], ['products', 'Produtos'], ['decisions', 'Decisões'], ['inventory', 'Estoque']].map(([key, label]) => {
           const freshness = data.data_freshness?.[key];
-          return <p key={key}>{label}: {dateTime(freshness?.latest_at)} · {freshness?.status === 'fresh' ? 'recente' : 'data_stale'}</p>;
+          return <p key={key}>{label}: última atualização {dateTime(freshness?.latest_at)} · {(freshness?.latest_status || freshness?.status) === 'fresh' ? 'recente' : 'data_stale'}
+            {freshness?.stale_records > 0 && <span className="block text-amber-700">Cobertura da fonte: {freshness.stale_records} de {freshness.total_records} registros antigos ou sem timestamp confiável.</span>}
+          </p>;
         })}
       </div>
       <p>Dados locais sincronizados: {data.source_counts?.raw_campaign_rows ?? '—'} registros de campanha; {data.source_counts?.enabled_rows ?? '—'} habilitados; {data.source_counts?.incomplete_rows ?? '—'} incompletos; {data.source_counts?.stocked_products ?? '—'} produtos ativos com saldo FBA positivo. A contagem do dashboard remove duplicatas e campanhas excluídas; “ativas” inclui incompletas. Estoque positivo não confirma elegibilidade de ativação.</p>
