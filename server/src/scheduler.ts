@@ -1,3 +1,4 @@
+import { schedulerOperationalHealth } from '../../base44/shared/operationalState.js';
 /**
  * Scheduler self-hosted do LivingFinds.
  *
@@ -48,6 +49,7 @@ type SchedulerHealth = {
   last_error_at: string | null;
   last_error: string | null;
   running_jobs: number;
+  job_errors: Record<string, { job: string; slot_key: string; cause: string; at: string }>;
 };
 
 const DAILY_CATCH_UP_MAX_RECOVERIES = 4;
@@ -64,19 +66,24 @@ const schedulerHealth: SchedulerHealth = {
   last_error_at: null,
   last_error: null,
   running_jobs: 0,
+  job_errors: {},
 };
 
-export function getSchedulerHealth(): SchedulerHealth & {
-  tick_age_seconds: number | null;
-  healthy: boolean;
-} {
-  const tickMs = schedulerHealth.last_tick_at ? Date.parse(schedulerHealth.last_tick_at) : NaN;
-  const tickAge = Number.isFinite(tickMs)
-    ? Math.max(0, Math.round((Date.now() - tickMs) / 1000))
-    : null;
-  const healthy = schedulerHealth.enabled && schedulerHealth.started &&
-    schedulerHealth.jobs_loaded > 0 && tickAge !== null && tickAge <= 120;
-  return { ...schedulerHealth, tick_age_seconds: tickAge, healthy };
+export function getSchedulerHealth() {
+  return schedulerOperationalHealth(schedulerHealth);
+}
+
+function recordSchedulerFailure(job: string, slotKey: string, cause: unknown) {
+  const at = new Date().toISOString();
+  const message = safeError(cause);
+  schedulerHealth.job_errors[job] = { job, slot_key: slotKey, cause: message, at };
+  schedulerHealth.last_error_at = at;
+  schedulerHealth.last_error = `${job}: ${message}`;
+}
+function clearSchedulerFailure(job: string) {
+  delete schedulerHealth.job_errors[job];
+  const outstanding = Object.values(schedulerHealth.job_errors).sort((a,b) => b.at.localeCompare(a.at))[0];
+  schedulerHealth.last_error = outstanding ? `${outstanding.job}: ${outstanding.cause}` : null;
 }
 
 function schedulesFile(): string {
@@ -182,6 +189,7 @@ async function ensureRunLedger(): Promise<void> {
       primary key (job_key, slot_key)
     )
   `);
+  await schedulerSql.unsafe('alter table scheduler_job_runs add column if not exists correlation_id text');
   await schedulerSql.unsafe(
     'alter table scheduler_job_runs add column if not exists recovery_count integer not null default 0',
   );
@@ -192,7 +200,7 @@ async function ensureRunLedger(): Promise<void> {
 
 async function getRun(jobKey: string, slotKey: string) {
   const rows = await schedulerSql.unsafe(
-    'select status, attempt_count, recovery_count, next_attempt_at, started_at, finished_at, last_error from scheduler_job_runs where job_key=$1 and slot_key=$2 limit 1',
+    'select status, attempt_count, recovery_count, next_attempt_at, started_at, finished_at, last_error, correlation_id from scheduler_job_runs where job_key=$1 and slot_key=$2 limit 1',
     [jobKey, slotKey],
   );
   return rows[0] as unknown as {
@@ -203,6 +211,7 @@ async function getRun(jobKey: string, slotKey: string) {
     started_at: string | null;
     finished_at: string | null;
     last_error: string | null;
+    correlation_id?: string | null;
   } | undefined;
 }
 
@@ -251,7 +260,7 @@ export async function startScheduler(): Promise<void> {
     config = JSON.parse(await Deno.readTextFile(schedulesFile()));
   } catch (error) {
     schedulerHealth.last_error_at = new Date().toISOString();
-    schedulerHealth.last_error = (error as Error).message;
+    recordSchedulerFailure('schedule_load', 'startup', error);
     console.error('[scheduler] não consegui ler o arquivo de schedules:', (error as Error).message);
     setTimeout(() => void startScheduler(), 60_000);
     return;
@@ -266,11 +275,13 @@ export async function startScheduler(): Promise<void> {
     await ensureRunLedger();
   } catch (error) {
     schedulerHealth.last_error_at = new Date().toISOString();
-    schedulerHealth.last_error = 'scheduler_ledger_unavailable: ' + safeError(error);
+    recordSchedulerFailure('scheduler_ledger', 'startup', error);
     console.error('[scheduler] ledger persistente indisponível:', safeError(error));
     setTimeout(() => void startScheduler(), 60_000);
     return;
   }
+  clearSchedulerFailure('schedule_load');
+  clearSchedulerFailure('scheduler_ledger');
   const service = makeFunctions(true);
   const runningJobs = new Map<string, { startedAt: number; functionName: string }>();
   schedulerHealth.started = true;
@@ -314,7 +325,7 @@ export async function startScheduler(): Promise<void> {
             if (isStaleFinalAttempt(previous, Date.now(), maxAttempts)) {
               await schedulerSql.unsafe(
                 `update scheduler_job_runs set status='exhausted',finished_at=now(),next_attempt_at=null,
-                 last_error=coalesce(last_error,'scheduler lease expired after the final attempt'),updated_at=now()
+                 last_error=coalesce(last_error||'; ','')||'remote_unknown; scheduler lease expired; automatic replay blocked',updated_at=now()
                  where job_key=$1 and slot_key=$2 and status='running'`,
                 [jobKey, slotKey],
               );
@@ -322,23 +333,21 @@ export async function startScheduler(): Promise<void> {
             return { skipped: true };
           }
           const attempt = Number(previous?.attempt_count || 0) + 1;
+          const stableCorrelationId = String(payload.correlation_id || previous?.correlation_id || '').trim().slice(0, 180) || crypto.randomUUID();
           await schedulerSql.unsafe(
             `
-            insert into scheduler_job_runs (job_key,slot_key,job_name,function_name,status,attempt_count,started_at,finished_at,next_attempt_at,last_error,updated_at)
-            values ($1,$2,$3,$4,'running',$5,now(),null,null,null,now())
+            insert into scheduler_job_runs (job_key,slot_key,job_name,function_name,status,attempt_count,started_at,finished_at,next_attempt_at,last_error,updated_at,correlation_id)
+            values ($1,$2,$3,$4,'running',$5,now(),null,null,null,now(),$6)
             on conflict (job_key,slot_key) do update set
               job_name=excluded.job_name,function_name=excluded.function_name,status='running',attempt_count=excluded.attempt_count,
-              started_at=now(),finished_at=null,next_attempt_at=null,last_error=null,updated_at=now()
+              started_at=now(),finished_at=null,next_attempt_at=null,last_error=null,updated_at=now(),correlation_id=excluded.correlation_id
           `,
-            [jobKey, slotKey, job.name, job.function, attempt],
+            [jobKey, slotKey, job.name, job.function, attempt, stableCorrelationId],
           );
 
           let response: any;
           let errorText: string | null = null;
           try {
-            const stableCorrelationId = String(
-              payload.correlation_id || `scheduler-${job.function}-${slotKey}`,
-            ).slice(0, 180);
             response = await service.invoke(job.function, {
               ...payload,
               correlation_id: stableCorrelationId,
@@ -357,7 +366,7 @@ export async function startScheduler(): Promise<void> {
               errorText = `remote_unknown; automatic replay blocked; ${errorText || 'remote reconciliation required'}`.slice(0, 500);
             }
           } catch (error) {
-            errorText = safeError(error);
+            errorText = `remote_unknown; invocation interrupted; automatic replay blocked; ${safeError(error)}`;
           }
 
           const succeeded = errorText === null;
@@ -385,11 +394,10 @@ export async function startScheduler(): Promise<void> {
 
           if (succeeded) {
             schedulerHealth.last_success_at = new Date().toISOString();
-            schedulerHealth.last_error = null;
+            clearSchedulerFailure(jobKey);
           } else {
             schedulerHealth.last_error_at = new Date().toISOString();
-            schedulerHealth.last_error =
-              `${job.function} attempt=${attempt}/${maxAttempts}: ${errorText}`;
+            recordSchedulerFailure(jobKey, slotKey, `${job.function} attempt=${attempt}/${maxAttempts}: ${errorText}`);
           }
           console.log(
             `[scheduler] ${job.function} slot=${slotKey} attempt=${attempt}/${maxAttempts} status=${
@@ -419,12 +427,13 @@ export async function startScheduler(): Promise<void> {
               values ($1,$2,$3,$4,'succeeded',0,now(),now(),null,null,now())
               on conflict (job_key,slot_key) do update set
                 status='succeeded',finished_at=now(),next_attempt_at=null,last_error=null,updated_at=now()
+              where scheduler_job_runs.last_error is null or scheduler_job_runs.last_error !~* 'remote_unknown|remote.*(unknown|not confirmed)|automatic replay blocked|deployment_interrupted'
             `, [reconciledKey, reconciledDay, reconciledJob.name, reconciledJob.function]);
           }
         }
       } catch (error) {
         schedulerHealth.last_error_at = new Date().toISOString();
-        schedulerHealth.last_error = `${job.function}: ${safeError(error)}`;
+        recordSchedulerFailure(jobKey, slotKey, error);
         console.error(`[scheduler] '${job.function}' erro:`, safeError(error));
       } finally {
         runningJobs.delete(jobKey);
@@ -448,9 +457,10 @@ export async function startScheduler(): Promise<void> {
       [jobs.map(jobKeyOf)],
     ).catch((error) => {
       schedulerHealth.last_error_at = new Date().toISOString();
-      schedulerHealth.last_error = 'scheduler_retry_scan_failed: ' + safeError(error);
-      return [];
-    }) as Array<{ job_key: string; slot_key: string }>;
+      recordSchedulerFailure('scheduler_retry_scan', 'tick', error);
+      throw error;
+    }) as unknown as Array<{ job_key: string; slot_key: string }>;
+    clearSchedulerFailure('scheduler_retry_scan');
     const jobsByKey = new Map(jobs.map((job) => [jobKeyOf(job), job]));
     for (const row of dueRetryRows) {
       const job = jobsByKey.get(row.job_key);
@@ -477,8 +487,16 @@ export async function startScheduler(): Promise<void> {
     }
   };
 
-  setInterval(tick, 30_000);
-  await tick();
+  let ticking = false;
+  const guardedTick = async () => {
+    if (ticking) return;
+    ticking = true;
+    try { await tick(); clearSchedulerFailure('scheduler_tick'); }
+    catch (error) { recordSchedulerFailure('scheduler_tick', 'tick', error); console.error('[scheduler] tick failed:', safeError(error)); }
+    finally { ticking = false; }
+  };
+  setInterval(() => void guardedTick(), 30_000);
+  await guardedTick();
 
   // Preserve explicit startup jobs, but make them durable and at most once per local day.
   const bootNow = nowInTz(timezone);

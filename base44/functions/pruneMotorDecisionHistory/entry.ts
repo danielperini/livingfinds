@@ -48,7 +48,7 @@ Deno.serve(async (request) => {
     const authenticated = await base44.auth.isAuthenticated().catch(() => false);
     if (!authenticated && !body._service_role) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
 
-    const dryRun = body.dry_run === true;
+    const dryRun = true; // History is evidence: this endpoint is now audit-only for every caller.
     const maxDelete = Math.min(Math.max(Number(body.max_delete || MAX_DELETE_PER_RUN), 1), MAX_DELETE_PER_RUN);
     const accounts = body.amazon_account_id
       ? [{ id: body.amazon_account_id }]
@@ -70,7 +70,7 @@ Deno.serve(async (request) => {
         base44.asServiceRole.entities.AdsBidChangeLog.filter({ amazon_account_id: account.id }, '-created_at', MAX_ROWS).catch(() => []),
       ]);
 
-      const productByAsin = new Map(products.filter((p: any) => p.asin).map((p: any) => [upper(p.asin), p]));
+      const productByAsin = new Map<string, any>(products.filter((p: any) => p.asin).map((p: any) => [upper(p.asin), p]));
       const campaignById = new Map<string, any>();
       for (const campaign of campaigns) {
         const id = campaignId(campaign) || String(campaign?.id || '');
@@ -111,43 +111,22 @@ Deno.serve(async (request) => {
             continue;
           }
           report.candidates.push({ entity: entityName, id: row.id, asin: evaluation.asin, status: row.status || null, queue_status: row.queue_status || null, reason: evaluation.reason });
-          if (!dryRun) {
-            try {
-              await base44.asServiceRole.entities[entityName].delete(row.id);
-            } catch {
-              report.delete_errors++; totals.delete_errors++;
-              continue;
-            }
-          }
-          deleted++;
-          if (entityName === 'OptimizationDecision') { report.removed_decisions++; totals.removed_decisions++; }
-          else { report.removed_bid_logs++; totals.removed_bid_logs++; }
-          if (evaluation.reason === 'inactive_product') { report.removed_inactive_product++; totals.removed_inactive_product++; }
-          else if (evaluation.reason === 'unresolved_product') { report.removed_unresolved_product++; totals.removed_unresolved_product++; }
-          else { report.removed_non_effective++; totals.removed_non_effective++; }
+          deleted++; // Bounded candidate inspection only; no records are deleted.
+
         }
       };
 
       await processRows(decisions, 'OptimizationDecision');
       if (deleted < maxDelete) await processRows(bidLogs, 'AdsBidChangeLog');
 
-      if (!dryRun) await base44.asServiceRole.entities.SyncExecutionLog.create({
-        amazon_account_id: account.id,
-        operation: 'prune_motor_decision_history',
-        trigger_type: body.trigger_type || 'unified_engine',
-        status: report.delete_errors ? 'warning' : 'success',
-        records_processed: report.scanned,
-        records_imported: report.removed_decisions + report.removed_bid_logs,
-        message: `Histórico podado: decisões=${report.removed_decisions}; bid_logs=${report.removed_bid_logs}; não efetivas=${report.removed_non_effective}; produto inativo=${report.removed_inactive_product}; produto não resolvido=${report.removed_unresolved_product}; efetivas+ativas preservadas=${report.preserved_effective_active}; abertas preservadas=${report.preserved_open}`,
-        started_at: new Date().toISOString(), completed_at: new Date().toISOString(),
-      }).catch(() => {});
       reports.push(report);
     }
 
     return Response.json({
       ok: totals.delete_errors === 0,
       dry_run: dryRun,
-      policy: 'preserve_open_or_effective_and_active_product; prune_decisions_and_bid_logs_non_effective_inactive_or_unresolved',
+      read_only: true,
+      policy: 'preserve_all_history; audit_candidates_only',
       max_delete_per_run: maxDelete,
       totals,
       accounts: reports.map(r => ({ ...r, candidates: r.candidates.slice(0, 100) })),

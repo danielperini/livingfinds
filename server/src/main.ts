@@ -338,12 +338,16 @@ async function handler(req: Request): Promise<Response> {
     let dailyMotor: unknown;
     try { dailyMotor = await getDailyMotorRunStatus(); }
     catch { dailyMotor = { status: 'ledger_unavailable', confirmed_success: false }; }
+    const databaseHealthy = await healthcheck();
+    const deployedSha = Deno.env.get('LIVINGFINDS_RELEASE_SHA') || '';
     return json({
-      ok: true,
+      ok: databaseHealthy,
       service: 'livingfinds-backend',
-      release_sha: Deno.env.get('LIVINGFINDS_RELEASE_SHA') ?? 'unknown',
+      service_status: databaseHealthy ? 'healthy' : 'database_unavailable',
+      release_sha: /^[a-f0-9]{40}$/i.test(deployedSha) ? deployedSha : 'unknown',
+      release_sha_source: /^[a-f0-9]{40}$/i.test(deployedSha) ? 'deployment_environment' : 'missing_or_invalid',
       functions: registry.size,
-      db: await healthcheck(),
+      db: databaseHealthy,
       scheduler: getSchedulerHealth(),
       motor_worker: { enabled: Deno.env.get('ENABLE_MOTOR_RUN_WORKER') !== 'false' },
       daily_motor: dailyMotor,

@@ -24,7 +24,8 @@ export function dailyMotorReadModel(input: { latest?: Row | null; current?: Row 
   if (run?.status === 'exhausted' && !current) states.push('historical_exhausted');
   if (unknown) states.push('blocked_remote_unknown', 'reconciliation_pending');
   if (run?.status === 'succeeded') states.push('succeeded');
-  if (input.sourceErrors?.length || (input.scheduler?.last_error && (!input.scheduler.last_success_at || Date.parse(input.scheduler.last_error_at || '') > Date.parse(input.scheduler.last_success_at)))) states.push('scheduler_error');
+  if (input.scheduler?.status === 'technical_failure' || input.sourceErrors?.some(item => ['scheduler','scheduler_jobs'].includes(item.source)) || (input.scheduler?.last_error && (!input.scheduler.last_success_at || Date.parse(input.scheduler.last_error_at || '') > Date.parse(input.scheduler.last_success_at)))) states.push('scheduler_error');
+  if (input.sourceErrors?.length) states.push('technical_failure');
   const statusAge = age(run?.finished_at || run?.updated_at || run?.started_at, now);
   if (run?.status === 'running' && !current) states.push('data_stale');
   return {
@@ -32,9 +33,11 @@ export function dailyMotorReadModel(input: { latest?: Row | null; current?: Row 
     scheduled_local_time: '01:25', due: input.due,
     status: String(run?.status || (input.due ? 'missing' : 'not_due')),
     display_state: current ? 'running' : unknown ? 'blocked_remote_unknown' : states[0] || 'no_current_cycle', states,
-    is_running: Boolean(current), current_run: current ? { id: current.id || null, started_at: current.started_at, status: 'running' } : null,
+    is_running: Boolean(current), current_run: current ? { id: current.id || null, started_at: current.started_at, correlation_id: current.correlation_id || null, status: 'running' } : null,
     no_current_execution: !current, current_execution_known: !input.sourceErrors?.length,
     correlation_id: run?.correlation_id || run?.result_summary?.correlation_id || null,
+    correlation_status: run?.correlation_id || run?.result_summary?.correlation_id ? 'recorded' : 'missing_legacy_evidence',
+    cycle_scope: current ? 'current_and_history' : 'historical',
     attempts: Number(run?.attempt_count || 0), recovery_count: Number(run?.recovery_count || 0),
     started_at: run?.started_at ?? null, finished_at: run?.finished_at ?? null,
     status_age_seconds: statusAge, last_error: error ? safeMotorError(error) : null,

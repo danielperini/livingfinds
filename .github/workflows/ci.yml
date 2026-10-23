@@ -35,7 +35,7 @@ jobs:
       - name: Test daily motor status messaging
         run: node --test src/lib/dailyMotorStatus.test.js
       - name: Test read-only motor dashboard paging, history and refresh
-        run: node --test src/lib/motorDashboardRead.test.js
+        run: node --test src/lib/motorDashboardRead.test.js src/lib/operationalDashboard.test.mjs base44/shared/operationalState.test.js
       - name: Test daily growth cycle recovery contract
         run: node --test src/lib/proactiveGrowthCycle.test.js
       - name: Test post-deploy Amazon workflow isolation
@@ -184,6 +184,10 @@ jobs:
         run: deno check --config server/deno.json base44/shared/searchTermQuality.ts server/src/sdk/entities.ts base44/functions/importSearchTermReport/entry.ts base44/functions/downloadAndProcessAmazonAdsReportJob/entry.ts
       - name: Test durable motor run outcome policy
         run: deno test --node-modules-dir=auto server/src/motorRunPolicy.test.ts
+      - name: Test operational coverage and correlation without network
+        run: deno test server/src/operationalState.test.ts
+      - name: Test safe stale-decision and history handling without Amazon access
+        run: deno test --config server/tests/canonicalIncident/deno.json server/tests/canonicalIncident/staleExecutor.test.ts server/tests/canonicalIncident/preserveHistory.test.ts
       - name: Test current and historical motor read models without network
         run: deno test server/src/motorDashboardPolicy.test.ts server/src/motorDashboardProxy.test.ts
       - name: Test full stock guard evidence and safe simulation without network

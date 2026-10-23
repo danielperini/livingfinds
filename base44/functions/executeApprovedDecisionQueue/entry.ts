@@ -1,3 +1,4 @@
+import { decisionRecoveryEligibility } from '../../shared/operationalState.js';
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 import {
   priorityRank,
@@ -186,6 +187,16 @@ Deno.serve(async (request) => {
     const dominantByConflict = new Map<string, any>();
     for (const decision of prioritize(approved)) {
       const nowMs = Date.now();
+      const recovery = decisionRecoveryEligibility(decision, nowMs);
+      if (!recovery.safe) {
+        deferredDecisionIds.add(String(decision.id));
+        await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+          status: 'blocked', queue_status: 'blocked',
+          block_reason: recovery.reason, requires_new_collection: recovery.reason === 'new_collection_and_decision_required',
+          recovery_checked_at: new Date(nowMs).toISOString(),
+        });
+        continue;
+      }
       if (decision.execution_mode === 'MANUAL_REVIEW') {
         await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
           status: 'pending_approval', requires_approval: true, approval_status: 'manual_review_required',
@@ -233,7 +244,7 @@ Deno.serve(async (request) => {
       dominantByConflict.set(conflictGroup, decision);
     }
 
-    const pauseDecisions = approved.filter(d =>
+    const pauseDecisions = approved.filter(d => !deferredDecisionIds.has(String(d.id))).filter(d =>
       d.action === 'pause_campaign' || d.action === 'pause_keyword' || d.action === 'archive_campaign'
     );
     if (pauseDecisions.length > 0) {
@@ -268,6 +279,7 @@ Deno.serve(async (request) => {
     }
 
     for (const d of approved) {
+      if (deferredDecisionIds.has(String(d.id))) continue;
       if (d.keyword_id && !validKwIds.has(d.keyword_id)) {
         await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
           status: 'cancelled', error_message: 'CANCELADO: keyword_id não encontrado no banco — entidade removida da Amazon',

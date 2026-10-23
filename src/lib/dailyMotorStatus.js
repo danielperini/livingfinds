@@ -16,9 +16,9 @@ export function dailyMotorNotice(health, checkedAt = new Date().toISOString()) {
   const idleText = current ? '' : currentKnown ? ' Nenhum ciclo atual em execução.' : ' Não foi possível verificar a execução atual.';
   const safety = unknown ? ' Estado remoto desconhecido. Reconciliação pendente. Replay automático bloqueado.'
     : run.replay === 'blocked' ? ' Replay automático bloqueado.' : '';
-  const details = `Ciclo de ${date}.${Number(run.attempts) ? ` ${run.attempts} tentativa(s).` : ''}${idleText}${safety}`;
+  const details = `Ciclo histórico de ${date}. correlation_id: ${run.correlation_id || 'ausente no registro legado'}. ${Number(run.attempts) ? ` ${run.attempts} tentativa(s).` : ''}${idleText}${safety}`;
   if (current) return { tone: unknown ? 'danger' : 'info', title: 'Motor executando o ciclo diário',
-    message: `Início ${run.current_run?.started_at || date}. Ainda sem confirmação de conclusão.${safety}`, checkedAt };
+    message: `correlation_id: ${run.current_run?.correlation_id || run.correlation_id || 'ausente no registro legado'}. Início ${run.current_run?.started_at || date}. Ainda sem confirmação de conclusão.${safety}`, checkedAt };
   if (run.status === 'exhausted') return { tone: 'danger', title: 'Último ciclo diário: esgotado e bloqueado',
     message: `${details}${run.last_error ? ` Motivo registrado: ${run.last_error}` : ''}`, checkedAt };
   if (unknown) return { tone: 'danger', title: 'Último ciclo diário: reconciliação pendente', message: details, checkedAt };

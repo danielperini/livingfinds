@@ -55,6 +55,7 @@ function operationKey(log) {
 
 export default function SyncFailureMonitor({ amazonAccountId }) {
   const [logs, setLogs] = useState([]);
+  const [readError, setReadError] = useState('');
   const [historicalErrors, setHistoricalErrors] = useState(0);
   const [loading, setLoading] = useState(true);
   const [fixing, setFixing] = useState(false);
@@ -65,6 +66,7 @@ export default function SyncFailureMonitor({ amazonAccountId }) {
   const load = useCallback(async () => {
     if (!amazonAccountId) return;
     setLoading(true);
+    setReadError('');
     try {
       const sinceMs = Date.now() - 7 * 86400000;
       // Precisamos ler sucesso + erro. Consultar só status=error mantinha falhas
@@ -89,7 +91,7 @@ export default function SyncFailureMonitor({ amazonAccountId }) {
       );
       setLogs(active.sort((a, b) => logTime(b) - logTime(a)));
     } catch (e) {
-      console.error(e);
+      setReadError(e.message || 'Falha na leitura de sincronizações');
     } finally {
       setLoading(false);
     }
@@ -142,10 +144,11 @@ export default function SyncFailureMonitor({ amazonAccountId }) {
   };
 
   if (loading) return null;
+  if (readError) return <p role="alert">Falha técnica ao consultar sincronizações: {readError}</p>;
   if (totalErrors === 0 && !fixResult) return (
     <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl border bg-emerald-500/5 border-emerald-500/20 text-xs text-emerald-400">
       <CheckCircle className="w-3.5 h-3.5 flex-shrink-0" />
-      <span>Sincronização saudável — sem falhas ativas.{historicalErrors > 0 ? ` ${historicalErrors} ocorrência(s) histórica(s) nos últimos 7 dias já resolvida(s) ou não acionável(is).` : ''}</span>
+      <span>Nenhuma falha técnica atual encontrada nesta leitura; isso não comprova cobertura de sincronização.{historicalErrors > 0 ? ` ${historicalErrors} ocorrência(s) histórica(s) nos últimos 7 dias já resolvida(s) ou não acionável(is).` : ''}</span>
     </div>
   );
 

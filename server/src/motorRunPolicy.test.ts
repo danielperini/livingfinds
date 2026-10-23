@@ -21,7 +21,7 @@ Deno.test('atomic-claim policy rejects concurrent work in the same account scope
 });
 
 Deno.test('restart does not replay a stage whose remote side effect may have been accepted', () => {
-  assertEquals(recoverExpiredRun(null), { status: 'interrupted', remote_outcome: 'not_attempted' });
+  assertEquals(recoverExpiredRun(null), { status: 'remote_unknown', remote_outcome: 'unknown' });
   assertEquals(recoverExpiredRun('executeApprovedDecisionQueue'), { status: 'remote_unknown', remote_outcome: 'unknown' });
 });
 

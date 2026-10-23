@@ -61,10 +61,9 @@ export function canClaimRun(status: string, hasActiveScopeRun: boolean): boolean
   return status === 'queued' && !hasActiveScopeRun;
 }
 
-export function recoverExpiredRun(currentStage: string | null): { status: 'interrupted' | 'remote_unknown'; remote_outcome: 'not_attempted' | 'unknown' } {
-  return currentStage
-    ? { status: 'remote_unknown', remote_outcome: 'unknown' }
-    : { status: 'interrupted', remote_outcome: 'not_attempted' };
+export function recoverExpiredRun(_currentStage: string | null): { status: 'remote_unknown'; remote_outcome: 'unknown' } {
+  // Progress may have failed after invocation; absence of a stage proves nothing about sending.
+  return { status: 'remote_unknown', remote_outcome: 'unknown' };
 }
 
 export function motorRemoteOutcome(functionName: string, result: Record<string, unknown>): string {
