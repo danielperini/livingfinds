@@ -1,3 +1,4 @@
+import { assessSearchTerm } from './searchTermQuality.ts';
 export type SameSkuAttribution = {
   windowDays: number;
   totalOrders: number;
@@ -239,6 +240,7 @@ export function aggregateSearchTerms(rows: any[]): HarvestAggregate[] {
   const aggregates = new Map<string, HarvestAggregate>();
   for (const row of rows || []) {
     const term = String(row.search_term || row.searchTerm || '').trim();
+    if (!assessSearchTerm(term).accepted) continue;
     const normalizedTerm = normalizeSearchTerm(term);
     const termFamilyKey = canonicalSearchTermFamily(term);
     const asin = String(row.advertised_asin || row.asin || '').trim().toUpperCase();

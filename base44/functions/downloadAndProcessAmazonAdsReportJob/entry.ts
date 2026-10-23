@@ -1,3 +1,4 @@
+import { assessSearchTerm } from '../../shared/searchTermQuality.ts';
 /**
  * downloadAndProcessAmazonAdsReportJob
  *
@@ -67,7 +68,7 @@ async function upsertDailySearchTerms(base44: any, accountId: string, records: a
   const existing: any[] = [];
   for (let skip = 0; skip < 20000; skip += 5000) {
     const page = await base44.asServiceRole.entities.SearchTerm.filter(
-      { amazon_account_id: accountId }, '-date', 5000, skip,
+      { amazon_account_id: accountId, search_term_quality_view: 'audit' }, '-date', 5000, skip,
     ).catch(() => []);
     existing.push(...page);
     if (page.length < 5000) break;
@@ -261,6 +262,7 @@ Deno.serve(async (req) => {
         const sourceIdentity = keywordId || rawMatchType || 'auto';
 
         return {
+          ...assessSearchTerm(row.searchTerm, { source: 'amazon_ads_search_term_report', campaign_id: campaignId, amazon_account_id: accountId }),
           amazon_account_id: accountId,
           date,
           campaign_id: campaignId,
@@ -332,7 +334,7 @@ Deno.serve(async (req) => {
           evaluation_count: 1,
           classification: attribution.sameSkuOrders > 0 ? 'FIRST_SALE' : 'NEW',
         };
-      }).filter((row: any) => row.campaign_id && row.search_term && row.date);
+      }).filter((row: any) => row.campaign_id && row.date);
 
       const persisted = await upsertDailySearchTerms(base44, accountId, searchTermRecords);
       console.log(`[downloadProcess] SearchTerm: ${persisted.created} criados + ${persisted.updated} atualizados; mesmo-SKU explícito=${searchTermRecords.filter((row: any) => row.same_sku_attribution_verified).length}`);

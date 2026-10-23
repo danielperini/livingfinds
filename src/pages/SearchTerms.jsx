@@ -1,3 +1,5 @@
+import SearchTermQualityPanel from '@/components/analytics/SearchTermQualityPanel';
+import { annotateSearchTerm } from '../../base44/shared/searchTermQuality.js';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
 import { selectActiveImportedSearchTermRows } from '../../base44/shared/importedSearchTermReport.js';
@@ -159,7 +161,7 @@ export default function SearchTerms() {
       if (ap?.target_acos) setCfg(p => ({ ...p, meta_acos: ap.target_acos }));
 
       const visibleImportedRows = selectActiveImportedSearchTermRows(importedRows, importBatches);
-      setKeywords([...kws, ...visibleImportedRows]);
+      setKeywords([...kws, ...visibleImportedRows].map(row => annotateSearchTerm(row, 'SearchTerms')).filter(row => row.accepted));
     } finally {
       setLoading(false);
     }
@@ -350,6 +352,7 @@ export default function SearchTerms() {
   return (
     <div className="p-5 space-y-5 animate-fade-in">
 
+      <SearchTermQualityPanel accountId={account?.id} />
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">

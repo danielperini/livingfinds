@@ -1,3 +1,4 @@
+import { assessSearchTerm } from './searchTermQuality.js';
 const ATTRIBUTION_WINDOWS = new Set([1, 7, 14, 30]);
 
 function textValue(row, ...keys) {
@@ -50,7 +51,7 @@ function numberValue(row, ...keys) {
 }
 
 function stableUniqueKey(parts) {
-  return parts.map((part) => encodeURIComponent(String(part ?? '').trim().toLowerCase())).join('|');
+  return parts.map((part) => encodeURIComponent(String(part ?? '').normalize('NFC').trim().toLowerCase().replace(/\s+/gu, ' '))).join('|');
 }
 
 /** Validate and normalize one-day rows; never invent a day or attribution window. */
@@ -77,7 +78,7 @@ export async function normalizeImportedSearchTermRows(rows, account, syncedAt) {
     }
     const campaignId = textValue(row, 'ID da campanha', 'Campaign ID', 'campaignId');
     const searchTerm = textValue(row, 'Termo de pesquisa', 'Search Term', 'searchTerm');
-    if (!campaignId || !searchTerm) return { ok: false, error: `Linha ${index + 1}: ID da campanha e termo de pesquisa são obrigatórios; nenhum dado foi alterado.` };
+    if (!campaignId) return { ok: false, error: `Linha ${index + 1}: ID da campanha obrigatório; nenhum dado foi alterado.` };
 
     const impressions = numberValue(row, 'Impressões', 'Impressions', 'impressions');
     const clicks = numberValue(row, 'Cliques', 'Clicks', 'clicks');
@@ -105,6 +106,7 @@ export async function normalizeImportedSearchTermRows(rows, account, syncedAt) {
       windowFields[`sales_${days}d`] = days === windowValue ? sales : null;
     }
     const record = {
+      ...assessSearchTerm(row['Termo de pesquisa'] ?? row['Search Term'] ?? row.searchTerm ?? searchTerm, { source: 'manual_search_term_import', campaign_id: campaignId, amazon_account_id: accountId }),
       amazon_account_id: accountId,
       marketplace_id: typeof account === 'string' ? '' : String(account?.marketplace_id || ''),
       currency_code: typeof account === 'string' ? '' : String(account?.currency_code || ''),
@@ -141,9 +143,11 @@ export async function normalizeImportedSearchTermRows(rows, account, syncedAt) {
       synced_at: syncedAt,
     };
     const previous = seen.get(key);
-    if (previous && JSON.stringify(previous) !== JSON.stringify(record)) {
+    const comparable = ({ raw_term, search_term, raw_variants, ...rest }) => rest;
+    if (previous && JSON.stringify(comparable(previous)) !== JSON.stringify(comparable(record))) {
       return { ok: false, error: `Linha ${index + 1}: chave duplicada com valores divergentes; nenhum dado foi alterado.` };
     }
+    if (previous) previous.raw_variants = [...new Set([...(previous.raw_variants || [previous.raw_term]), record.raw_term])];
     if (!previous) {
       seen.set(key, record);
       normalized.push(record);

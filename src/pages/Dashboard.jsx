@@ -1,3 +1,4 @@
+import SearchTermQualityPanel from '@/components/analytics/SearchTermQualityPanel';
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useReportPolling } from '@/hooks/useReportPolling';
 import { classifyCampaigns } from '@/lib/campaignUtils';
@@ -749,6 +750,7 @@ export default function Dashboard() {
   return (
     <div className="px-4 md:px-6 py-5 space-y-5 animate-fade-in">
 
+      <SearchTermQualityPanel accountId={account?.id} />
       {/* ── 0. VISÃO DECISIONAL — Clean Light Pro (3 faixas) ───────────────────── */}
       <DecisionalOverview
         account={account}

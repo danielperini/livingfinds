@@ -1,3 +1,4 @@
+import { assessSearchTerm } from './searchTermQuality.ts';
 export type SearchTermWasteRow = Record<string, unknown>;
 
 const numeric = (value: unknown): number => {
@@ -23,6 +24,7 @@ const freshness = (row: SearchTermWasteRow): number => {
 export function dedupeSearchTermWasteRows(rows: SearchTermWasteRow[]): SearchTermWasteRow[] {
   const unique = new Map<string, SearchTermWasteRow>();
   for (const row of rows) {
+    if (!assessSearchTerm(sourceTerm(row)).accepted) continue;
     const date = String(row.date || "").slice(0, 10);
     const campaignId = String(row.campaign_id || "");
     const targetId = String(row.source_target_id || row.target_id || row.keyword_id || "");

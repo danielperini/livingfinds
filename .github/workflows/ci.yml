@@ -41,7 +41,7 @@ jobs:
       - name: Test post-deploy Amazon workflow isolation
         run: node --test src/lib/postDeployHooks.test.js
       - name: Test interface navigation, operational queue and overlay contracts
-        run: node --test src/lib/navigation.test.js src/lib/operationalQueueHealth.test.js src/lib/pagination.test.js src/lib/toastPointerEvents.test.js src/lib/durableMotorExecution.test.js src/lib/proactiveGrowthCycle.test.js base44/shared/importedSearchTermReport.test.js
+        run: node --test src/lib/navigation.test.js src/lib/operationalQueueHealth.test.js src/lib/pagination.test.js src/lib/toastPointerEvents.test.js src/lib/durableMotorExecution.test.js src/lib/proactiveGrowthCycle.test.js base44/shared/importedSearchTermReport.test.js base44/shared/searchTermQuality.test.js
       - name: Typecheck
         run: npm run typecheck
         continue-on-error: true
@@ -178,6 +178,10 @@ jobs:
             base44/functions/runSalesModeWasteRotation/entry.ts \
             base44/functions/runSalesMode/entry.ts
           deno test --node-modules-dir=auto base44/shared/searchTermWastePolicy.test.ts
+      - name: Test search term quality repository without database or Amazon access
+        run: deno test --config server/tests/searchTermQuality/deno.json server/tests/searchTermQuality/repository.test.ts server/src/searchTermQualityContext.test.ts
+      - name: Check search term quality and ingestion
+        run: deno check --config server/deno.json base44/shared/searchTermQuality.ts server/src/sdk/entities.ts base44/functions/importSearchTermReport/entry.ts base44/functions/downloadAndProcessAmazonAdsReportJob/entry.ts
       - name: Test durable motor run outcome policy
         run: deno test --node-modules-dir=auto server/src/motorRunPolicy.test.ts
       - name: Test current and historical motor read models without network

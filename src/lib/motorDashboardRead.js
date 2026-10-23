@@ -13,5 +13,5 @@ export async function refreshMotorDashboard({ reloadSources, loadStatus }) {
 export function recentDecisionMessage({ complete, loading, error }, count, historical) {
   if (error) return `Não foi possível confirmar as decisões recentes: ${error}`;
   if (loading || !complete) return 'Consultando todas as páginas de decisões…';
-  return count === 0 ? `Nenhuma decisão nas últimas 24h. Histórico preservado: ${historical} decisões.` : `${count} decisões nas últimas 24h.`;
+  return count === 0 ? `Nenhuma ação registrada nas últimas 24h; a validação pode ter filtrado termos inválidos (consulte a auditoria). Histórico preservado: ${historical} decisões.` : `${count} decisões nas últimas 24h.`;
 }
