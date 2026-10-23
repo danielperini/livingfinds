@@ -1,20 +1,18 @@
 import { useMemo, useState } from 'react';
-import { base44 } from '@/api/base44Client';
 import {
-  ChevronRight, Bot, Download, Trash2, Loader2,
+  ChevronRight, Bot, Download,
 } from 'lucide-react';
 import DataFreshnessBadge from '@/components/ui/DataFreshnessBadge';
 import DecisionColloquy from '@/components/dashboard/DecisionColloquy';
 import {
   getMotorActionBadge, getMotorReasonLabel, getAmazonConfirmationStatus,
 } from '@/lib/motorLabels';
+import { dashboardDecisionCounts } from '../../../base44/shared/dashboardReads.js';
+import { recentDecisionMessage } from '@/lib/motorDashboardRead';
 import { dailyMotorNotice } from '@/lib/dailyMotorStatus';
 
 const PAGE_SIZE = 10;
 const CURRENT_WINDOW_MS = 24 * 60 * 60 * 1000;
-const MAX_CLEANUP_ROUNDS = 6;
-const CLEANUP_BATCH_SIZE = 1000;
-const LOCAL_NO_EXECUTION_STATUSES = new Set(['blocked', 'cancelled', 'canceled', 'skipped', 'superseded', 'expired', 'rejected']);
 
 function fmtDateKey(iso) {
   if (!iso) return null;
@@ -26,7 +24,7 @@ function fmtDateKey(iso) {
 function normalizeDecision(item, source) {
   const ts = item?.created_at || item?.created_date || item?.evaluated_at || item?.executed_at || item?.updated_at || null;
   return {
-    id: item?.id || `${source}-${ts}-${Math.random().toString(36).slice(2, 8)}`,
+    id: `${source}:${item?.id || ts || 'undated'}`,
     source,
     timestamp: ts,
     raw: item,
@@ -47,32 +45,6 @@ function deriveTitle(raw) {
   if (raw?.campaign_id) return `Campanha ${raw.campaign_id}`;
   if (raw?.entity_id) return `${raw?.entity_type === 'campaign' ? 'Campanha' : 'Entidade'} ${raw.entity_id}`;
   return 'Decisão do motor';
-}
-
-function historicalDedupeKey(item) {
-  const raw = item?.raw || {};
-  const status = String(raw.status || '').toLowerCase();
-  if (status !== 'cancelled' || raw.rule_key !== 'winner_protection_dedup') return null;
-  return [item.source, raw.rule_key, raw.amazon_account_id, raw.entity_id || raw.campaign_id, raw.asin, raw.action].join('|');
-}
-
-function hasRealAmazonAttempt(raw) {
-  return Boolean(
-    raw?.amazon_request_id || raw?.amazon_response || raw?.executed_at || Number(raw?.attempt_count || 0) > 0
-  );
-}
-
-function isLiveOperationalItem(item) {
-  const raw = item?.raw || {};
-  const status = String(raw.status || '').toLowerCase();
-  const confirmation = String(raw.amazon_confirmation_status || raw.confirmation_status || '').toLowerCase();
-
-  // O painel “agora” é de atividade operacional real. Hard guards/no-ops que
-  // impediram qualquer chamada à Amazon permanecem auditáveis no histórico/CSV,
-  // mas não são apresentados como se o motor tivesse executado algo.
-  if (LOCAL_NO_EXECUTION_STATUSES.has(status) && !hasRealAmazonAttempt(raw)) return false;
-  if (confirmation === 'not_applicable' && !hasRealAmazonAttempt(raw)) return false;
-  return true;
 }
 
 function toneBadge(tone) {
@@ -233,19 +205,17 @@ function AccordionItem({ item, isOpen, onToggle }) {
 }
 
 /**
- * MotorDecisionFeed — "O que o Motor está fazendo agora".
- * O recorte de 24h exibe apenas atividade operacional real. Decisões barradas
- * antes de qualquer envio à Amazon ficam preservadas no histórico/CSV para
- * auditoria, sem poluir o painel operacional.
+ * Current and historical decisions, including local blocks. Read-only history.
  */
-export default function MotorDecisionFeed({ decisions, bidChanges, accountId, motorHealth }) {
+export default function MotorDecisionFeed({ decisions, bidChanges, motorHealth, decisionReadState = { complete: false } }) {
   const [page, setPage] = useState(1);
   const [openSet, setOpenSet] = useState(() => new Set());
   const [showHistory, setShowHistory] = useState(false);
-  const [cleaning, setCleaning] = useState(false);
   const [historyMessage, setHistoryMessage] = useState('');
   const cycleNotice = useMemo(() => dailyMotorNotice(motorHealth, motorHealth?.checkedAt), [motorHealth]);
 
+  const checkedNow = Date.parse(motorHealth?.checkedAt || '') || Date.now();
+  const counts = useMemo(() => dashboardDecisionCounts(decisions || [], checkedNow), [decisions, checkedNow]);
   const merged = useMemo(() => {
     const out = [];
     if (Array.isArray(decisions)) for (const d of decisions) out.push(normalizeDecision(d, 'decision'));
@@ -255,22 +225,15 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId, mo
       const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
       return tb - ta;
     });
-    const seenHistoricalBlocks = new Set();
-    return sorted.filter(item => {
-      const key = historicalDedupeKey(item);
-      if (!key) return true;
-      if (seenHistoricalBlocks.has(key)) return false;
-      seenHistoricalBlocks.add(key);
-      return true;
-    });
+    return sorted;
   }, [decisions, bidChanges]);
 
   const recent = useMemo(() => merged.filter((item) => {
     const timestamp = new Date(item.timestamp || 0).getTime();
     return Number.isFinite(timestamp)
-      && timestamp >= Date.now() - CURRENT_WINDOW_MS
-      && isLiveOperationalItem(item);
-  }), [merged]);
+      && timestamp >= checkedNow - CURRENT_WINDOW_MS
+      && timestamp <= checkedNow;
+  }), [merged, checkedNow]);
   const visibleItems = showHistory ? merged : recent;
   const totalItems = visibleItems.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
@@ -323,67 +286,29 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId, mo
     setHistoryMessage(`${merged.length} registro(s) exportados para CSV.`);
   };
 
-  const cleanupHistory = async () => {
-    if (cleaning) return;
-    const confirmed = window.confirm(
-      'Limpar o histórico do motor?\n\nSerão preservadas decisões abertas e execuções efetivas/confirmadas de produtos ativos. Registros cancelados, bloqueados, falhos, rejeitados e vínculos com produtos inativos ou não resolvidos serão removidos.\n\nSe quiser guardar uma cópia completa, use “Exportar CSV” antes.'
-    );
-    if (!confirmed) return;
-
-    setCleaning(true);
-    setHistoryMessage('Limpando histórico com a política canônica…');
-    let removed = 0;
-    let rounds = 0;
-    let lastRemoved = CLEANUP_BATCH_SIZE;
-
-    try {
-      while (rounds < MAX_CLEANUP_ROUNDS && lastRemoved >= CLEANUP_BATCH_SIZE) {
-        rounds += 1;
-        const response = await base44.functions.invoke('pruneMotorDecisionHistory', {
-          amazon_account_id: accountId || null,
-          dry_run: false,
-          max_delete: CLEANUP_BATCH_SIZE,
-          trigger_type: 'dashboard_manual_history_cleanup',
-        });
-        const data = response?.data || response || {};
-        if (data?.ok === false) throw new Error(data.error || 'Falha ao limpar o histórico.');
-        const totals = data?.totals || {};
-        lastRemoved = Number(totals.removed_non_effective || 0)
-          + Number(totals.removed_inactive_product || 0)
-          + Number(totals.removed_unresolved_product || 0);
-        removed += lastRemoved;
-        setHistoryMessage(`Limpeza em andamento: ${removed} registro(s) removido(s)…`);
-        if (lastRemoved < CLEANUP_BATCH_SIZE) break;
-      }
-
-      setHistoryMessage(`Limpeza concluída: ${removed} registro(s) descartáveis removido(s). Atualizando a tela…`);
-      setTimeout(() => window.location.reload(), 900);
-    } catch (error) {
-      setHistoryMessage(error?.message || 'Não foi possível limpar o histórico.');
-      setCleaning(false);
-    }
-  };
-
   const HistoryActions = () => (
     <div className="flex items-center gap-2 flex-wrap justify-end">
       <button
         type="button"
         onClick={exportHistoryCsv}
-        disabled={!merged.length || cleaning}
+        disabled={!merged.length}
         className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[var(--border-color)] bg-theme-card text-[11px] font-semibold text-theme-secondary hover:bg-theme-card-2 disabled:opacity-40"
       >
         <Download className="w-3.5 h-3.5" />
         Exportar CSV
       </button>
-      <button
-        type="button"
-        onClick={cleanupHistory}
-        disabled={!merged.length || cleaning}
-        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-red-200 bg-red-50 text-[11px] font-semibold text-red-700 hover:bg-red-100 disabled:opacity-40"
-      >
-        {cleaning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-        {cleaning ? 'Limpando…' : 'Limpar histórico'}
-      </button>
+
+    </div>
+  );
+
+  const Counters = () => (
+    <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs text-theme-secondary mb-3">
+      {[
+        ['Decisões nas últimas 24h', counts.recent_24h], ['Decisões históricas', counts.historical_total],
+        ['Decisões bloqueadas', counts.blocked], ['Decisões confirmadas', counts.confirmed],
+        ['Ações enviadas (por decisão)', counts.sent], ['Ações ainda não confirmadas', counts.unconfirmed],
+      ].map(([label, value]) => <div key={label} className="rounded border border-[var(--border-color)] px-2 py-2"><strong>{decisionReadState.complete ? value : '—'}</strong> {label}</div>)}
+      {!decisionReadState.complete && <p role="status" className="col-span-2">{recentDecisionMessage(decisionReadState, counts.recent_24h, counts.historical_total)}</p>}
     </div>
   );
 
@@ -391,9 +316,10 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId, mo
     return (
       <div className="flex flex-col items-center justify-center py-8 text-center">
         <DailyCycleStatus notice={cycleNotice} />
+      <Counters />
         <Bot className="w-7 h-7 text-theme-muted mb-2" />
-        <p className="text-sm text-theme-secondary font-medium">Nenhuma decisão operacional aparece neste recorte de 24h</p>
-        <p className="text-xs text-theme-muted mt-1">O estado do ciclo diário está indicado acima; decisões bloqueadas ficam no histórico para auditoria.</p>
+        <p className="text-sm text-theme-secondary font-medium">{recentDecisionMessage(decisionReadState, counts.recent_24h, counts.historical_total)}</p>
+        <p className="text-xs text-theme-muted mt-1">O estado do último ciclo está indicado acima. A ausência de decisões recentes não elimina o histórico.</p>
         {merged.length > 0 && (
           <>
             <button type="button" onClick={toggleHistory} className="mt-3 text-xs font-semibold text-blue-600 hover:text-blue-700">
@@ -410,16 +336,17 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId, mo
   return (
     <div className="space-y-4">
       <DailyCycleStatus notice={cycleNotice} />
+      <Counters />
       <div className="flex items-start justify-between gap-3 px-1 flex-wrap">
         <div>
           <p className="text-[11px] text-theme-muted">
-            {showHistory ? `Histórico completo: ${merged.length} registros.` : `Atividade operacional das últimas 24h: ${recent.length} registro(s).`}
+            {showHistory ? `Histórico carregado: ${merged.length} registros (decisões e logs de bids).` : `Registros das últimas 24h: ${recent.length} registro(s).`}
           </p>
           {historyMessage && <p className="text-[10px] text-theme-muted mt-1">{historyMessage}</p>}
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
           {merged.length > recent.length && (
-            <button type="button" onClick={toggleHistory} disabled={cleaning} className="text-[11px] font-semibold text-blue-600 hover:text-blue-700 whitespace-nowrap disabled:opacity-40">
+            <button type="button" onClick={toggleHistory} className="text-[11px] font-semibold text-blue-600 hover:text-blue-700 whitespace-nowrap disabled:opacity-40">
               {showHistory ? 'Voltar ao agora' : `Ver histórico (${merged.length})`}
             </button>
           )}
@@ -447,7 +374,7 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId, mo
           <button
             type="button"
             onClick={() => handlePageChange(Math.max(1, safePage - 1))}
-            disabled={safePage === 1 || cleaning}
+            disabled={safePage === 1}
             className="px-3 py-1.5 text-xs rounded-lg border border-[var(--border-color)] bg-theme-card text-theme-secondary hover:bg-theme-card-2 disabled:opacity-40 transition-colors"
           >
             ← Anterior
@@ -456,7 +383,7 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId, mo
           <button
             type="button"
             onClick={() => handlePageChange(Math.min(totalPages, safePage + 1))}
-            disabled={safePage === totalPages || cleaning}
+            disabled={safePage === totalPages}
             className="px-3 py-1.5 text-xs rounded-lg border border-[var(--border-color)] bg-theme-card text-theme-secondary hover:bg-theme-card-2 disabled:opacity-40 transition-colors"
           >
             Próxima →

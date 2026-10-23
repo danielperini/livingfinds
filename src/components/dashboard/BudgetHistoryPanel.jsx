@@ -1,3 +1,4 @@
+import { readAllDashboardPages } from '../../../base44/shared/dashboardReads.js';
 import { useState, useEffect, useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
 import { DollarSign, TrendingUp, TrendingDown, Minus, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
@@ -8,6 +9,7 @@ import { DollarSign, TrendingUp, TrendingDown, Minus, ChevronDown, ChevronUp, Lo
  */
 export default function BudgetHistoryPanel({ accountId }) {
   const [records, setRecords] = useState([]);
+  const [readError, setReadError] = useState('');
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const [showCount, setShowCount] = useState(10);
@@ -15,34 +17,17 @@ export default function BudgetHistoryPanel({ accountId }) {
   useEffect(() => {
     if (!accountId) return;
     setLoading(true);
-    base44.entities.OptimizationDecision.filter(
-      {
-        amazon_account_id: accountId,
-        decision_type: { $in: ['budget_change', 'budget_increase', 'IMMEDIATE_BUDGET_RESCUE', 'manual_reactivation_with_budget'] },
-      },
-      '-created_at',
-      100
-    )
-      .catch(() => [])
+    setReadError('');
+    let active = true;
+    readAllDashboardPages(base44.entities.OptimizationDecision, { filter: { amazon_account_id: accountId } })
       .then((rows) => {
-        // Fallback: incluir registros com action contendo 'budget'
-        return rows.length > 0
-          ? rows
-          : base44.entities.OptimizationDecision.filter(
-              { amazon_account_id: accountId, entity_type: 'campaign' },
-              '-created_at',
-              200
-            ).catch(() => []).then((all) =>
-              all.filter((r) =>
-                String(r.action || '').toLowerCase().includes('budget') ||
-                String(r.decision_type || '').toLowerCase().includes('budget') ||
-                String(r.rule_key || '').toLowerCase().includes('budget') ||
-                String(r.rule_key || '').toLowerCase().includes('rescue')
-              )
-            );
+        if (active) setRecords(rows.filter((row) => /budget|rescue|manual_reactivation_with_budget/i.test(
+          [row.action, row.decision_type, row.rule_key].join(' ')
+        )).sort((a,b) => String(b.created_at || b.created_date).localeCompare(String(a.created_at || a.created_date))));
       })
-      .then((rows) => setRecords(rows))
-      .finally(() => setLoading(false));
+      .catch((error) => { if (active) setReadError(error.message); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, [accountId]);
 
   const stats = useMemo(() => {
@@ -58,6 +43,8 @@ export default function BudgetHistoryPanel({ accountId }) {
     ).length;
     return { totalIncreases, totalDecreases, avgIncrease, rescues };
   }, [records]);
+
+  if (readError) return <p role="alert" className="text-xs text-red-600">Histórico de orçamento indisponível: {readError}</p>;
 
   const visible = records.slice(0, showCount);
 

@@ -1,3 +1,4 @@
+import { readAllDashboardPages } from '../../../base44/shared/dashboardReads.js';
 import { useState, useEffect, useCallback } from 'react';
 import { CalendarClock, CheckCircle2, Clock, Database } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
@@ -20,6 +21,7 @@ export default function AutoWindowStatus({
   nextSyncText = null,
 }) {
   const [lastSync, setLastSync] = useState(null);
+  const [readError, setReadError] = useState('');
   const [lastReportDate, setLastReportDate] = useState(null);
   const [successRate, setSuccessRate] = useState(null);
 
@@ -27,10 +29,11 @@ export default function AutoWindowStatus({
     try {
       const targetDate = closedDayBrt();
       const [runs, jobs, metrics] = await Promise.all([
-        base44.entities.SyncExecutionLog.filter({}, '-started_at', 20).catch(() => []),
-        base44.entities.AmazonAdsReportJob.filter({ end_date: targetDate }, '-updated_date', 300).catch(() => []),
-        base44.entities.CampaignMetricsDaily.list('-date', 1).catch(() => []),
+        readAllDashboardPages(base44.entities.SyncExecutionLog, { sort: '-started_at' }),
+        readAllDashboardPages(base44.entities.AmazonAdsReportJob, { filter: { end_date: targetDate } }),
+        base44.entities.CampaignMetricsDaily.filter({}, '-date', 1),
       ]);
+      setReadError('');
       const lastRun = runs?.find(run => run.started_at || run.created_date);
       setLastSync(lastRun ? new Date(lastRun.started_at || lastRun.created_date) : null);
 
@@ -39,7 +42,7 @@ export default function AutoWindowStatus({
       ).length;
       setSuccessRate(Math.round(processed / REQUIRED_REPORTS.length * 100));
       setLastReportDate(metrics?.[0]?.date || (processed ? targetDate : null));
-    } catch {}
+    } catch (error) { setReadError(error.message || 'Fontes indisponíveis'); }
   }, []);
 
   useEffect(() => {
@@ -71,6 +74,7 @@ export default function AutoWindowStatus({
         <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Atualização dos dados</p>
         {justUpdated && <span className="text-[10px] text-emerald-400 font-semibold">✓ Atualizado</span>}
       </div>
+      {readError && <p role="alert" className="text-xs text-red-400">Falha ao consultar atualização: {readError}</p>}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-2 text-[11px]">
         {dashboardUpdatedAt && (
           <div className="flex items-start gap-2">

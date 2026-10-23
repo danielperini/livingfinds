@@ -249,7 +249,7 @@ export default function Dashboard() {
   const {
     user, account,
     campaigns, metricsDaily, products, salesDaily,
-    decisions, allDecisions,
+    decisions, allDecisions, decisionReadState,
     bidChanges, syncRuns,
     autopilotConfig, budgetCfg,
     performanceSettings,
@@ -709,7 +709,7 @@ export default function Dashboard() {
   const decisionSummary = useMemo(() => {
     if (!decisions.length && !allDecisions.length && !bidChanges.length) return null;
     const total = allDecisions.length;
-    const executed = allDecisions.filter(d => d.status === 'executed' || d.status === 'approved').length;
+    const executed = allDecisions.filter(d => d.remote_outcome !== 'unknown' && (d.confirmation_status === 'confirmed' || d.amazon_confirmation_status === 'confirmed' || d.amazon_confirmed === true)).length;
     const failed = allDecisions.filter(d => d.status === 'failed' || d.status === 'error').length;
     const pending = allDecisions.filter(d => d.status === 'pending').length;
     return {
@@ -758,6 +758,7 @@ export default function Dashboard() {
         salesDaily={salesDaily}
         decisions={allDecisions?.length ? allDecisions : decisions}
         bidChanges={bidChanges}
+        decisionReadState={decisionReadState}
         onRefresh={loadData}
       />
 
@@ -1298,7 +1299,7 @@ export default function Dashboard() {
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="bg-surface-2 rounded-lg p-3">
-              <p className="text-[10px] text-slate-500 mb-1">Implementadas</p>
+              <p className="text-[10px] text-slate-500 mb-1">Confirmadas na Amazon</p>
               <p className="text-xl font-bold text-emerald-400">{decisionSummary.executed}</p>
               <p className="text-[10px] text-slate-600 mt-0.5">{decisionSummary.pctExecuted}% do total</p>
             </div>

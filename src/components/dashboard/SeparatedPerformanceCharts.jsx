@@ -1,3 +1,4 @@
+import { readAllDashboardPages } from '../../../base44/shared/dashboardReads.js';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Area,
@@ -162,12 +163,12 @@ export default function SeparatedPerformanceCharts() {
         if (!account) throw new Error('Nenhuma conta Amazon conectada.');
 
         const [metrics, decisions, campaigns, settings, autopilot, canonicalResponse] = await Promise.all([
-          base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: account.id }, '-date', 5000),
-          base44.entities.OptimizationDecision.filter({ amazon_account_id: account.id }, '-created_at', 2000),
-          base44.entities.Campaign.filter({ amazon_account_id: account.id }, '-created_at', 2000),
+          readAllDashboardPages(base44.entities.CampaignMetricsDaily, { filter: { amazon_account_id: account.id } }),
+          readAllDashboardPages(base44.entities.OptimizationDecision, { filter: { amazon_account_id: account.id } }),
+          readAllDashboardPages(base44.entities.Campaign, { filter: { amazon_account_id: account.id } }),
           base44.entities.PerformanceSettings.filter({ amazon_account_id: account.id }, '-updated_at', 1),
           base44.entities.AutopilotConfig.filter({ amazon_account_id: account.id }, '-updated_at', 1),
-          base44.functions.invoke('getCanonicalAccountContext', { amazon_account_id: account.id }).catch(() => null),
+          base44.functions.invoke('getCanonicalAccountContext', { amazon_account_id: account.id }),
         ]);
 
         if (!active) return;

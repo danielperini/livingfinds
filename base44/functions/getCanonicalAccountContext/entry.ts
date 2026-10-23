@@ -14,6 +14,7 @@
  *
  * Usado por: useAccountData (frontend) + qualquer módulo que precise dos KPIs
  */
+import { readAllDashboardPages } from '../../shared/dashboardReads.js';
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import {
   calculateInventoryCoverage,
@@ -85,7 +86,7 @@ Deno.serve(async (req) => {
           updated_at: ps.updated_at || null,
         };
       }
-    } catch {}
+    } catch (error) { throw new Error(`Performance settings read failed: ${(error as Error).message}`); }
 
     if (!settings) {
       try {
@@ -115,7 +116,7 @@ Deno.serve(async (req) => {
             updated_at: null,
           };
         }
-      } catch {}
+      } catch (error) { throw new Error(`Performance settings read failed: ${(error as Error).message}`); }
     }
 
     if (!settings) {
@@ -140,10 +141,10 @@ Deno.serve(async (req) => {
     const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
 
     const [campaigns, metricsRaw, salesDailyRaw, products] = await Promise.all([
-      db.entities.Campaign.filter({ amazon_account_id: aid }, null, 2000).catch(() => []),
-      db.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 5000).catch(() => []),
-      db.entities.SalesDaily.filter({ amazon_account_id: aid }, '-date', 1000).catch(() => []),
-      db.entities.Product.filter({ amazon_account_id: aid }, null, 500).catch(() => []),
+      readAllDashboardPages(db.entities.Campaign, { filter: { amazon_account_id: aid } }),
+      readAllDashboardPages(db.entities.CampaignMetricsDaily, { filter: { amazon_account_id: aid } }),
+      readAllDashboardPages(db.entities.SalesDaily, { filter: { amazon_account_id: aid } }),
+      readAllDashboardPages(db.entities.Product, { filter: { amazon_account_id: aid } }),
     ]);
 
     // ── 4. Campanhas ativas (não arquivadas) — mesmo filtro do motor ─────────

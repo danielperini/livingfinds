@@ -1,4 +1,8 @@
+import { readAllDashboardPages } from '../../../base44/shared/dashboardReads.js';
 import { useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { loadMotorDashboardStatus, refreshMotorDashboard } from '@/lib/motorDashboardRead';
+import MotorOperationalReadout from './MotorOperationalReadout';
 import { base44 } from '@/api/base44Client';
 import { RefreshCw, Loader2, AlertTriangle, CheckCircle2, ShieldAlert } from 'lucide-react';
 import MetricCard from '@/components/ui/MetricCard';
@@ -69,6 +73,7 @@ function AttentionCard({ alert, onResolve, resolving }) {
 
 function AttentionPanel({ accountId, decisions = [] }) {
   const [alerts, setAlerts] = useState(null);
+  const [readError, setReadError] = useState('');
   const [loading, setLoading] = useState(true);
   const [resolvingId, setResolvingId] = useState(null);
   const [resolveError, setResolveError] = useState('');
@@ -76,20 +81,21 @@ function AttentionPanel({ accountId, decisions = [] }) {
   useEffect(() => {
     let mounted = true;
     setLoading(true);
+    setReadError('');
     (async () => {
       try {
         const qs = accountId ? { amazon_account_id: accountId, status: 'active' } : { status: 'active' };
         const [criticalRows, highRows] = await Promise.all([
-          base44.entities.Alert.filter({ ...qs, severity: 'critical' }, '-created_at', 50).catch(() => []),
-          base44.entities.Alert.filter({ ...qs, severity: 'high' }, '-created_at', 50).catch(() => []),
+          readAllDashboardPages(base44.entities.Alert, { filter: { ...qs, severity: 'critical' } }),
+          readAllDashboardPages(base44.entities.Alert, { filter: { ...qs, severity: 'high' } }),
         ]);
         if (!mounted) return;
         const byId = new Map(
           [...criticalRows, ...highRows].map(alert => [alert.id, alert])
         );
         setAlerts([...byId.values()]);
-      } catch {
-        setAlerts([]);
+      } catch (error) {
+        if (mounted) setReadError(error.message || 'Falha ao consultar alertas');
       } finally {
         if (mounted) setLoading(false);
       }
@@ -122,6 +128,7 @@ function AttentionPanel({ accountId, decisions = [] }) {
       </div>
     );
   }
+  if (readError) return <p role="alert" className="text-xs text-red-600">Não foi possível verificar os alertas: {readError}</p>;
   const overdueQueue = (decisions || []).filter((decision) =>
     isDecisionQueueOverdue(decision, Date.now())
   );
@@ -176,27 +183,17 @@ function AttentionPanel({ accountId, decisions = [] }) {
  */
 export default function DecisionalOverview({
   account, user, campaigns = [], metricsDaily = [], salesDaily = [],
-  decisions = [], bidChanges = [], onRefresh,
+  decisions = [], bidChanges = [], onRefresh, decisionReadState,
 }) {
   const [refreshing, setRefreshing] = useState(false);
-  const [motorHealth, setMotorHealth] = useState({ loading: true, data: null, error: null, checkedAt: null });
-
-  useEffect(() => {
-    let active = true;
-    const loadMotorHealth = async () => {
-      try {
-        const response = await fetch('/health', { cache: 'no-store' });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json();
-        if (active) setMotorHealth({ loading: false, data, error: null, checkedAt: new Date().toISOString() });
-      } catch (error) {
-        if (active) setMotorHealth({ loading: false, data: null, error: error?.message || 'health_unavailable', checkedAt: new Date().toISOString() });
-      }
-    };
-    void loadMotorHealth();
-    const timer = window.setInterval(loadMotorHealth, 30_000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, []);
+  const motorStatusQuery = useQuery({
+    queryKey: ['motorStatus', account?.id],
+    queryFn: () => loadMotorDashboardStatus(base44, account.id),
+    enabled: Boolean(account?.id), refetchInterval: 30_000,
+  });
+  const motorHealth = { loading: motorStatusQuery.isLoading,
+    data: motorStatusQuery.data || null, error: motorStatusQuery.error?.message || null,
+    checkedAt: motorStatusQuery.data?.checked_at || null };
 
   const snapshot30 = useMemo(() => {
     const { start, end } = lastXDaysRange(30);
@@ -257,7 +254,7 @@ export default function DecisionalOverview({
   const handleRefresh = async () => {
     if (refreshing) return;
     setRefreshing(true);
-    try { await onRefresh?.(); }
+    try { await refreshMotorDashboard({ reloadSources: onRefresh, loadStatus: () => motorStatusQuery.refetch() }); }
     finally { setTimeout(() => setRefreshing(false), 800); }
   };
 
@@ -285,7 +282,7 @@ export default function DecisionalOverview({
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amazon text-white text-xs font-semibold hover:bg-amazon-deep disabled:opacity-60 transition-colors"
             >
               {refreshing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-              Atualizar agora
+              Atualizar dados atuais
             </button>
           </div>
         </div>
@@ -333,10 +330,11 @@ export default function DecisionalOverview({
       {/* ════ O que o Motor está fazendo agora — card dedicado, ao final ════ */}
       <div className="rounded-2xl border border-[var(--border-color)] bg-theme-card p-5 shadow-card">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-bold text-theme-primary">O que o Motor está fazendo agora</h2>
+          <h2 className="text-sm font-bold text-theme-primary">Estado atual e último ciclo do Motor</h2>
           <p className="text-[11px] text-theme-muted hidden sm:block">Toque na seta para abrir o colóquio da decisão.</p>
         </div>
-        <MotorDecisionFeed decisions={decisions} bidChanges={bidChanges} accountId={account?.id} motorHealth={motorHealth} />
+        <MotorOperationalReadout data={motorHealth.data} error={motorHealth.error} accountId={account?.id} />
+        <MotorDecisionFeed decisions={decisions} bidChanges={bidChanges} motorHealth={motorHealth} decisionReadState={decisionReadState} />
       </div>
     </div>
   );
