@@ -1,0 +1,16 @@
+{
+  "name": "ImportedSearchTermReportImport",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": { "type": "string" },
+    "marketplace_id": { "type": "string" },
+    "country_code": { "type": "string" },
+    "currency_code": { "type": "string" },
+    "status": { "type": "string", "enum": ["processing", "completed", "failed"] },
+    "row_count": { "type": "number" },
+    "duplicates_removed": { "type": "number" },
+    "started_at": { "type": "string" },
+    "completed_at": { "type": "string" },
+    "error_code": { "type": "string" }
+  }
+}

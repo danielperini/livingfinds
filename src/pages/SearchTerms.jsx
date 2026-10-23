@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
+import { selectActiveImportedSearchTermRows } from '../../base44/shared/importedSearchTermReport.js';
 import {
-  Search, Filter, RefreshCw, Loader2, TrendingUp, TrendingDown,
-  ArrowUpRight, X, CheckCircle, AlertCircle, Brain, Upload,
-  Settings, BookOpen, Plus, ChevronDown, ChevronUp
+  Search, RefreshCw, Loader2, TrendingUp, TrendingDown, X, Upload,
+  Settings, BookOpen
 } from 'lucide-react';
 
 // ─── Normalização de texto ────────────────────────────────────────────────────
@@ -20,6 +20,22 @@ function normalizeText(text) {
     .replace(/biomtrica/g, 'biometrica')
     .replace(/[^\w\s\u00C0-\u00FF]/g, '')
     .trim();
+}
+
+const termText = (row) => row?.search_term || row?.keyword_text || row?.keyword || '';
+
+async function loadAllRows(entity, filter) {
+  const rows = [];
+  const seen = new Set();
+  for (let offset = 0; ; offset += 500) {
+    const page = await entity.filter(filter, 'id', 500, offset);
+    for (const row of page) {
+      if (seen.has(row.id)) throw new Error('Dados alterados durante a leitura. Atualize a página.');
+      seen.add(row.id);
+      rows.push(row);
+    }
+    if (page.length < 500) return rows;
+  }
 }
 
 // ─── Classificação ───────────────────────────────────────────────────────────
@@ -132,15 +148,18 @@ export default function SearchTerms() {
       setAccount(acc);
       if (!acc) return;
 
-      const [kws, apCfgs] = await Promise.all([
+      const [kws, importedRows, importBatches, apCfgs] = await Promise.all([
         base44.entities.Keyword.filter({ amazon_account_id: acc.id }, '-spend', 1000),
+        loadAllRows(base44.entities.ImportedSearchTermReportRow, { amazon_account_id: acc.id }),
+        loadAllRows(base44.entities.ImportedSearchTermReportImport, { amazon_account_id: acc.id }),
         base44.entities.AutopilotConfig.filter({ amazon_account_id: acc.id }, null, 1),
       ]);
 
       const ap = apCfgs[0];
       if (ap?.target_acos) setCfg(p => ({ ...p, meta_acos: ap.target_acos }));
 
-      setKeywords(kws);
+      const visibleImportedRows = selectActiveImportedSearchTermRows(importedRows, importBatches);
+      setKeywords([...kws, ...visibleImportedRows]);
     } finally {
       setLoading(false);
     }
@@ -152,7 +171,7 @@ export default function SearchTerms() {
 
   const addToTermBank = async (kw, m, bid) => {
     setActionLoading(kw.id + '_tb');
-    const term = normalizeText(kw.keyword_text || kw.keyword);
+    const term = normalizeText(termText(kw));
     try {
       await base44.entities.TermBank.create({
         amazon_account_id: account.id,
@@ -188,7 +207,7 @@ export default function SearchTerms() {
   const createVariant = async (kw, m, matchType) => {
     const id = kw.id + '_' + matchType;
     setActionLoading(id);
-    const term = normalizeText(kw.keyword_text || kw.keyword);
+    const term = normalizeText(termText(kw));
     const baseBid = m.cpc > 0 ? m.cpc : 0.25;
     const mult = matchType === 'EXACT' ? cfg.mult_exact : matchType === 'PHRASE' ? cfg.mult_phrase : cfg.mult_broad;
     const bid = +(baseBid * mult).toFixed(2);
@@ -245,7 +264,7 @@ export default function SearchTerms() {
 
   const negateKeyword = async (kw, m) => {
     setActionLoading(kw.id + '_neg');
-    const term = normalizeText(kw.keyword_text || kw.keyword);
+    const term = normalizeText(termText(kw));
     try {
       await base44.entities.NegativeKeywordSuggestion.create({
         amazon_account_id: account.id,
@@ -277,7 +296,7 @@ export default function SearchTerms() {
         amazon_account_id: account.id,
       });
       if (importRes.data?.ok) {
-        notify('success', `✓ ${importRes.data.imported || 0} termos importados`);
+        notify('success', `✓ ${importRes.data.imported || 0} linhas importadas para consulta. Dados manuais ficam isolados e não autorizam ações do motor.`);
         await load();
       } else {
         notify('error', importRes.data?.error || 'Falha na importação');
@@ -293,14 +312,17 @@ export default function SearchTerms() {
 
   const processed = keywords.map(kw => {
     const m = calcMetrics(kw);
-    const cls = classifyTerm(m, cfg);
+    const importedUnverified = kw.decision_eligible === false;
+    const cls = importedUnverified ? 'no_data' : classifyTerm(m, cfg);
     const bidSuggested = calcBidSuggested(m, cls, cfg);
-    const recommendation = getRecommendation(cls, m);
-    return { ...kw, _m: m, _cls: cls, _bidSuggested: bidSuggested, _rec: recommendation };
+    const recommendation = importedUnverified
+      ? 'Importação manual: valores visíveis para consulta, mas sem confirmação de atribuição; ações do motor bloqueadas.'
+      : getRecommendation(cls, m);
+    return { ...kw, _m: m, _cls: cls, _bidSuggested: bidSuggested, _rec: recommendation, _importedUnverified: importedUnverified };
   });
 
   const filtered = processed.filter(kw => {
-    const term = normalizeText(kw.keyword_text || kw.keyword);
+    const term = normalizeText(termText(kw));
     const matchSearch = !search || term.includes(normalizeText(search));
     const matchClass = filterClass === 'all' || kw._cls === filterClass;
     return matchSearch && matchClass;
@@ -339,6 +361,7 @@ export default function SearchTerms() {
             <p className="text-xs text-slate-400">
               {keywords.length} termos · {winners} vencedores · {toNegate} para negativar · ROAS geral {overallRoas.toFixed(1)}x
             </p>
+            <p className="text-[10px] text-slate-500">Importação manual aceita somente linhas diárias com janela de atribuição explícita; os dados ficam fora das decisões automáticas.</p>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -346,7 +369,7 @@ export default function SearchTerms() {
           <button onClick={() => fileInputRef.current?.click()} disabled={importing || !account}
             className="flex items-center gap-1.5 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-60">
             <Upload className={`w-3.5 h-3.5 ${importing ? 'animate-spin' : ''}`} />
-            {importing ? 'Importando...' : 'Importar CSV'}
+            {importing ? 'Importando...' : 'Importar relatório'}
           </button>
           <button onClick={() => setShowCfg(p => !p)}
             className="flex items-center gap-1.5 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white text-xs rounded-lg transition-colors">
@@ -459,8 +482,8 @@ export default function SearchTerms() {
                     <tr key={kw.id} className="border-b border-surface-2/30 hover:bg-surface-2/20 transition-colors">
                       {/* Termo */}
                       <td className="px-3 py-2 max-w-[200px]">
-                        <p className="font-medium text-slate-200 truncate" title={kw.keyword_text || kw.keyword}>
-                          {normalizeText(kw.keyword_text || kw.keyword) || '—'}
+                        <p className="font-medium text-slate-200 truncate" title={termText(kw)}>
+                          {normalizeText(termText(kw)) || '—'}
                         </p>
                         <p className="text-slate-600 font-mono truncate text-[10px]">{kw.match_type || kw.keyword_match_type || ''}</p>
                         <p className="text-slate-600 mt-0.5 truncate text-[10px]" title={kw._rec}>{kw._rec}</p>
@@ -492,28 +515,28 @@ export default function SearchTerms() {
                       <td className="px-3 py-2">
                         <div className="flex items-center gap-1 flex-wrap">
                           {/* TermBank */}
-                          <button onClick={() => addToTermBank(kw, m, kw._bidSuggested)} disabled={!!actionLoading}
+                          <button onClick={() => addToTermBank(kw, m, kw._bidSuggested)} disabled={!!actionLoading || kw._importedUnverified}
                             className="flex items-center gap-0.5 px-1.5 py-1 bg-surface-2 border border-surface-3 text-slate-400 hover:text-cyan hover:border-cyan/30 rounded transition-colors disabled:opacity-40"
                             title="Adicionar ao TermBank">
                             {actionLoading === kw.id + '_tb' ? <Loader2 className="w-3 h-3 animate-spin" /> : <BookOpen className="w-3 h-3" />}
                           </button>
 
                           {/* EXACT */}
-                          <button onClick={() => createVariant(kw, m, 'EXACT')} disabled={!!actionLoading}
+                          <button onClick={() => createVariant(kw, m, 'EXACT')} disabled={!!actionLoading || kw._importedUnverified}
                             className="px-1.5 py-1 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 rounded text-[10px] font-bold transition-colors disabled:opacity-40"
                             title={`Criar EXACT · bid R$${(m.cpc * cfg.mult_exact).toFixed(2)}`}>
                             {actionLoading === kw.id + '_EXACT' ? <Loader2 className="w-3 h-3 animate-spin" /> : 'E'}
                           </button>
 
                           {/* PHRASE */}
-                          <button onClick={() => createVariant(kw, m, 'PHRASE')} disabled={!!actionLoading}
+                          <button onClick={() => createVariant(kw, m, 'PHRASE')} disabled={!!actionLoading || kw._importedUnverified}
                             className="px-1.5 py-1 bg-blue-500/10 border border-blue-500/20 text-blue-400 hover:bg-blue-500/20 rounded text-[10px] font-bold transition-colors disabled:opacity-40"
                             title={`Criar PHRASE · bid R$${(m.cpc * cfg.mult_phrase).toFixed(2)}`}>
                             P
                           </button>
 
                           {/* BROAD */}
-                          <button onClick={() => createVariant(kw, m, 'BROAD')} disabled={!!actionLoading}
+                          <button onClick={() => createVariant(kw, m, 'BROAD')} disabled={!!actionLoading || kw._importedUnverified}
                             className="px-1.5 py-1 bg-violet-500/10 border border-violet-500/20 text-violet-400 hover:bg-violet-500/20 rounded text-[10px] font-bold transition-colors disabled:opacity-40"
                             title={`Criar BROAD · bid R$${(m.cpc * cfg.mult_broad).toFixed(2)}`}>
                             B
@@ -521,7 +544,7 @@ export default function SearchTerms() {
 
                           {/* Aumentar bid */}
                           {isWinner && (
-                            <button onClick={() => adjustBid(kw, m, 'up')} disabled={!!actionLoading}
+                            <button onClick={() => adjustBid(kw, m, 'up')} disabled={!!actionLoading || kw._importedUnverified}
                               className="p-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 rounded transition-colors disabled:opacity-40"
                               title={`Aumentar bid +${cfg.aumento_vencedor}%`}>
                               {actionLoading === kw.id + '_bid' ? <Loader2 className="w-3 h-3 animate-spin" /> : <TrendingUp className="w-3 h-3" />}
@@ -530,7 +553,7 @@ export default function SearchTerms() {
 
                           {/* Reduzir bid */}
                           {(cls === 'inefficient' || cls === 'negate_candidate') && (
-                            <button onClick={() => adjustBid(kw, m, 'down')} disabled={!!actionLoading}
+                            <button onClick={() => adjustBid(kw, m, 'down')} disabled={!!actionLoading || kw._importedUnverified}
                               className="p-1 bg-amber-500/10 border border-amber-500/20 text-amber-400 hover:bg-amber-500/20 rounded transition-colors disabled:opacity-40"
                               title={`Reduzir bid -${cfg.reducao_fraco}%`}>
                               <TrendingDown className="w-3 h-3" />
@@ -539,7 +562,7 @@ export default function SearchTerms() {
 
                           {/* Negativar */}
                           {isNegate && (
-                            <button onClick={() => negateKeyword(kw, m)} disabled={!!actionLoading}
+                            <button onClick={() => negateKeyword(kw, m)} disabled={!!actionLoading || kw._importedUnverified}
                               className="p-1 bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 rounded transition-colors disabled:opacity-40"
                               title="Sugerir negativação">
                               <X className="w-3 h-3" />

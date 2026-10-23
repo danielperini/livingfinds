@@ -39,7 +39,7 @@ jobs:
       - name: Test post-deploy Amazon workflow isolation
         run: node --test src/lib/postDeployHooks.test.js
       - name: Test interface navigation, operational queue and overlay contracts
-        run: node --test src/lib/navigation.test.js src/lib/operationalQueueHealth.test.js src/lib/pagination.test.js src/lib/toastPointerEvents.test.js src/lib/durableMotorExecution.test.js src/lib/proactiveGrowthCycle.test.js
+        run: node --test src/lib/navigation.test.js src/lib/operationalQueueHealth.test.js src/lib/pagination.test.js src/lib/toastPointerEvents.test.js src/lib/durableMotorExecution.test.js src/lib/proactiveGrowthCycle.test.js base44/shared/importedSearchTermReport.test.js
       - name: Typecheck
         run: npm run typecheck
         continue-on-error: true

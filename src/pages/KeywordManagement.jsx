@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Download, Loader2, RefreshCw, Search, Upload, X, Zap } from 'lucide-react';
+import { Check, Download, Loader2, RefreshCw, Upload, X, Zap } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
+import { selectActiveImportedSearchTermRows } from '../../base44/shared/importedSearchTermReport.js';
 import { loadAllCampaigns, campaignIsArchived } from '@/lib/campaignUtils';
 import { Button } from '@/components/ui/button';
 import PremiumDataTable from '@/components/ui/PremiumDataTable';
@@ -87,16 +88,19 @@ export default function KeywordManagement() {
       setAccount(acc || null);
       if (!acc) return;
 
-      const [rules, searchTerms, suggestions, loadedCampaigns, configured] = await Promise.all([
+      const [rules, searchTerms, importedRows, importBatches, suggestions, loadedCampaigns, configured] = await Promise.all([
         base44.entities.BudgetRule.filter({ amazon_account_id: acc.id }),
         loadAllRows(base44.entities.SearchTerm, { amazon_account_id: acc.id }),
+        loadAllRows(base44.entities.ImportedSearchTermReportRow, { amazon_account_id: acc.id }),
+        loadAllRows(base44.entities.ImportedSearchTermReportImport, { amazon_account_id: acc.id }),
         loadAllRows(base44.entities.NegativeKeywordSuggestion, { amazon_account_id: acc.id }),
         loadAllCampaigns(acc.id, {}, { includeExcluded: true }),
         campaignScope ? loadAllRows(base44.entities.Keyword, { amazon_account_id: acc.id, campaign_id: campaignScope }) : Promise.resolve([]),
       ]);
 
       if (rules[0]?.target_acos) setAcosTarget(Number(rules[0].target_acos));
-      setKeywords(searchTerms);
+      const visibleImportedRows = selectActiveImportedSearchTermRows(importedRows, importBatches);
+      setKeywords([...searchTerms, ...visibleImportedRows]);
       setConfiguredKeywords(configured.filter(k => String(k.state || k.status).toLowerCase() !== 'archived'));
       setNegatives(suggestions);
       setCampaigns(loadedCampaigns.filter((campaign) => !campaignIsArchived(campaign)));
@@ -119,7 +123,7 @@ export default function KeywordManagement() {
     })
     .map((term) => {
       const metrics = metricsOf(term);
-      return { ...term, ...metrics, _displayTerm: termText(term), _class: classifyTerm(term, acosTarget) };
+      return { ...term, ...metrics, _displayTerm: termText(term), _class: term.decision_eligible === false ? 'no_data' : classifyTerm(term, acosTarget) };
     }), [keywords, activeCampaignIds, acosTarget, campaignScope, campaignById]);
 
   const visibleNegatives = useMemo(() => negatives.filter((item) => {
@@ -132,6 +136,7 @@ export default function KeywordManagement() {
     return visibleKeywords.filter((term) => {
       const campaignId = idOfTermCampaign(term);
       const campaign = campaignById.get(campaignId);
+      if (term.decision_eligible === false) return false;
       if (!campaignId || !campaign || !campaignIsAutomatic(campaign, term)) return false;
       if (term._class !== 'negate_candidate' || term.orders > 0 || !term._displayTerm) return false;
       return !existing.has(`${campaignId}::${term._displayTerm.toLocaleLowerCase('pt-BR')}::exact`);
@@ -251,7 +256,14 @@ export default function KeywordManagement() {
     setImporting(true);
     try {
       const upload = await base44.integrations.Core.UploadFile({ file });
-      await base44.functions.invoke('importSearchTermReport', { file_url: upload.file_url, amazon_account_id: account.id });
+      const response = await base44.functions.invoke('importSearchTermReport', { file_url: upload.file_url, amazon_account_id: account.id });
+      const data = response?.data;
+      setActionMsg({
+        type: data?.ok ? 'success' : 'error',
+        text: data?.ok
+          ? `${data.imported || 0} linhas importadas (${data.created || 0} novas, ${data.updated || 0} atualizadas). Dados não confirmados permanecem bloqueados para automação.`
+          : (data?.error || 'O relatório não pôde ser importado.'),
+      });
       await load();
     } catch (error) { setActionMsg({ type: 'error', text: error?.message || 'Falha ao importar arquivo.' }); }
     finally { setImporting(false); if (fileInputRef.current) fileInputRef.current.value = ''; }
