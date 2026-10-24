@@ -20,9 +20,9 @@ Deno.test({ name: 'PostgreSQL dashboard read-only: historical incident, full pag
       await client.unsafe(`insert into "${tables.scheduler}"(slot_key,status,attempt_count,recovery_count,started_at,finished_at,updated_at,last_error,function_name) values ('2026-10-23','exhausted',6,0,'2026-10-23T04:25:00Z','2026-10-23T04:30:00Z','2026-10-23T04:30:00Z',
         'deployment_interrupted; remote state not confirmed; automatic replay blocked','runCanonicalDecisionCycle')`);
       await client.unsafe(`create table "${tables.runs}"(id text,status text,remote_outcome text,started_at timestamptz,finished_at timestamptz,
-        last_activity_at timestamptz,lease_expires_at timestamptz,result_summary jsonb,account_scope text)`);
+        last_activity_at timestamptz,lease_expires_at timestamptz,result_summary jsonb,request_payload jsonb,account_scope text)`);
       await client.unsafe(`insert into "${tables.runs}" values ('run-23','remote_unknown','unknown','2026-10-23T04:25:00Z','2026-10-23T04:30:00Z',
-        '2026-10-23T04:30:00Z',null,'{"correlation_id":"cycle-23"}','a')`);
+        '2026-10-23T04:30:00Z',null,to_jsonb('{"correlation_id":"cycle-23"}'::text),null,'a')`);
       await client.unsafe(`create table "${tables.claims}"(decision_id text,account_id text,status text,attempt int,created_at timestamptz,updated_at timestamptz,finished_at timestamptz)`);
       await client.unsafe(`insert into "${tables.claims}" values('d-00001','a','remote_unknown',1,'2026-10-23T04:25:00Z','2026-10-23T04:30:00Z',null)`);
       await client.unsafe(`insert into "${tables.decisions}"(id,data)

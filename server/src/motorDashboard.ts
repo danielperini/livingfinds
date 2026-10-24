@@ -14,6 +14,18 @@ const quoted = (name: string) => {
 };
 const mapped = (row: any) => ({ ...(typeof row.data === 'string' ? JSON.parse(row.data) : row.data), id: row.id,
   created_date: row.created_date, updated_date: row.updated_date });
+const jsonObject = (value: unknown): Record<string, unknown> => {
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch { return {}; }
+};
+function runCorrelationId(row: any): string | null {
+  const summary = jsonObject(row.result_summary);
+  const payload = jsonObject(row.request_payload);
+  const correlationId = summary.correlation_id || payload.correlation_id;
+  return typeof correlationId === 'string' && correlationId.trim() ? correlationId.trim() : null;
+}
 
 export async function readDailyMotorWithSql(sql: ReadSql, input: { today: string; due: boolean; accountId?: string; now?: number; scheduler?: any }, tables: Tables = motorDashboardTables) {
   const errors: any[] = [];
@@ -28,7 +40,7 @@ export async function readDailyMotorWithSql(sql: ReadSql, input: { today: string
     read('current_run', `select id,status,started_at,lease_expires_at,last_activity_at,coalesce(result_summary->>'correlation_id',to_jsonb(r)->'request_payload'->>'correlation_id') as correlation_id
       from ${quoted(tables.runs)} r where status='running' and ($1::text is null or account_scope=$1 or account_scope='default-account')
       order by started_at desc limit 1`, [input.accountId || null]),
-    read('unresolved_run', `select id,status,remote_outcome,started_at,finished_at,coalesce(result_summary->>'correlation_id',to_jsonb(r)->'request_payload'->>'correlation_id') as correlation_id
+    read('unresolved_run', `select id,status,remote_outcome,started_at,finished_at,result_summary,request_payload
       from ${quoted(tables.runs)} r where (remote_outcome='unknown' or status='remote_unknown')
       and ($1::text is null or account_scope=$1 or account_scope='default-account') order by started_at desc nulls last limit 1`, [input.accountId || null]),
     read('scheduler_outcomes', `select function_name,slot_key,status,updated_at,
@@ -60,7 +72,7 @@ export async function readDailyMotorWithSql(sql: ReadSql, input: { today: string
         completed_at: summary.completed_at || row.updated_at };
     }),
     unresolved_run: unknown?.[0] ? { id: unknown[0].id, date: cycleDate(unknown[0]),
-      correlation_id: unknown[0].correlation_id, remote_outcome: 'unknown', replay: 'blocked', reconciliation: 'pending' } : null };
+      correlation_id: runCorrelationId(unknown[0]), remote_outcome: 'unknown', replay: 'blocked', reconciliation: 'pending' } : null };
 }
 
 /** Keyset reads cover all rows; missing tables or page caps are explicit failures. */
