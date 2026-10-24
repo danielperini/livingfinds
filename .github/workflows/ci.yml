@@ -188,6 +188,8 @@ jobs:
         run: deno test server/src/operationalState.test.ts
       - name: Test safe stale-decision and history handling without Amazon access
         run: deno test --config server/tests/canonicalIncident/deno.json server/tests/canonicalIncident/staleExecutor.test.ts server/tests/canonicalIncident/preserveHistory.test.ts
+      - name: Test explicit audit outcomes and read-only historical evidence without Amazon
+        run: deno test --config server/tests/canonicalIncident/deno.json server/tests/auditOutcomes/handlers.test.ts base44/shared/auditOutcome.test.ts
       - name: Test current and historical motor read models without network
         run: deno test server/src/motorDashboardPolicy.test.ts server/src/motorDashboardProxy.test.ts
       - name: Test full stock guard evidence and safe simulation without network
@@ -195,7 +197,7 @@ jobs:
       - name: Test canonical campaign audit incident without external access
         run: deno test --config server/tests/canonicalIncident/deno.json --allow-env=MOTOR_STAGE_TIMEOUT_MS server/tests/canonicalIncident/incident.test.ts
       - name: Test scheduler and Hostinger OpenAI routing
-        run: deno test --allow-read=base44/schedules/amazon-automation-schedule.json --node-modules-dir=auto server/src/scheduler.test.ts server/src/sdk/integrations.test.ts
+        run: deno test --allow-read=base44/schedules/amazon-automation-schedule.json --node-modules-dir=auto server/src/scheduler.test.ts server/src/sdk/integrations.test.ts server/src/sdk/functions.test.ts
       - name: Type-check Hostinger scheduler and health route
         run: deno check --node-modules-dir=auto server/src/scheduler.ts server/src/main.ts
       - name: Test environment status secret redaction

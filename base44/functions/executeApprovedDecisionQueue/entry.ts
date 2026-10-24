@@ -192,7 +192,11 @@ Deno.serve(async (request) => {
         deferredDecisionIds.add(String(decision.id));
         await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
           status: 'blocked', queue_status: 'blocked',
-          block_reason: recovery.reason, requires_new_collection: recovery.reason === 'new_collection_and_decision_required',
+          block_reason: recovery.reason, revalidation_requirements: recovery.requirements,
+          requires_new_collection: recovery.requirements.includes('new_collection'),
+          requires_new_evaluation: recovery.requirements.includes('new_evaluation'),
+          requires_new_authorization: recovery.requirements.includes('new_authorization'),
+          requires_remote_validation: recovery.requirements.includes('remote_state_validation'),
           recovery_checked_at: new Date(nowMs).toISOString(),
         });
         continue;

@@ -13,6 +13,7 @@ import { join, toFileUrl } from 'jsr:@std/path@1';
 export type FnHandler = (req: Request) => Response | Promise<Response>;
 
 export const registry = new Map<string, FnHandler>();
+const READ_ONLY_FUNCTIONS = new Set(['getMotorDashboardStatus', 'getMotorCycleEvidence']);
 
 let capturing: FnHandler | null = null;
 // deno-lint-ignore no-explicit-any
@@ -78,6 +79,7 @@ export async function loadFunctions(): Promise<{ loaded: number; failed: string[
         (mod.handler as FnHandler | undefined);
       if (typeof handler === 'function') {
         registry.set(name, async (req) => {
+          if (READ_ONLY_FUNCTIONS.has(name)) return await handler(req);
           const body = await req.clone().json().catch(() => ({}));
           return await withCycleContext(body, async (correlated) => {
           const request = new Request(req, { body: JSON.stringify(correlated) });

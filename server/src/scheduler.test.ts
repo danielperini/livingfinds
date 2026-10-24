@@ -1,6 +1,8 @@
 import { assertEquals } from 'jsr:@std/assert@1';
 import {
   dailyCatchUpSlot,
+  classifyAuditJobException,
+  classifyAuditJobResponse,
   failedJobStages,
   isDailyCycleExecutionConfirmedResponse,
   isStaleFinalAttempt,
@@ -218,4 +220,60 @@ Deno.test('partial engine responses are not recorded as successful scheduler run
   );
   assertEquals(isSuccessfulJobResponse({ ok: true, data: { ok: false } }), false);
   assertEquals(isSuccessfulJobResponse({ ok: false, status: 502 }), false);
+});
+
+function auditResponse(overrides: Record<string, unknown> = {}) {
+  return { ok: true, status: 200, data: {
+    ok: true, audit_status: 'completed', technical_failure: false, critical_alerts: [], partial: false,
+    correlation_id: 'audit-test-correlation', source_errors: [], completed_at: '2026-10-24T12:00:00Z',
+    ...overrides,
+  } };
+}
+
+Deno.test('HTTP 200 with critical audit alerts is operationally critical, not a scheduler failure', () => {
+  const result = classifyAuditJobResponse('auditAdsAutomationE2E', auditResponse({
+    ok: false, audit_status: 'completed_with_alerts', critical_alerts: ['DECISION_STALE'],
+  }));
+  assertEquals(result?.scheduler_success, true);
+  assertEquals(result?.classification, 'completed_with_alerts');
+  assertEquals(result?.error, null);
+});
+
+Deno.test('HTTP 200 with partial data is reported partial while scheduler execution succeeds', () => {
+  const result = classifyAuditJobResponse('auditAdsAutomationE2E', auditResponse({
+    ok: false, audit_status: 'partial', partial: true,
+  }));
+  assertEquals(result?.scheduler_success, true);
+  assertEquals(result?.classification, 'partial');
+});
+
+Deno.test('explicit technical errors, timeout, auth and invalid response remain scheduler failures', () => {
+  assertEquals(classifyAuditJobResponse('runCanonicalWeeklyDecisionReview', auditResponse({
+    ok: false, audit_status: 'technical_failure', technical_failure: true,
+    source_errors: [{ source: 'deterministic_core', error: 'database timeout' }],
+  }))?.classification, 'technical_failure');
+  assertEquals(classifyAuditJobResponse('auditAdsAutomationE2E', { ok: false, status: 504, data: { timed_out: true } })?.classification, 'timeout');
+  assertEquals(classifyAuditJobResponse('auditAdsAutomationE2E', { ok: false, status: 401, data: {} })?.classification, 'authentication_error');
+  assertEquals(classifyAuditJobResponse('auditAdsAutomationE2E', { ok: true, status: 200, data: { ok: false } })?.classification, 'invalid_response');
+  assertEquals(classifyAuditJobResponse('auditAdsAutomationE2E', { ok: true, data: auditResponse({}) })?.classification, 'invalid_response');
+});
+
+Deno.test('audit and weekly exceptions are technical without falsely assigning Amazon remote_unknown', () => {
+  const timeout = classifyAuditJobException('auditAdsAutomationE2E', new Error('deadline exceeded'), 'corr-1');
+  assertEquals(timeout?.classification, 'timeout');
+  assertEquals(timeout?.summary?.audit_status, 'timeout');
+  assertEquals(timeout?.summary?.correlation_id, 'corr-1');
+  assertEquals(classifyAuditJobException('auditAdsAutomationE2E', new Error('HTTP 403 unauthorized'), 'corr-auth')?.classification, 'authentication_error');
+  assertEquals(classifyAuditJobException('runCanonicalWeeklyDecisionReview', new Error('database unavailable'), 'corr-2')?.classification, 'technical_failure');
+  assertEquals(classifyAuditJobException('executeApprovedDecisionQueue', new Error('timeout'), 'corr-3'), null);
+  assertEquals(shouldDispatchRun({ status: 'exhausted', last_error: 'remote_unknown; automatic replay blocked', remote_outcome: 'unknown' }, Date.now(), 5), false);
+});
+
+Deno.test('OpenAI diagnostic failure is partial but does not invalidate the deterministic weekly core', () => {
+  const result = classifyAuditJobResponse('runCanonicalWeeklyDecisionReview', auditResponse({
+    audit_status: 'partial', partial: true,
+    source_errors: [{ source: 'openai_diagnostic', error: 'provider unavailable' }],
+  }));
+  assertEquals(result?.scheduler_success, true);
+  assertEquals(result?.classification, 'partial');
 });

@@ -33,14 +33,16 @@ export function groupOperationalAlerts(rows, now = Date.now()) {
 /** Fresh evaluation alone cannot renew an old proposal or prove an unsent action. */
 export function decisionRecoveryEligibility(row, now = Date.now()) {
   if (row.remote_outcome === 'unknown' || row.status === 'remote_unknown' || ['confirmed','sent_unconfirmed'].includes(row.remote_outcome) || ['confirmed','pending_probe'].includes(row.confirmation_status) || row.amazon_confirmed === true ||
-      row.sent_at || row.executed_at || row.amazon_request_id || row.request_id) return { safe: false, reason: 'reconciliation_required' };
+      row.sent_at || row.executed_at || row.amazon_request_id || row.request_id) return { safe: false, reason: 'reconciliation_required', requirements: ['remote_state_validation'] };
   const created = time(row.created_at || row.created_date);
   const configured = Number(row.maximum_data_age_minutes || 24 * 60);
   const maxAge = Math.min(24 * 60, Number.isFinite(configured) && configured > 0 ? configured : 24 * 60) * 60000;
-  if (!Number.isFinite(created) || created > now || now - created > maxAge) return { safe: false, reason: 'new_collection_and_decision_required' };
+  if (!Number.isFinite(created) || created > now || now - created > maxAge) return { safe: false, reason: 'new_collection_and_decision_required',
+    requirements: ['new_collection', 'new_evaluation', 'new_authorization', 'remote_state_validation'] };
   const expiry = row.execute_before || row.expires_at;
-  if (expiry && (!Number.isFinite(time(expiry)) || time(expiry) <= now)) return { safe: false, reason: 'decision_window_expired' };
-  return { safe: true, reason: 'fresh_unsent_proposal' };
+  if (expiry && (!Number.isFinite(time(expiry)) || time(expiry) <= now)) return { safe: false, reason: 'decision_window_expired',
+    requirements: ['new_collection', 'new_evaluation', 'new_authorization', 'remote_state_validation'] };
+  return { safe: true, reason: 'fresh_unsent_proposal', requirements: [] };
 }
 
 export function schedulerOperationalHealth(state, now = Date.now()) {

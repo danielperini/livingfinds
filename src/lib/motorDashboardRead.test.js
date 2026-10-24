@@ -47,7 +47,8 @@ test('confirmed, only sent, approved and locally blocked decisions have independ
     { id: 'unknown', created_at, remote_outcome: 'unknown', amazon_request_id: 'req-2', confirmation_status: 'confirmed' },
   ], now);
   assert.equal(counts.recent_24h, 5); assert.equal(counts.confirmed, 1); assert.equal(counts.sent, 3);
-  assert.equal(counts.unconfirmed, 2); assert.equal(counts.blocked, 2);
+  assert.equal(counts.unconfirmed, 1); assert.equal(counts.sent_without_confirmation, 1);
+  assert.equal(counts.remote_unknown, 1); assert.equal(counts.blocked, 2);
 });
 
 test('old exhausted cycle is historical, with replay blocked and reconciliation pending', () => {
