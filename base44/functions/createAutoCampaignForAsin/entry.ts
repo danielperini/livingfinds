@@ -191,19 +191,16 @@ Deno.serve(async (req) => {
     const costsConfirmed = product.cost_confirmed === true || economics.costs_confirmed_by_user === true;
     const contribution = Number(economics.contribution_margin_amount ?? product.contribution_margin ?? product.available_profit_per_sale ?? 0);
     const safeCpc = Number(assessment.safe_max_cpc || economics.safe_max_cpc || 0);
-    if (!costsConfirmed || contribution <= 0 || safeCpc <= 0) {
+    // A AUTO é a campanha mínima de descoberta. Produtos novos com estoque
+    // vendável devem receber essa cobertura mesmo antes da confirmação de
+    // custos; o motor econômico assume o controle dos lances depois.
+    const launchAtMinimum = body.launch_at_minimum !== false;
+    if (!launchAtMinimum && (!costsConfirmed || contribution <= 0 || safeCpc <= 0)) {
       return Response.json({
         ok: false, blocked: true, reason: 'verified_positive_economics_required',
-        error: 'Kick-off AUTO bloqueado: custo confirmado, margem positiva e CPC econômico precisam estar disponíveis.',
+        error: 'Kick-off AUTO proporcional exige custo confirmado, margem positiva e CPC econômico.',
         asin, sku: product.sku, costs_confirmed: costsConfirmed, contribution_margin: contribution,
         safe_max_cpc: safeCpc,
-      }, { status: 409 });
-    }
-    if (safeCpc < 0.50) {
-      return Response.json({
-        ok: false, blocked: true, reason: 'economic_cpc_below_minimum_discovery_bid',
-        error: 'Kick-off AUTO bloqueado: o limite econômico seguro por clique é inferior ao lance mínimo de R$ 0,50.',
-        asin, sku: product.sku, safe_max_cpc: safeCpc, minimum_discovery_bid: 0.50,
       }, { status: 409 });
     }
     const siblingProducts = await base44.asServiceRole.entities.Product.filter({ amazon_account_id, asin: String(asin).toUpperCase() }, '-updated_date', 100).catch(() => []);
@@ -213,10 +210,8 @@ Deno.serve(async (req) => {
     // entrega e evidencia economica. Assim uma criacao/reconciliacao nunca
     // introduz um CPC alto por conta propria.
     const requestedDiscoveryBid = 0.50;
-    const launchAtMinimum = body.launch_at_minimum !== false;
-    const initialBid = Math.round(Math.min(
-      safeCpc,
-      launchAtMinimum ? requestedDiscoveryBid : proportionalActivationBid(goalSettings, economics, assessment),
+    const initialBid = Math.round((
+      launchAtMinimum ? requestedDiscoveryBid : proportionalActivationBid(goalSettings, economics, assessment)
     ) * 100) / 100;
 
     const existingCampaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id, asin });
