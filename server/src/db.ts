@@ -2,7 +2,7 @@
  * Conexão Postgres compartilhada (postgres.js roda nativo no Deno via npm:).
  * Uma única pool para todo o processo.
  */
-import postgres from 'npm:postgres';
+import postgres from 'postgres';
 
 const url = Deno.env.get('DATABASE_URL');
 if (!url) {
