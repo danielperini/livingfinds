@@ -283,10 +283,11 @@ Deno.serve(async (req) => {
     // must not be summed or divided across products here.
     const budgetRules = await base44.asServiceRole.entities.BudgetRule.filter({ amazon_account_id });
     const budgetRule = budgetRules[0] || {};
-    const maxPerCampaign = autopilotConfig?.maximum_campaign_budget || budgetRule.max_budget_per_campaign || 20;
+    const maxPerCampaign = Math.max(15, Number(autopilotConfig?.maximum_campaign_budget || budgetRule.max_budget_per_campaign || 20));
     const configuredInitialBudget = Number(autopilotConfig?.minimum_campaign_budget
-      || budgetRule.minimum_campaign_budget || 5);
-    const campaignBudget = Math.max(5, Math.min(Number(maxPerCampaign), configuredInitialBudget));
+      || budgetRule.minimum_campaign_budget || 15);
+    // Toda campanha nova começa com orçamento diário mínimo de R$ 15.
+    const campaignBudget = Math.max(15, Math.min(Number(maxPerCampaign), configuredInitialBudget));
 
     const skuToken = String(product.sku).trim().replace(/[^a-z0-9-]/gi, '').slice(0, 24);
     const campaignName = `AUTO | ${asin} | ${skuToken} | ${new Date().toISOString().slice(0, 10)}`;
