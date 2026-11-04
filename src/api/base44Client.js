@@ -8,7 +8,7 @@ export const base44 = createClient({
   token,
   functionsVersion,
   serverUrl: '',
-  requiresAuth: false,
+  // Protected dashboard reads must carry the current session token.\n  // Without this, motor-status/evidence requests reach the server anonymously.\n  requiresAuth: true,
   appBaseUrl
 });
 
