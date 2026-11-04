@@ -117,7 +117,7 @@ jobs:
       - name: Check daily Amazon Ads report-driven optimization
         run: deno check --node-modules-dir=auto base44/shared/dailyAdsReportOptimizationPolicy.ts base44/functions/pollAmazonAdsReportJobs/entry.ts
       - name: Check daily motor watchdog and SKU E2E recovery
-        run: deno check --node-modules-dir=auto base44/functions/runDailyMotorWatchdog/entry.ts server/src/scheduler.ts
+        run: deno check --config server/deno.json --node-modules-dir=auto base44/functions/runDailyMotorWatchdog/entry.ts server/src/scheduler.ts
       - name: Check automatic campaign repair queue guards
         run: deno check --node-modules-dir=auto base44/shared/autoCampaignRepairPolicy.ts base44/functions/processAutoCampaignRepairQueue/entry.ts base44/functions/processAutoCampaignRepairQueueV2/entry.ts base44/functions/repairIncompleteAutoCampaigns/entry.ts
       - name: Check V6SIA execution and supervision
@@ -160,7 +160,7 @@ jobs:
             base44/functions/amazonApiGatewayCore/entry.ts
       - name: Check existing decision modules
         run: |
-          deno check --node-modules-dir=auto \
+          deno check --config server/deno.json --node-modules-dir=auto \
             base44/shared/portfolioBudgetMath.ts \
             base44/shared/portfolioBudgetActions.ts \
             base44/shared/portfolioBudgetPacing.ts \
@@ -183,23 +183,23 @@ jobs:
       - name: Check search term quality and ingestion
         run: deno check --config server/deno.json base44/shared/searchTermQuality.ts server/src/sdk/entities.ts base44/functions/importSearchTermReport/entry.ts base44/functions/downloadAndProcessAmazonAdsReportJob/entry.ts
       - name: Test durable motor run outcome policy
-        run: deno test --node-modules-dir=auto server/src/motorRunPolicy.test.ts
+        run: deno test --config server/deno.json --node-modules-dir=auto server/src/motorRunPolicy.test.ts
       - name: Test operational coverage and correlation without network
-        run: deno test server/src/operationalState.test.ts
+        run: deno test --config server/deno.json server/src/operationalState.test.ts
       - name: Test safe stale-decision and history handling without Amazon access
         run: deno test --config server/tests/canonicalIncident/deno.json server/tests/canonicalIncident/staleExecutor.test.ts server/tests/canonicalIncident/preserveHistory.test.ts
       - name: Test explicit audit outcomes and read-only historical evidence without Amazon
         run: deno test --config server/tests/canonicalIncident/deno.json server/tests/auditOutcomes/handlers.test.ts base44/shared/auditOutcome.test.ts
       - name: Test current and historical motor read models without network
-        run: deno test server/src/motorDashboardPolicy.test.ts server/src/motorDashboardProxy.test.ts
+        run: deno test --config server/deno.json server/src/motorDashboardPolicy.test.ts server/src/motorDashboardProxy.test.ts
       - name: Test full stock guard evidence and safe simulation without network
         run: deno test --config server/tests/stockGuard/deno.json server/tests/stockGuard/paging.test.ts
       - name: Test canonical campaign audit incident without external access
         run: deno test --config server/tests/canonicalIncident/deno.json --allow-env=MOTOR_STAGE_TIMEOUT_MS server/tests/canonicalIncident/incident.test.ts
       - name: Test scheduler and Hostinger OpenAI routing
-        run: deno test --allow-read=base44/schedules/amazon-automation-schedule.json --node-modules-dir=auto server/src/scheduler.test.ts server/src/sdk/integrations.test.ts server/src/sdk/functions.test.ts
+        run: deno test --config server/deno.json --allow-read=base44/schedules/amazon-automation-schedule.json --node-modules-dir=auto server/src/scheduler.test.ts server/src/sdk/integrations.test.ts server/src/sdk/functions.test.ts
       - name: Type-check Hostinger scheduler and health route
-        run: deno check --node-modules-dir=auto server/src/scheduler.ts server/src/main.ts
+        run: deno check --config server/deno.json --node-modules-dir=auto server/src/scheduler.ts server/src/main.ts
       - name: Test environment status secret redaction
         run: deno test server/src/environmentStatus.test.ts
 
@@ -229,7 +229,7 @@ jobs:
           deno-version: v2.x
       - name: Run durable decision and executor integration tests against isolated PostgreSQL
         run: >-
-          deno test --allow-env
+          deno test --config server/deno.json --allow-env
           --allow-net=localhost,127.0.0.1 --allow-read=server/migrations
           --node-modules-dir=auto server/src/reliability.postgres.test.ts
           server/src/migrations.postgres.test.ts

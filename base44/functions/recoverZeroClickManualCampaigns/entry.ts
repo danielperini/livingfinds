@@ -4,9 +4,9 @@ const MIN_ACTIVE_MANUAL = 6;
 const REVIEW_HOURS = 72;
 const MAX_BID_RECOVERIES = 2;
 const MAX_BID_INCREASE_PCT = 0.20;
-const DEFAULT_MIN_BID = 0.25;
-const DEFAULT_MAX_BID = 0.70;
-const DEFAULT_BUDGET = 5;
+const DEFAULT_MIN_BID = 0.50;
+const DEFAULT_MAX_BID = 1.80;
+const DEFAULT_BUDGET = 15;
 const AMAZON_PROPAGATION_MS = 14000;
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
