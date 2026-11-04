@@ -48,11 +48,26 @@ export async function readDailyMotorWithSql(sql: ReadSql, input: { today: string
       from ${quoted(tables.scheduler)} s where function_name in ('auditAdsAutomationE2E','runCanonicalWeeklyDecisionReview')
       and to_jsonb(s)->>'outcome_class' is not null order by updated_at desc limit 50`, []),
   ]);
-  const jobFailures = await read('scheduler_jobs', `select s.function_name,s.slot_key,s.status,s.attempt_count,s.last_error,s.finished_at,s.updated_at,
-    (select max(n.updated_at) from ${quoted(tables.scheduler)} n where n.status='succeeded' and n.updated_at>s.updated_at
-      and coalesce(to_jsonb(n)->>'job_key',n.function_name)=coalesce(to_jsonb(s)->>'job_key',s.function_name)) as recovered_at,
-    to_jsonb(s)->>'correlation_id' as correlation_id from ${quoted(tables.scheduler)} s
-    where status in ('failed','exhausted') and last_error is not null order by updated_at desc limit 101`, []);
+  // Aggregate successful runs once instead of rescanning the ledger for every failure.
+  const jobFailures = await read('scheduler_jobs', `with failures as materialized (
+    select s.function_name,s.slot_key,s.status,s.attempt_count,s.last_error,s.finished_at,s.updated_at,
+      coalesce(to_jsonb(s)->>'job_key',s.function_name) as recovery_key,
+      to_jsonb(s)->>'correlation_id' as correlation_id
+    from ${quoted(tables.scheduler)} s
+    where s.status in ('failed','exhausted') and s.last_error is not null
+    order by s.updated_at desc limit 101
+  ), successes as materialized (
+    select coalesce(to_jsonb(n)->>'job_key',n.function_name) as recovery_key,
+      max(n.updated_at) as recovered_at
+    from ${quoted(tables.scheduler)} n
+    where n.status='succeeded'
+    group by coalesce(to_jsonb(n)->>'job_key',n.function_name)
+  )
+  select f.function_name,f.slot_key,f.status,f.attempt_count,f.last_error,f.finished_at,f.updated_at,
+    s.recovered_at,f.correlation_id
+  from failures f left join successes s
+    on s.recovery_key=f.recovery_key and s.recovered_at>f.updated_at
+  order by f.updated_at desc`, []);
   const model = dailyMotorReadModel({ ...input, latest: history?.[0], current: active?.[0], unknown: unknown?.[0], sourceErrors: errors });
   const cycleDate = (row: any) => row?.started_at ? new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo',
     year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(row.started_at)) : null;
