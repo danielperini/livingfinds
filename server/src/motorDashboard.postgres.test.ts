@@ -56,6 +56,16 @@ Deno.test({ name: 'PostgreSQL dashboard read-only: historical incident, full pag
       await client.unsafe(`insert into "${tables.scheduler}"(slot_key,status,attempt_count,recovery_count,started_at,finished_at,updated_at,last_error,function_name,outcome_class,result_summary)
         values ('2026-10-24-audit','succeeded',1,0,'2026-10-24T11:00:00Z','2026-10-24T11:01:00Z','2026-10-24T11:01:00Z',null,'auditAdsAutomationE2E','completed_with_alerts',
           '{"audit_status":"completed_with_alerts","critical_alerts":[{"alert":"DECISION_STALE"}],"partial":false,"correlation_id":"audit-correlation","completed_at":"2026-10-24T11:01:00Z"}')`);
+      // A success must be newer and belong to the same logical job, not just the same function.
+      await client.unsafe(`alter table "${tables.scheduler}" add column job_key text`);
+      await client.unsafe(`insert into "${tables.scheduler}"(function_name,job_key,slot_key,status,updated_at,last_error) values
+        ('sharedFunction','account-a','2026-10-24-a','failed','2026-10-24T10:00:00Z','timeout'),
+        ('sharedFunction','account-b','2026-10-24-b','succeeded','2026-10-24T11:00:00Z',null),
+        ('sharedFunction','account-a','2026-10-24-old','succeeded','2026-10-24T09:00:00Z',null),
+        ('equalTime',null,'2026-10-24-equal-f','failed','2026-10-24T10:00:00Z','timeout'),
+        ('equalTime',null,'2026-10-24-equal-s','succeeded','2026-10-24T10:00:00Z',null),
+        ('renamedOld','stable-key','2026-10-24-renamed-f','failed','2026-10-24T10:00:00Z','timeout'),
+        ('renamedNew','stable-key','2026-10-24-renamed-s','succeeded','2026-10-24T11:00:00Z',null)`);
       const before = await client.unsafe(`select * from "${tables.scheduler}"`);
       await client.begin('read only', async (tx) => {
         const result = await getMotorDashboardWithSql(tx as any, { accountId: 'a', today: '2026-10-24', due: true,
@@ -63,6 +73,9 @@ Deno.test({ name: 'PostgreSQL dashboard read-only: historical incident, full pag
         eq(result.ok, true); eq(result.read_only, true);
         eq(result.daily_motor.failed_jobs.find(row => row.function_name==='syncSafe')?.classification,'resolved');
         eq(result.daily_motor.failed_jobs.find(row => row.function_name==='brokenJob')?.classification,'technical_failure');
+        eq(result.daily_motor.failed_jobs.find(row => row.function_name==='sharedFunction')?.recovered_at,null);
+        eq(result.daily_motor.failed_jobs.find(row => row.function_name==='equalTime')?.recovered_at,null);
+        eq(result.daily_motor.failed_jobs.find(row => row.function_name==='renamedOld')?.classification,'resolved');
         eq(result.daily_motor.audit_outcomes[0]?.audit_status,'completed_with_alerts');
         eq(result.daily_motor.audit_outcomes[0]?.critical_alerts.length,1);
         eq(result.daily_motor.audit_outcomes[0]?.correlation_id,'audit-correlation');
