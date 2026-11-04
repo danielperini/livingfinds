@@ -23,6 +23,8 @@ import FinanceSyncDiagnostic from '@/components/dashboard/FinanceSyncDiagnostic'
 import MotorStatusBySku from '@/components/analytics/MotorStatusBySku';
 import BudgetHistoryPanel from '@/components/dashboard/BudgetHistoryPanel';
 import DecisionalOverview from '@/components/dashboard/DecisionalOverview';
+import CampaignCreationSummary from '@/components/dashboard/CampaignCreationSummary';
+
 import { canonicalAccountSalesByDate } from '../../base44/shared/salesDailyIntegrity.ts';
 
 // ─── Utilitários de período fechado ─────────────────────────────────────────
@@ -752,6 +754,8 @@ export default function Dashboard() {
 
       <SearchTermQualityPanel accountId={account?.id} />
       {/* ── 0. VISÃO DECISIONAL — Clean Light Pro (3 faixas) ───────────────────── */}
+      <CampaignCreationSummary campaigns={campaigns} />
+
       <DecisionalOverview
         account={account}
         user={user}
