@@ -1,4 +1,4 @@
-import { appParams } from '@/lib/app-params';
+import { appParams } from './app-params.js';
 
 function isUnauthorized(error) {
   return error?.status === 401
