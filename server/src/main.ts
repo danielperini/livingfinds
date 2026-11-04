@@ -142,10 +142,19 @@ async function createUserSession(user: AuthUser): Promise<string> {
   const payload = base64Url(JSON.stringify({
     sub: user.id,
     exp: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    kind: 'access',
   }));
   return `${payload}.${await signValue(payload)}`;
 }
 
+async function createRefreshSession(user: AuthUser): Promise<string> {
+  const payload = base64Url(JSON.stringify({
+    sub: user.id,
+    exp: Date.now() + 30 * 24 * 60 * 60 * 1000,
+    kind: 'refresh',
+  }));
+  return `${payload}.${await signValue(payload)}`;
+}
 async function authenticatedUser(req: Request): Promise<AuthUser | null> {
   const auth = req.headers.get('authorization') ?? '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : req.headers.get('x-api-token') ?? '';
@@ -504,7 +513,30 @@ async function handler(req: Request): Promise<Response> {
     if (!await verifyAdminPassword(String(body.password ?? ''), user)) {
       return json({ ok: false, error: 'E-mail ou senha incorretos' }, 401);
     }
-    return json({ ok: true, token: await createUserSession(user), user: publicUser(user) });
+    return json({ ok: true, token: await createUserSession(user), refresh_token: await createRefreshSession(user), user: publicUser(user) });
+  }
+  if (path === '/api/auth/refresh' && req.method === 'POST') {
+    const body = await req.json().catch(() => ({}));
+    const token = String(body.refresh_token || '');
+    const [payload, signature] = token.split('.');
+    if (!payload || !signature || !constantTimeEqual(await signValue(payload), signature)) {
+      return json({ ok: false, error: 'Refresh token inválido.' }, 401);
+    }
+    try {
+      const parsed = JSON.parse(fromBase64Url(payload));
+      if (parsed.kind !== 'refresh' || !parsed.sub || Number(parsed.exp || 0) < Date.now()) {
+        return json({ ok: false, error: 'Refresh token expirado.' }, 401);
+      }
+      const users = await query<AuthUser>(
+        'select id, email, full_name, role, password_hash, password_salt, password_changed_at from app_auth_users where id = $1 limit 1',
+        [parsed.sub],
+      );
+      const user = users[0];
+      if (!user) return json({ ok: false, error: 'Usuário não encontrado.' }, 401);
+      return json({ ok: true, token: await createUserSession(user), refresh_token: token, user: publicUser(user) });
+    } catch {
+      return json({ ok: false, error: 'Refresh token inválido.' }, 401);
+    }
   }
   if (path === '/api/auth/profile' && req.method === 'GET') {
     if (!await apiAuthorized(req)) return json({ ok: false, error: 'Não autorizado' }, 401);
