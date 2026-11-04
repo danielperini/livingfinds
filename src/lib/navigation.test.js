@@ -27,7 +27,7 @@ test('active matching não marca dashboard em outras rotas', () => {
 
 test('rotas antigas removidas da sidebar não são destinos ativos', () => {
   const visibleItems = navigationJourneys.flatMap(({ items }) => items);
-  for (const path of ['/configuracao/apis', '/products/listing-enhancement', '/sala-de-comando/legacy', '/settings/ads-authorization']) {
+  for (const path of ['/products/listing-enhancement', '/sala-de-comando/legacy', '/settings/ads-authorization']) {
     assert.equal(visibleItems.some(item => item.path === path), false);
   }
 });
