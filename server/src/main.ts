@@ -337,8 +337,11 @@ async function handler(req: Request): Promise<Response> {
   if (path === '/health') {
     // Liveness/readiness must not wait indefinitely on the historical motor ledger.
     // The detailed ledger remains available through the motor diagnostics routes.
+    // The dashboard read performs several bounded PostgreSQL reads in parallel.
+    // Give the ledger more time than the old 1.5s budget while keeping
+    // /health responsive (the container healthcheck still has a 10s timeout).
     const dailyMotorTimeout = new Promise<unknown>((resolve) =>
-      setTimeout(() => resolve({ status: 'ledger_timeout', confirmed_success: false }), 1500)
+      setTimeout(() => resolve({ status: 'ledger_timeout', confirmed_success: false }), 5000)
     );
     const dailyMotor = await Promise.race([
       getDailyMotorRunStatus().catch(() => ({ status: 'ledger_unavailable', confirmed_success: false })),
