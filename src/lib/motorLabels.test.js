@@ -24,3 +24,15 @@ test('local status, truthy strings and timestamps alone do not prove confirmatio
   assert.equal(label({ status: 'executed', executed_at: '2026-10-09' }), 'Aguardando confirmação');
   assert.equal(label({ amazon_confirmation_status: 'confirmed' }), 'Confirmado na Amazon');
 });
+
+
+test('blocked or cancelled decisions expose the operational reason', () => {
+  assert.equal(
+    getAmazonConfirmationStatus({ status: 'blocked', error_message: 'GOVERNANCE_HARD_BLOCK: OUT_OF_STOCK' }).label,
+    'Não executado pelo motor',
+  );
+  assert.equal(
+    getAmazonConfirmationStatus({ status: 'cancelled', error_message: 'SUPERSEDED_BY_HIGHER_PRIORITY: P0 venceu' }).label,
+    'Não enviado à Amazon',
+  );
+});
