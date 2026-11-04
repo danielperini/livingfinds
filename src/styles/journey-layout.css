@@ -13,6 +13,7 @@
   --lf-radius-control: 0.625rem;
   --lf-radius-card: 0.875rem;
   --lf-shadow-sidebar: 0 1px 2px rgb(15 23 42 / 3%);
+  --lf-content-max: 1480px;
   --lf-font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -31,8 +32,8 @@
   position: relative;
   z-index: 30;
   display: flex;
-  width: 264px;
-  min-width: 264px;
+  width: 232px;
+  min-width: 232px;
   height: 100%;
   flex-direction: column;
   border-right: 1px solid var(--lf-color-border);
@@ -42,7 +43,7 @@
 }
 
 .lf-sidebar.is-collapsed { width: 76px; min-width: 76px; }
-.lf-sidebar-brand { display: flex; height: 64px; align-items: center; justify-content: space-between; gap: 8px; padding: 0 16px; }
+.lf-sidebar-brand { display: flex; height: 56px; align-items: center; justify-content: space-between; gap: 8px; padding: 0 16px; }
 .lf-brand-link { display: flex; min-width: 0; align-items: center; gap: 11px; color: var(--lf-color-text); text-decoration: none; }
 .lf-brand-mark { width: 36px; height: 36px; flex: 0 0 36px; border: 1px solid var(--lf-color-border); border-radius: 11px; background-color: var(--lf-color-surface); background-repeat: no-repeat; background-size: 250%; background-position: 50% 50%; }
 .lf-brand-name { overflow: hidden; font-size: 17px; font-weight: 650; letter-spacing: -0.04em; white-space: nowrap; }
@@ -51,7 +52,7 @@
 .lf-icon-button:hover { border-color: var(--lf-color-border); background: var(--lf-color-surface-muted); color: var(--lf-color-text); }
 .lf-icon-button:focus-visible, .lf-nav-link:focus-visible, .lf-command-link:focus-visible { outline: 3px solid rgb(37 99 235 / 30%); outline-offset: 2px; }
 
-.lf-primary-nav { flex: 1 1 auto; overflow-y: auto; padding: 12px 12px 20px; scrollbar-width: thin; }
+.lf-primary-nav { flex: 1 1 auto; overflow-y: auto; padding: 8px 10px 16px; scrollbar-width: thin; }
 .lf-nav-group + .lf-nav-group { margin-top: 22px; }
 .lf-nav-heading { margin: 0 10px 7px; color: var(--lf-color-text-muted); font-size: 10px; font-weight: 700; letter-spacing: 0.09em; line-height: 1.4; text-transform: uppercase; }
 .lf-nav-section { margin-top: 5px; }
@@ -62,7 +63,7 @@
 .lf-nav-section-toggle:hover { background: var(--lf-color-surface-muted); color: var(--lf-color-text); }
 .lf-nav-section[open] > .lf-nav-section-toggle > svg { transform: rotate(180deg); }
 .lf-nav-section-toggle > svg { flex: 0 0 auto; transition: transform 120ms ease; }
-.lf-nav-link { display: flex; min-height: 40px; align-items: center; gap: 11px; padding: 8px 10px; border: 1px solid transparent; border-radius: var(--lf-radius-control); color: var(--lf-color-text-secondary); font-size: 13px; font-weight: 540; text-decoration: none; transition: background 120ms ease, color 120ms ease, border-color 120ms ease; }
+.lf-nav-link { display: flex; min-height: 36px; align-items: center; gap: 11px; padding: 8px 10px; border: 1px solid transparent; border-radius: var(--lf-radius-control); color: var(--lf-color-text-secondary); font-size: 13px; font-weight: 540; text-decoration: none; transition: background 120ms ease, color 120ms ease, border-color 120ms ease; }
 .lf-nav-link > svg { flex: 0 0 18px; color: var(--lf-color-text-muted); }
 .lf-nav-link > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lf-nav-link:hover { background: var(--lf-color-surface-muted); color: var(--lf-color-text); }
@@ -87,15 +88,18 @@
 .lf-account-card-collapsed { display: flex; min-height: 40px; align-items: center; justify-content: center; color: var(--lf-color-text-muted); }
 
 .lf-main-column { display: flex; min-width: 0; flex: 1; flex-direction: column; overflow: hidden; }
-.lf-topbar { display: flex; min-height: 64px; flex: 0 0 auto; align-items: center; gap: 14px; padding: 7px 28px; border-bottom: 1px solid var(--lf-color-border); background: var(--lf-color-surface); }
+.lf-topbar { display: flex; min-height: 56px; flex: 0 0 auto; align-items: center; gap: 14px; padding: 6px 20px; border-bottom: 1px solid var(--lf-color-border); background: var(--lf-color-surface); }
 .lf-mobile-menu-button { display: none; }
 .lf-page-heading { min-width: 0; flex: 1; }
 .lf-breadcrumbs { display: flex; align-items: center; gap: 7px; margin-bottom: 3px; color: var(--lf-color-text-muted); font-size: 10px; line-height: 1.25; }
 .lf-page-heading h1 { overflow: hidden; margin: 0; color: var(--lf-color-text); font-size: 17px; font-weight: 650; letter-spacing: -0.025em; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
-.lf-page-heading p { overflow: hidden; margin: 2px 0 0; color: var(--lf-color-text-muted); font-size: 11px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.lf-page-heading p { display: none; overflow: hidden; margin: 2px 0 0; color: var(--lf-color-text-muted); font-size: 11px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .lf-command-link { display: inline-flex; min-height: 38px; flex: 0 0 auto; align-items: center; justify-content: center; gap: 8px; padding: 0 13px; border: 1px solid var(--lf-color-action); border-radius: var(--lf-radius-control); background: var(--lf-color-action); color: white; font-size: 12px; font-weight: 650; text-decoration: none; transition: background 120ms ease; }
 .lf-command-link:hover { background: var(--lf-color-action-hover); }
 .lf-page-content { min-height: 0; flex: 1; overflow: auto; background: var(--lf-color-page); }
+.lf-page-content > * { max-width: var(--lf-content-max); margin-right: auto; margin-left: auto; }
+.lf-page-content :is(.rounded-xl, .rounded-2xl) { border-radius: 10px; }
+.lf-page-content :is(.shadow, .shadow-sm, .shadow-md, .shadow-lg, .shadow-xl) { box-shadow: 0 1px 2px rgb(15 23 42 / 4%); }
 .lf-drawer-backdrop { display: none; }
 
 @media (max-width: 1023px) {
