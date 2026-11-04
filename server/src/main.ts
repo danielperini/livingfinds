@@ -524,7 +524,14 @@ async function handler(req: Request): Promise<Response> {
     }
     try {
       const parsed = JSON.parse(fromBase64Url(payload));
-      if (parsed.kind !== 'refresh' || !parsed.sub || Number(parsed.exp || 0) < Date.now()) {
+      const now = Date.now();
+      const isRefreshToken = parsed.kind === 'refresh';
+      const isLegacyAccessToken = parsed.kind === 'access' || !parsed.kind;
+      const expiredAt = Number(parsed.exp || 0);
+      // Sessões antigas não tinham refresh_token. Permita uma migração única
+      // somente enquanto a assinatura é válida e por no máximo 30 dias após expirar.
+      const withinLegacyGrace = isLegacyAccessToken && expiredAt > 0 && expiredAt >= now - 30 * 24 * 60 * 60 * 1000;
+      if ((!isRefreshToken && !withinLegacyGrace) || !parsed.sub || (isRefreshToken && expiredAt < now)) {
         return json({ ok: false, error: 'Refresh token expirado.' }, 401);
       }
       const users = await query<AuthUser>(
@@ -533,7 +540,7 @@ async function handler(req: Request): Promise<Response> {
       );
       const user = users[0];
       if (!user) return json({ ok: false, error: 'Usuário não encontrado.' }, 401);
-      return json({ ok: true, token: await createUserSession(user), refresh_token: token, user: publicUser(user) });
+      return json({ ok: true, token: await createUserSession(user), refresh_token: await createRefreshSession(user), user: publicUser(user) });
     } catch {
       return json({ ok: false, error: 'Refresh token inválido.' }, 401);
     }
