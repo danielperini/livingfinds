@@ -147,11 +147,11 @@ const AuthenticatedApp = () => {
             <Route path="/manual" element={<ManualInstrucoes />} />
             <Route path="/optimizer" element={<Navigate to="/sala-de-comando" replace />} />
             <Route path="/currency-audit" element={<Navigate to="/sala-de-comando" replace />} />
-            <Route path="/keyword-management" element={<KeywordManagement />} />
-            <Route path="/KeywordManagement" element={<KeywordManagement />} />
+            <Route path="/keyword-management" element={<Navigate to="/search-terms" replace />} />
+            <Route path="/KeywordManagement" element={<Navigate to="/search-terms" replace />} />
             <Route path="/amazon-oauth-setup" element={<Navigate to="/integracoes/amazon" replace />} />
             <Route path="/term-bank" element={<Navigate to="/campaign-factory" replace />} />
-            <Route path="/campaign-factory" element={<CampaignFactory />} />
+            <Route path="/campaign-factory" element={<Navigate to="/ads" replace />} />
             <Route path="/daypart-crossasin" element={<DaypartCrossAsinPage />} />
             <Route path="/products/listing-enhancement" element={<ListingEnhancementPage />} />
             <Route path="/settings/ads-authorization" element={<Navigate to="/integracoes/amazon" replace />} />
