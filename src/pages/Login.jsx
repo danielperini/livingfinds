@@ -42,6 +42,7 @@ export default function Login() {
         throw new Error(data.error || "Senha incorreta");
       }
       localStorage.setItem("base44_access_token", data.token);
+      if (data.refresh_token) localStorage.setItem("base44_refresh_token", data.refresh_token);
       await playOpeningAudio();
       window.location.href = data.user?.must_change_password
         ? "/users?change_password=1"
