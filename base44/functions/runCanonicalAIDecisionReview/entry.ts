@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
+import { aiTaskPolicy, selectAiModel } from '../../shared/aiModelPolicy.ts';
 
 /**
  * Revisão contextual do ciclo canônico. A IA somente propõe; não possui
@@ -15,6 +16,8 @@ Deno.serve(async (request) => {
     if (!enabled) return Response.json({ ok: true, skipped: true, reason: 'ai_review_disabled', correlation_id: correlationId });
     if (!accountId) return Response.json({ ok: false, error: 'amazon_account_id_required', correlation_id: correlationId }, { status: 400 });
 
+    const policy = aiTaskPolicy('complex_decision');
+    const model = selectAiModel('complex_decision', Deno.env.get('OPENAI_COMPLEX_MODEL') || Deno.env.get('OPENAI_MODEL'));
     const input = {
       correlation_id: correlationId,
       effective_settings: body.effective_settings || null,
@@ -22,13 +25,14 @@ Deno.serve(async (request) => {
       unified_engine: body.unified_engine || null,
       data_freshness: body.data_freshness || null,
       dry_run: body.dry_run === true,
+      ai_policy: policy,
     };
     const result = await base44.asServiceRole.integrations.Core.InvokeLLM({
       provider: 'openai',
-      model: Deno.env.get('OPENAI_MODEL') || 'gpt-4o',
+      model,
       temperature: 0.1,
       max_tokens: 1800,
-      prompt: `Analise este resumo do ciclo Amazon Ads do Living Finds. Retorne apenas propostas explicáveis. Não invente dados, não ultrapasse limites e não solicite execução direta. Diferencie manter, aumentar, reduzir, pausar e revisar. Se faltarem dados, bloqueie a recomendação.\n${JSON.stringify(input)}`,
+      prompt: `Você é o revisor de decisões complexas do LivingFinds. Use somente as evidências fornecidas. Não invente dados, não execute chamadas Amazon e não transforme sua sugestão em aprovação. Oportunidades exigem confiança >= 0.85; prevenção de prejuízo exige confiança >= 0.80. Se houver qualquer dado ausente, antigo ou inconsistente, marque blocked=true e explique o motivo. Retorne somente propostas explicáveis.\n${JSON.stringify(input)}`,
       response_json_schema: {
         type: 'object',
         properties: {
@@ -43,7 +47,7 @@ Deno.serve(async (request) => {
       },
     });
     const audit = {
-      provider: result?.provider || 'unknown', model: result?.model || null, request_id: result?.request_id || null,
+      provider: result?.provider || 'unknown', model: result?.model || model, task_policy: policy, request_id: result?.request_id || null,
       correlation_id: correlationId, status: result?.ok === false ? 'error' : 'success',
       recommendations: Array.isArray(result?.recommendations) ? result.recommendations.slice(0, 50) : [],
       summary: String(result?.summary || result?.error || '').slice(0, 900),
