@@ -159,6 +159,7 @@ Deno.serve(async (req) => {
       if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const { amazon_account_id, asin, sku, product_name } = body;
+    const forceReactivate = body.force_reactivate === true;
     if (!amazon_account_id || !asin) return Response.json({ error: 'amazon_account_id and asin required' }, { status: 400 });
 
     const account = await base44.asServiceRole.entities.AmazonAccount.get(amazon_account_id).catch(() => null);
@@ -167,7 +168,7 @@ Deno.serve(async (req) => {
     const productRows = await base44.asServiceRole.entities.Product.filter({
       amazon_account_id, asin: String(asin).toUpperCase(), ...(sku ? { sku } : {}),
     }, '-updated_date', 100).catch(() => []);
-    const productMatches = productRows.filter((product: any) => product.status !== 'archived' && product.catalog_sync_status !== 'duplicate');
+    const productMatches = productRows.filter((product: any) => String(product.status || '').toLowerCase() === 'active' && product.catalog_sync_status !== 'duplicate');
     const product = productMatches.length === 1 ? productMatches[0] : null;
     if (!product || !hasFreshAdsInventory(product) || availableAdsStock(product) <= 0 || !campaignCoverageEligible(product)) {
       return Response.json({ ok: false, blocked: true, error: 'AUTO exige um único SKU/ASIN, oferta elegível e saldo FBA vendável atualizado.' }, { status: 409 });
@@ -245,14 +246,31 @@ Deno.serve(async (req) => {
       const effectiveCampaignId = autoCampaign.campaign_id || autoCampaign.amazon_campaign_id;
       if (!effectiveCampaignId) return Response.json({ ok: false, error: 'Campanha AUTO local sem ID Amazon' });
       const paused = ['PAUSED', 'PAUSED_BY_ADVERTISER'].includes(state);
-      if (paused) {
-        // Stock recovery and an explicit one-shot manual kickoff are the only
-        // reactivation owners. Do not silently undo a manual/business pause.
+      if (paused && !forceReactivate) {
+        // Preserve manual/business pauses unless the caller explicitly opts in.
         return Response.json({
           ok: true, campaign_id: String(effectiveCampaignId), already_exists: true,
           reactivated: false, action_label: 'existing_paused_preserved',
-          reason: 'awaiting_stock_guard_or_explicit_manual_kickoff_confirmation',
+          reason: 'awaiting_explicit_force_reactivate',
         });
+      }
+      if (paused && forceReactivate) {
+        const enabled = await adsRequestWithDetails(
+          'PUT', '/sp/campaigns',
+          { campaigns: [{ campaignId: String(effectiveCampaignId), state: 'ENABLED' }] },
+          refreshToken, String(profileId), 'application/vnd.spCampaign.v3+json'
+        );
+        const enabledError = extractCampaignError(enabled.data);
+        if (![200, 201, 207].includes(enabled.status) || enabledError) {
+          return Response.json({
+            ok: false, error: 'Falha ao reativar AUTO pausada',
+            campaign_id: String(effectiveCampaignId), http_status: enabled.status,
+            amazon_error: enabledError, request_id: enabled.headers?.requestId || '',
+          });
+        }
+        await base44.asServiceRole.entities.Campaign.update(autoCampaign.id, {
+          state: 'enabled', status: 'enabled', amazon_status: 'enabled', synced_at: new Date().toISOString(),
+        }).catch(() => {});
       }
       // Nao redefinir o lance de uma AUTO existente. O mesmo endpoint e
       // chamado a cada ciclo de cobertura; rebaixar o Ad Group ao piso aqui
@@ -268,7 +286,8 @@ Deno.serve(async (req) => {
         daily_budget: autoCampaign.daily_budget,
         already_exists: true,
         reactivated: false,
-        action_label: 'existing_enabled',
+        action_label: paused && forceReactivate ? 'reactivated_explicitly' : 'existing_enabled',
+        reactivated: paused && forceReactivate,
         launch_bid_policy: launchAtMinimum ? 'configured_minimum' : 'proportional_override',
         proportional_bid: initialBid,
       });
