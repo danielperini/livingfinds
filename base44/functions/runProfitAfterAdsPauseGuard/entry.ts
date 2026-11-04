@@ -224,6 +224,21 @@ Deno.serve(async (req) => {
       campaignsByAsin.get(asin)!.push(c);
     }
 
+    // Produtos com campanhas gastando, mas sem vendas, podem não possuir SalesDaily.
+    // Incluí-los aqui garante a primeira redução de bid mesmo antes de uma venda.
+    for (const [asin, asinCampaigns] of campaignsByAsin.entries()) {
+      if (asinSalesMap.has(asin)) continue;
+      const spend = asinCampaigns.reduce((sum: number, campaign: any) => sum + Number(campaign.spend ?? campaign.cost ?? 0), 0);
+      const sales = asinCampaigns.reduce((sum: number, campaign: any) => sum + Number(campaign.sales ?? campaign.revenue ?? 0), 0);
+      const orders = asinCampaigns.reduce((sum: number, campaign: any) => sum + Number(campaign.orders ?? campaign.purchases ?? 0), 0);
+      if (spend <= 0 || sales > 0 || orders > 0) continue;
+      const negativeProfit = -Math.abs(spend);
+      asinSalesMap.set(asin, [
+        { date: daysAgo(1), profit: negativeProfit },
+        { date: today, profit: negativeProfit },
+      ]);
+    }
+
     // ── 4. Para cada ASIN: verificar lógica ───────────────────────────────
     for (const [asin, salesEntries] of asinSalesMap.entries()) {
       try {
