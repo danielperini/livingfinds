@@ -65,9 +65,11 @@ async function requestSearchTermReport(startDate, endDate) {
       adProduct: 'SPONSORED_PRODUCTS',
       groupBy: ['searchTerm'],
       columns: [
+        // Keep this list restricted to columns accepted by the current
+        // Amazon Ads reporting schema. ASIN/SKU enrichment is resolved locally
+        // from the campaign/ad mapping after import.
         'campaignId', 'campaignName', 'adGroupId', 'adGroupName',
-        'keywordId', 'keywordText', 'matchType', 'searchTerm',
-        'advertisedAsin', 'advertisedSku',
+        'keywordId', 'matchType', 'searchTerm',
         'impressions', 'clicks', 'cost', 'purchases1d', 'purchases7d', 'purchases14d', 'purchases30d',
         'sales1d', 'sales7d', 'sales14d', 'sales30d',
         'unitsSoldClicks1d', 'unitsSoldClicks7d', 'unitsSoldClicks14d', 'unitsSoldClicks30d',
