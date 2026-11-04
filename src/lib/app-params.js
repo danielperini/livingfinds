@@ -45,7 +45,7 @@ const getAppParams = () => {
 		// Self-hosted: token armazenado no localStorage após login com senha.
 		// Se null → AuthContext detecta não-autenticado e redireciona para /login.
 		token: getAppParamValue("access_token", { removeFromUrl: true }),
-		fromUrl: getAppParamValue("from_url", { defaultValue: window.location.href }),
+		fromUrl: getAppParamValue("from_url", { defaultValue: windowObj.location?.href ?? '' }),
 		functionsVersion: getAppParamValue("functions_version", { defaultValue: buildEnv.VITE_BASE44_FUNCTIONS_VERSION }),
 		appBaseUrl: getAppParamValue("app_base_url", { defaultValue: buildEnv.VITE_BASE44_APP_BASE_URL }),
 	}

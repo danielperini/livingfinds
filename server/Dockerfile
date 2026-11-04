@@ -1,12 +1,22 @@
+# Build the frontend from the same source revision as the backend.
+FROM node:22-bookworm-slim AS frontend
+
+WORKDIR /build
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
+COPY . .
+RUN npm run build
+
+# Runtime image for the self-hosted backend.
 FROM denoland/deno:2.9.8
 
 WORKDIR /app
 
 # base44/ (funções, entidades, schedules) fica um nível acima do server/ no repo.
-# O build context deve ser a RAIZ do repo (ver docker-compose). Copiamos server/ e base44/.
+# O build context deve ser a RAIZ do repo (ver docker-compose).
 COPY server/ ./server/
 COPY base44/ ./base44/
-COPY dist/ ./dist/
+COPY --from=frontend /build/dist ./dist/
 
 WORKDIR /app/server
 
