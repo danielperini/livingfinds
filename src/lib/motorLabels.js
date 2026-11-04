@@ -37,6 +37,22 @@ export function getMotorReasonLabel(item) {
   const raw = String(
     item?.reason_code || item?.reason || item?.rationale || item?.change_type || item?.classification || ''
   ).toLowerCase();
+  const status = String(item?.status || '').toLowerCase();
+  const operationalDetail = String(
+    item?.block_reason || item?.error_message || item?.confirmation_error || item?.last_error || ''
+  ).trim();
+
+  // Decisões bloqueadas/canceladas precisam explicar o gate local que impediu o envio.
+  // Sem essa prioridade, a interface mostra apenas um motivo genérico e oculta a causa real.
+  if (operationalDetail && ['blocked', 'cancelled', 'canceled', 'skipped', 'failed', 'failed_final', 'expired'].includes(status)) {
+    return operationalDetail
+      .replace(/^GOVERNANCE_HARD_BLOCK:\s*/i, 'Bloqueio de governança: ')
+      .replace(/^CANCELADO:\s*/i, 'Cancelado: ')
+      .replace(/^STALE_DATA_EXPIRED:\s*/i, 'Dados expirados: ')
+      .replace(/^DECISION_WINDOW_EXPIRED:\s*/i, 'Janela expirada: ')
+      .replace(/^SUPERSEDED_BY_HIGHER_PRIORITY:\s*/i, 'Substituído por decisão prioritária: ')
+      .slice(0, 240);
+  }
 
   if (!raw) return item?.rationale || 'Ação automática do motor.';
 

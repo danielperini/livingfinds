@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getAmazonConfirmationStatus } from './motorLabels.js';
+import { getAmazonConfirmationStatus, getMotorReasonLabel } from './motorLabels.js';
 
 const label = item => getAmazonConfirmationStatus(item).label;
 
@@ -23,4 +23,14 @@ test('local status, truthy strings and timestamps alone do not prove confirmatio
   assert.equal(label({ status: 'completed' }), 'Concluído localmente');
   assert.equal(label({ status: 'executed', executed_at: '2026-10-09' }), 'Aguardando confirmação');
   assert.equal(label({ amazon_confirmation_status: 'confirmed' }), 'Confirmado na Amazon');
+});
+
+
+test('blocked or cancelled decisions expose the operational reason', () => {
+  const blocked = { status: 'blocked', error_message: 'GOVERNANCE_HARD_BLOCK: OUT_OF_STOCK' };
+  assert.equal(getAmazonConfirmationStatus(blocked).label, 'Não executado pelo motor');
+  assert.equal(getMotorReasonLabel(blocked), 'Bloqueio de governança: OUT_OF_STOCK');
+  const cancelled = { status: 'cancelled', error_message: 'SUPERSEDED_BY_HIGHER_PRIORITY: P0 venceu' };
+  assert.equal(getAmazonConfirmationStatus(cancelled).label, 'Não enviado à Amazon');
+  assert.equal(getMotorReasonLabel(cancelled), 'Substituído por decisão prioritária: P0 venceu');
 });
