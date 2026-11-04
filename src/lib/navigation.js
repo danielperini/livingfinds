@@ -1,7 +1,7 @@
 import {
-  BarChart3, Bot, CircleDollarSign, FileText, Gauge, KeyRound,
-  LayoutDashboard, Megaphone, PackageSearch, Settings, ShieldCheck,
-  ShoppingBag, SlidersHorizontal, Timer, Network, Users, HelpCircle,
+  BarChart3, Bot, CircleDollarSign, HelpCircle, KeyRound,
+  LayoutDashboard, Megaphone, Network, Settings, ShieldCheck,
+  ShoppingBag, SlidersHorizontal, Timer, Users, PackageSearch,
 } from 'lucide-react';
 
 const journeys = [
@@ -16,7 +16,7 @@ const journeys = [
         { path: '/', label: 'Visão geral', icon: LayoutDashboard, exact: true },
         { path: '/products', label: 'Produtos', icon: ShoppingBag },
         { path: '/ads', label: 'Campanhas', icon: Megaphone },
-        { path: '/search-terms', label: 'Termos de busca', icon: PackageSearch },
+        { path: '/search-terms', label: 'Termos e palavras-chave', icon: PackageSearch },
       ],
     }, {
       id: 'regras',
@@ -39,8 +39,6 @@ const journeys = [
       items: [
         { path: '/analytics', label: 'Desempenho', icon: BarChart3 },
         { path: '/sala-de-comando', label: 'Decisões e alertas', icon: Bot },
-        { path: '/keyword-management', label: 'Palavras-chave', icon: KeyRound },
-        { path: '/campaign-factory', label: 'Criação de campanhas', icon: Gauge },
       ],
     }, {
       id: 'apoio',
