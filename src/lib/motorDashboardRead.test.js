@@ -72,3 +72,20 @@ test('Atualizar dados atuais invokes only read sources and the read-only status,
     loadStatus: () => loadMotorDashboardStatus(client, 'account') });
   assert.deepEqual(calls.map((row) => row.name), ['reloadReadQueries', 'getMotorDashboardStatus']);
 });
+
+test('refreshes the session and retries the read-only diagnosis after 401', async () => {
+  const calls = [];
+  let attempts = 0;
+  const client = {
+    auth: { me: async () => { calls.push('me'); return { id: 'user' }; } },
+    functions: { invoke: async () => {
+      calls.push('invoke');
+      attempts += 1;
+      if (attempts === 1) { const error = new Error('Unauthorized'); error.status = 401; throw error; }
+      return { data: { daily_motor: { is_running: false }, read_only: true } };
+    } },
+  };
+  const result = await loadMotorDashboardStatus(client, 'account');
+  assert.equal(result.read_only, true);
+  assert.deepEqual(calls, ['invoke', 'me', 'invoke']);
+});
