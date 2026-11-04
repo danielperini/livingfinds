@@ -8,6 +8,7 @@ import {
 import { validateAmazonAction } from '../../shared/amazonActionRegistry.ts';
 import { evaluateDecisionGovernance } from '../../shared/canonicalDecisionPolicy.ts';
 import { classifyV6SIAFailure, sanitizeV6SIAError } from '../../shared/v6siaFailurePolicy.ts';
+import { evaluateAiAutopilotGate } from '../../shared/aiAutopilotPolicy.ts';
 
 const MAX_BATCH = 25;
 const API_DELAY_MS = 400;
@@ -339,6 +340,17 @@ Deno.serve(async (request) => {
           snapshot = rows[0] || null;
         }
         if (isCanonical) {
+          const aiGate = evaluateAiAutopilotGate(decision);
+          if (!aiGate.allowed) {
+            await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+              status: 'blocked', queue_status: 'completed',
+              error_message: `AI_AUTOPILOT_GUARD: ${aiGate.reason}`.slice(0, 500),
+              block_reason: aiGate.reason, governance_reason: aiGate.reason,
+            }).catch(() => {});
+            results.push({ id: decision.id, action: decision.action, ok: false, skipped: true, reason: aiGate.reason, ai_confidence: aiGate.confidence, ai_threshold: aiGate.threshold });
+            skipped++;
+            continue;
+          }
           const evidence = parseJson(decision.data_used);
           const admission = evidence?.admission || {};
           const trustedIntradayEvidence = ['runEconomicBudgetBalancer', 'runIntradaySalesRecovery'].includes(String(decision.source_function || '')) &&
