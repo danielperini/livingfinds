@@ -125,41 +125,41 @@ const AuthenticatedApp = () => {
             <Route path="/" element={<Dashboard />} />
             <Route path="/ads" element={<AdsManagement />} />
             <Route path="/autopilot" element={<AdsAutopilot />} />
-            <Route path="/inventory" element={<InventorySales />} />
+            <Route path="/inventory" element={<Navigate to="/products" replace />} />
             <Route path="/products" element={<Products />} />
             <Route path="/repricing" element={<Repricing />} />
             <Route path="/analytics" element={<Analytics />} />
-            <Route path="/bid-logs" element={<BidLogs />} />
-            <Route path="/metrics" element={<MetricsDashboard />} />
+            <Route path="/bid-logs" element={<Navigate to="/sala-de-comando" replace />} />
+            <Route path="/metrics" element={<Navigate to="/analytics" replace />} />
             <Route path="/search-terms" element={<SearchTerms />} />
             <Route path="/diagnostico" element={<Diagnostico />} />
-            <Route path="/report" element={<Report />} />
+            <Route path="/report" element={<Navigate to="/analytics" replace />} />
             <Route path="/logs" element={<Logs />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/configuracao/apis" element={<ApiCatalog />} />
             <Route path="/users" element={<Users />} />
-            <Route path="/sp-api-setup" element={<SpApiSetup />} />
-            <Route path="/sp-api-self-auth" element={<SpApiSelfAuth />} />
+            <Route path="/sp-api-setup" element={<Navigate to="/integracoes/amazon" replace />} />
+            <Route path="/sp-api-self-auth" element={<Navigate to="/integracoes/amazon" replace />} />
             <Route path="/integracoes/amazon" element={<AmazonIntegracao />} />
             <Route path="/saude-do-sistema" element={<SystemHealth />} />
             <Route path="/configuracao-de-campanhas" element={<CampaignConfig />} />
             <Route path="/dayparting" element={<Navigate to="/settings" replace />} />
             <Route path="/manual" element={<ManualInstrucoes />} />
-            <Route path="/optimizer" element={<OptimizerPipeline />} />
-            <Route path="/currency-audit" element={<CurrencyAudit />} />
+            <Route path="/optimizer" element={<Navigate to="/sala-de-comando" replace />} />
+            <Route path="/currency-audit" element={<Navigate to="/sala-de-comando" replace />} />
             <Route path="/keyword-management" element={<KeywordManagement />} />
             <Route path="/KeywordManagement" element={<KeywordManagement />} />
-            <Route path="/amazon-oauth-setup" element={<AmazonOAuthSetup />} />
+            <Route path="/amazon-oauth-setup" element={<Navigate to="/integracoes/amazon" replace />} />
             <Route path="/term-bank" element={<Navigate to="/campaign-factory" replace />} />
             <Route path="/campaign-factory" element={<CampaignFactory />} />
             <Route path="/daypart-crossasin" element={<DaypartCrossAsinPage />} />
             <Route path="/products/listing-enhancement" element={<ListingEnhancementPage />} />
-            <Route path="/settings/ads-authorization" element={<AdsAuthorizationPage />} />
-            <Route path="/keyword-ml" element={<KeywordMLDashboard />} />
+            <Route path="/settings/ads-authorization" element={<Navigate to="/integracoes/amazon" replace />} />
+            <Route path="/keyword-ml" element={<Navigate to="/keyword-management" replace />} />
             <Route path="/sala-de-comando" element={<SalaDeComandoPremium />} />
             <Route path="/sala-de-comando/legacy" element={<SalaDeComandoLegacy />} />
-            <Route path="/kickoff-monitor" element={<KickoffQueueMonitor />} />
-            <Route path="/term-intelligence" element={<TermIntelligence />} />
+            <Route path="/kickoff-monitor" element={<Navigate to="/campaign-factory" replace />} />
+            <Route path="/term-intelligence" element={<Navigate to="/search-terms" replace />} />
             <Route path="/strategy-engine" element={<Navigate to="/sala-de-comando/legacy?tab=estrategias" replace />} />
             <Route path="/prelecao-semanal" element={<Navigate to="/sala-de-comando/legacy?tab=prelecao" replace />} />
             <Route path="/strategy-engine-legacy" element={<Navigate to="/sala-de-comando/legacy?tab=estrategias" replace />} />

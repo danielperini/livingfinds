@@ -163,3 +163,14 @@
 @keyframes lf-api-spin { to { transform: rotate(360deg); } }
 @media (max-width: 760px) { .api-catalog-grid { grid-template-columns: 1fr; } }
 @media (max-width: 520px) { .api-catalog-page { padding-top: 16px; } .api-catalog-intro { flex-wrap: wrap; align-items: flex-start; padding: 14px; } .api-refresh-button { margin-left: auto; } .api-catalog-error { flex-wrap: wrap; } .api-catalog-error button { margin-left: 29px; } }
+
+
+/* Refinamento visual PT-BR — navegação compacta e foco na ação */
+.lf-sidebar { background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%); }
+.lf-sidebar-brand { border-bottom: 1px solid #eef2f7; }
+.lf-nav-group { padding: 0 2px; }
+.lf-nav-heading { color: #64748b; letter-spacing: .12em; }
+.lf-nav-link { min-height: 42px; }
+.lf-nav-link.is-active { box-shadow: inset 3px 0 0 #2563eb; }
+.lf-topbar { background: rgba(255,255,255,.94); backdrop-filter: blur(10px); }
+.lf-page-content { background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%); }
