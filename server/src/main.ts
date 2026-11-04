@@ -335,10 +335,19 @@ async function handler(req: Request): Promise<Response> {
     });
   }
   if (path === '/health') {
-    let dailyMotor: unknown;
-    try { dailyMotor = await getDailyMotorRunStatus(); }
-    catch { dailyMotor = { status: 'ledger_unavailable', confirmed_success: false }; }
-    const databaseHealthy = await healthcheck();
+    // Liveness/readiness must not wait indefinitely on the historical motor ledger.
+    // The detailed ledger remains available through the motor diagnostics routes.
+    const dailyMotorTimeout = new Promise<unknown>((resolve) =>
+      setTimeout(() => resolve({ status: 'ledger_timeout', confirmed_success: false }), 1500)
+    );
+    const dailyMotor = await Promise.race([
+      getDailyMotorRunStatus().catch(() => ({ status: 'ledger_unavailable', confirmed_success: false })),
+      dailyMotorTimeout,
+    ]);
+    const databaseHealthy = await Promise.race([
+      healthcheck(),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1500)),
+    ]);
     const deployedSha = Deno.env.get('LIVINGFINDS_RELEASE_SHA') || '';
     return json({
       ok: databaseHealthy,
