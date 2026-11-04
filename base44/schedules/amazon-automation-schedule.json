@@ -157,9 +157,9 @@
       }
     },
     {
-      "name": "Sales recovery for zero-click manual campaigns - every 30 minutes",
+      "name": "Sales recovery for zero-click manual campaigns - every 6 hours",
       "function": "recoverZeroClickManualCampaigns",
-      "cron": "*/30 * * * *",
+      "cron": "0 */6 * * *",
       "run_on_startup": true,
       "payload": {
         "_service_role": true,
