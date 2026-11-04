@@ -1,4 +1,4 @@
-FROM denoland/deno:2.1.4
+FROM denoland/deno:2.9.8
 
 WORKDIR /app
 
@@ -11,7 +11,8 @@ COPY dist/ ./dist/
 WORKDIR /app/server
 
 # Aponta para os artefatos do Base44 + frontend buildado dentro da imagem
-ENV FUNCTIONS_DIR=/app/base44/functions \
+ENV DENO_COMPAT=1 \
+    FUNCTIONS_DIR=/app/base44/functions \
     SCHEDULES_FILE=/app/base44/schedules/amazon-automation-schedule.json \
     ENTITIES_DIR=/app/base44/entities \
     FRONTEND_DIR=/app/dist \
