@@ -17,6 +17,7 @@ import { makeEntities } from './sdk/entities.ts';
 import { makeIntegrations } from './sdk/integrations.ts';
 import { getMotorDashboardWithSql, listMotorCycleEvidenceWithSql } from './motorDashboard.ts';
 import { makeEnvironmentStatusResponse } from './environmentStatus.ts';
+import { loadRuntimeConfig, saveRuntimeConfig } from './runtimeConfig.ts';
 import { enqueueMotorRun, getMotorRun, isMotorFunction, listMotorRuns, reportMotorRunProgress, startMotorRunWorker } from './motorRuns.ts';
 import { finishOptimizationDecisionExecution, renewOptimizationDecisionExecution, reserveOptimizationDecisionExecution } from './decisionExecutionClaims.ts';
 
@@ -492,6 +493,17 @@ async function handler(req: Request): Promise<Response> {
       return json({ ok: false, error: (error as Error).message }, 503);
     }
   }
+  if (path === '/api/admin/environment-config' && req.method === 'PUT') {
+    const user = await authenticatedUser(req);
+    if (!user || user.role !== 'admin') return json({ ok: false, error: 'Acesso administrativo obrigatório' }, 403);
+    const body = await req.json().catch(() => ({}));
+    try {
+      const saved = await saveRuntimeConfig(body.name, body.value, user.email);
+      return json({ ok: true, ...saved });
+    } catch (error) {
+      return json({ ok: false, error: (error as Error).message }, 400);
+    }
+  }
   if (path === '/api/admin/environment-status') {
     const user = await authenticatedUser(req);
     return makeEnvironmentStatusResponse(req.method, user, (name) => Deno.env.get(name));
@@ -631,6 +643,8 @@ async function handler(req: Request): Promise<Response> {
   // qualquer outra coisa -> frontend
   return await serveStatic(url);
 }
+
+await loadRuntimeConfig();
 
 console.log('[main] carregando funções...');
 const { loaded, failed } = await loadFunctions();
