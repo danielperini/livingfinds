@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { CalendarClock, CheckCircle2, Clock, Database } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
+import { readAllDashboardPages } from '../../../base44/shared/dashboardReads.js';
 
 const REQUIRED_REPORTS = ['spCampaigns', 'spSearchTerm', 'spAdvertisedProduct'];
 

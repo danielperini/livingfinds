@@ -3,7 +3,7 @@ Deno.serve(async (request) => {
   try {
     const body = await request.json();
     const headers = new Headers();
-    for (const name of ['authorization', 'x-api-token']) {
+    for (const name of ['authorization', 'x-api-token', 'cookie']) {
       const value = request.headers.get(name);
       if (value) headers.set(name, value);
     }

@@ -4,7 +4,7 @@ Deno.serve(async (request) => {
     const body = await request.json();
     if (!body.account_id) return Response.json({ ok: false, error: 'account_id obrigatório' }, { status: 400 });
     const headers = new Headers();
-    for (const name of ['authorization', 'x-api-token']) {
+    for (const name of ['authorization', 'x-api-token', 'cookie']) {
       const value = request.headers.get(name);
       if (value) headers.set(name, value);
     }
