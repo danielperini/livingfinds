@@ -17,6 +17,12 @@ const STRATEGY_MAP: Record<string, string> = {
 const MAX_TOP_OF_SEARCH_BOOST = 20;
 const COOLDOWN_HOURS = 24;
 const LOOKBACK_DAYS = 14;
+const AI_OPPORTUNITY_CONFIDENCE = 0.85;
+
+function confidenceRatio(value: unknown): number {
+  const raw = numberValue(value, 0);
+  return raw > 1 ? raw / 100 : raw;
+}
 
 const campaignIdOf = (campaign: any) => String(campaign?.amazon_campaign_id || campaign?.campaign_id || '');
 const campaignState = (campaign: any) => normalizeState(campaign?.amazon_status || campaign?.state || campaign?.status);
@@ -62,8 +68,9 @@ function decideStrategy(params: {
   metrics: any;
   targetAcos: number;
   inventory: number;
+  requestedStrategy: 'down_only' | 'up_and_down';
 }): { strategy: 'down_only' | 'up_and_down' | 'fixed'; tosBoost: number; reason: string; acos: number | null } {
-  const { campaign, economics, assessment, metrics, targetAcos, inventory } = params;
+  const { campaign, economics, assessment, metrics, targetAcos, inventory, requestedStrategy } = params;
   const ageHours = hoursSince(campaign.start_date || campaign.created_at);
   const spend = numberValue(metrics.spend);
   const sales = numberValue(metrics.sales);
@@ -84,12 +91,24 @@ function decideStrategy(params: {
   const headroom = Math.max(0, (targetAcos - acos) / Math.max(targetAcos, 1));
   const proposedBoost = Math.min(MAX_TOP_OF_SEARCH_BOOST, Math.max(5, Math.round(5 + headroom * 15)));
   const exceptional = orders >= 5 && acos <= targetAcos * 0.70 && numberValue(assessment?.profit_after_ads, 0) > 0;
+  const aiConfidence = confidenceRatio(assessment?.confidence);
+  const positiveEconomics = numberValue(assessment?.profit_after_ads, 0) > 0;
+  if (requestedStrategy === 'up_and_down' && orders >= 2 && positiveEconomics && aiConfidence >= AI_OPPORTUNITY_CONFIDENCE) {
+    return {
+      strategy: 'up_and_down',
+      tosBoost: proposedBoost,
+      reason: `IA aprovou aumento dinâmico com confiança ${Math.round(aiConfidence * 100)}%: ${orders} pedidos, ACoS ${roundMoney(acos)}% e lucro pós-Ads positivo.`,
+      acos,
+    };
+  }
   return {
     strategy: 'down_only',
     tosBoost: proposedBoost,
-    reason: exceptional
-      ? `Vencedora comprovada: ${orders} pedidos, ACoS ${roundMoney(acos)}% e lucro pós-Ads positivo. Down Only preservado para impedir aumentos dinâmicos acima de 20%; Top of Search ${proposedBoost}%.`
-      : `Campanha rentável: ${orders} pedidos, ACoS ${roundMoney(acos)}% abaixo da meta segura ${targetAcos}%. Down Only com Top of Search ${proposedBoost}%.`,
+    reason: requestedStrategy === 'up_and_down'
+      ? `Proteção: aumento dinâmico exige confiança IA ≥ ${Math.round(AI_OPPORTUNITY_CONFIDENCE * 100)}%, pelo menos 2 pedidos e lucro pós-Ads positivo. ${exceptional ? 'Campanha vencedora preservada com Down Only.' : 'Down Only aplicado.'}`
+      : exceptional
+        ? `Vencedora comprovada: ${orders} pedidos, ACoS ${roundMoney(acos)}% e lucro pós-Ads positivo. Down Only preservado para impedir aumentos dinâmicos acima de 20%; Top of Search ${proposedBoost}%.`
+        : `Campanha rentável: ${orders} pedidos, ACoS ${roundMoney(acos)}% abaixo da meta segura ${targetAcos}%. Down Only com Top of Search ${proposedBoost}%.`,
     acos,
   };
 }
@@ -129,14 +148,20 @@ Deno.serve(async (req) => {
     const assessmentByAsin = latestAssessments(assessments);
     const metricsByCampaign = aggregateCampaignMetrics(metricsRows.filter((row: any) => String(row.date || '') >= cutoff));
 
-    const candidates = campaigns.filter((campaign: any) =>
-      campaignState(campaign) === 'enabled' &&
-      campaign.archived !== true &&
-      String(campaign.targeting_type || '').toUpperCase() === 'MANUAL' &&
-      String(campaign.campaign_type || 'SP').toUpperCase() === 'SP' &&
-      campaign.ads_protected !== true &&
-      campaignIdOf(campaign)
-    );
+    const requestedStrategy = body.strategy_mode === 'up_and_down' ? 'up_and_down' : 'down_only';
+    const candidateById = new Map<string, any>();
+    for (const campaign of campaigns.filter((candidate: any) =>
+      campaignState(candidate) === 'enabled' &&
+      candidate.archived !== true &&
+      ['MANUAL', 'AUTO'].includes(String(candidate.targeting_type || '').toUpperCase()) &&
+      String(candidate.campaign_type || 'SP').toUpperCase() === 'SP' &&
+      candidate.ads_protected !== true &&
+      campaignIdOf(candidate)
+    )) {
+      const id = campaignIdOf(campaign);
+      if (!candidateById.has(id)) candidateById.set(id, campaign);
+    }
+    const candidates = [...candidateById.values()];
 
     const results: any[] = [];
     let applied = 0;
@@ -167,6 +192,7 @@ Deno.serve(async (req) => {
         metrics,
         targetAcos: policy.target_acos,
         inventory: product ? availableInventory(product) : -1,
+        requestedStrategy,
       });
 
       const previousStrategy = String(campaign.bidding_strategy || '').toLowerCase().includes('auto') || campaign.bidding_strategy === 'up_and_down'
@@ -180,6 +206,8 @@ Deno.serve(async (req) => {
         name: campaign.name || campaign.campaign_name,
         strategy_before: previousStrategy,
         strategy_after: decision.strategy,
+        requested_strategy: requestedStrategy,
+        ai_confidence: confidenceRatio(assessment?.confidence),
         top_of_search_before: previousTos,
         top_of_search_after: decision.tosBoost,
         orders_14d: numberValue(metrics.orders),
@@ -264,7 +292,8 @@ Deno.serve(async (req) => {
       dry_run: dryRun,
       policy: {
         max_top_of_search_boost_pct: MAX_TOP_OF_SEARCH_BOOST,
-        automatic_up_and_down_disabled: true,
+        requested_strategy: requestedStrategy,
+        automatic_up_and_down_requires_ai_confidence: AI_OPPORTUNITY_CONFIDENCE,
         product_economics_required: true,
         lookback_days: LOOKBACK_DAYS,
       },
