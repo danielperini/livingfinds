@@ -13,6 +13,20 @@ test('does not call an exhausted daily cycle idle', () => {
   assert.match(notice.message, /unified_engine:stage_failed/);
 });
 
+test('shows an active scheduler separately from an exhausted historical cycle', () => {
+  const notice = dailyMotorNotice({ data: {
+    scheduler: { enabled: true, started: true },
+    daily_motor: {
+      date: '2026-10-19', due: true, status: 'exhausted', attempts: 1,
+      last_error: 'remote_unknown',
+    },
+  } });
+  assert.equal(notice.tone, 'warning');
+  assert.match(notice.title, /Motor ativo/);
+  assert.match(notice.message, /Scheduler e worker do motor estão ativos/);
+  assert.match(notice.message, /remote_unknown/);
+});
+
 test('shows a running cycle without claiming it is complete', () => {
   const notice = dailyMotorNotice({ data: { daily_motor: {
     date: '2026-10-19', due: true, status: 'running', started_at: '2026-10-19T13:00:00Z',
