@@ -1388,20 +1388,22 @@ export default function AdsManagement() {
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap mb-1">
-                    <h2 className="text-base font-bold text-white truncate">{selectedCampaign.name || selectedCampaign.campaign_name}</h2>
                     {(() => {
                       const asin = getCampaignAsin(selectedCampaign);
                       const product = asin ? products.find((p) => String(p.asin || '').toUpperCase() === String(asin).toUpperCase()) : null;
                       const productTitle = product?.product_name || product?.display_name || product?.title || product?.name;
                       if (!asin && !productTitle) return null;
                       return (
-                        <span className="text-xs text-slate-400 truncate max-w-[min(42rem,65vw)]" title={productTitle || asin}>
-                          {asin ? <span className="font-mono text-cyan">{asin}</span> : null}
-                          {asin && productTitle ? <span className="mx-1 text-slate-600">·</span> : null}
-                          {productTitle || 'Título do produto não disponível'}
-                        </span>
+                        <div className="mb-1.5 max-w-full" title={productTitle || asin}>
+                          <p className="text-xs leading-relaxed text-slate-400 break-words">
+                            {asin ? <span className="font-mono text-cyan">{asin}</span> : null}
+                            {asin && productTitle ? <span className="mx-1 text-slate-600">·</span> : null}
+                            {productTitle || 'Título do produto não disponível'}
+                          </p>
+                        </div>
                       );
                     })()}
+                    <h2 className="text-base font-bold text-white break-words leading-tight">{selectedCampaign.name || selectedCampaign.campaign_name}</h2>
                     {isNew24h(selectedCampaign) ?
                   <span className="text-xs font-bold px-2 py-0.5 rounded bg-amber-400/20 text-amber-300 border border-amber-400/30">NEW</span> :
                   null}
