@@ -150,6 +150,12 @@
 .api-status-badge.is-partial { background: #fef3c7; color: #92400e; }
 .api-status-badge.is-missing { background: #f1f5f9; color: #475569; }
 .api-variable-list { margin: 0; padding: 4px 16px 10px; list-style: none; }
+.api-variable-main { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; flex: 1; }
+.api-variable-help { flex: 0 0 auto; color: var(--lf-color-text-muted); font-size: 10px; }
+.api-variable-help summary { cursor: pointer; color: var(--lf-color-accent, #0891b2); font-weight: 650; list-style: none; }
+.api-variable-help summary::-webkit-details-marker { display: none; }
+.api-variable-help p { max-width: 300px; margin: 6px 0; padding: 8px; border: 1px solid var(--lf-color-border); border-radius: 7px; background: var(--lf-color-surface); color: var(--lf-color-text-secondary); line-height: 1.45; }
+.api-catalog-hint { margin: 6px 0 0; color: var(--lf-color-text-muted); font-size: 11px; }
 .api-variable-list li { display: flex; min-height: 35px; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid #f1f5f9; }
 .api-variable-list li:last-child { border-bottom: 0; }
 .api-variable-list code { overflow: hidden; color: #334155; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
