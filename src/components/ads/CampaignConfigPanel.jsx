@@ -2,11 +2,18 @@ import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Save, Loader2, CheckCircle, AlertCircle, Package } from 'lucide-react';
 
+function normalizeBiddingStrategy(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['auto_for_sales', 'autoforsales', 'dynamic_up_down', 'up_and_down'].includes(normalized)) return 'dynamic_up_down';
+  if (['manual', 'fixed', 'fixed_bids'].includes(normalized)) return 'fixed';
+  return 'dynamic_down_only';
+}
+
 export default function CampaignConfigPanel({ campaign, account, products, onSaved }) {
   const [form, setForm] = useState({
     state: campaign.state || 'enabled',
     daily_budget: campaign.daily_budget || 10,
-    bidding_strategy: campaign.bidding_strategy || 'dynamic_down_only',
+    bidding_strategy: normalizeBiddingStrategy(campaign.bidding_strategy),
     targeting_type: campaign.targeting_type || 'AUTO',
   });
   const [saving, setSaving] = useState(false);
@@ -20,7 +27,7 @@ export default function CampaignConfigPanel({ campaign, account, products, onSav
     setForm({
       state: campaign.state || 'enabled',
       daily_budget: campaign.daily_budget || 10,
-      bidding_strategy: campaign.bidding_strategy || 'dynamic_down_only',
+      bidding_strategy: normalizeBiddingStrategy(campaign.bidding_strategy),
       targeting_type: campaign.targeting_type || 'AUTO',
     });
     setStatus('idle');
@@ -31,7 +38,7 @@ export default function CampaignConfigPanel({ campaign, account, products, onSav
     setStatus('idle');
     setErrorMsg('');
     try {
-      const strategyChanged = form.bidding_strategy !== (campaign.bidding_strategy || 'dynamic_down_only');
+      const strategyChanged = form.bidding_strategy !== (normalizeBiddingStrategy(campaign.bidding_strategy));
       if (strategyChanged) {
         const strategyResponse = await base44.functions.invoke('applyBiddingStrategyByCampaign', {
           amazon_account_id: account.id,
@@ -96,7 +103,7 @@ export default function CampaignConfigPanel({ campaign, account, products, onSav
   const changed =
     form.state !== (campaign.state || 'enabled') ||
     Number(form.daily_budget) !== (campaign.daily_budget || 10) ||
-    form.bidding_strategy !== (campaign.bidding_strategy || 'dynamic_down_only');
+    form.bidding_strategy !== (normalizeBiddingStrategy(campaign.bidding_strategy));
 
   return (
     <div className="p-6 space-y-6 max-w-2xl">
