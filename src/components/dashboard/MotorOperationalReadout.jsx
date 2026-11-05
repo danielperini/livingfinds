@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { base44 } from '@/api/base44Client';
+import { loadMotorCycleEvidence } from '@/lib/motorDashboardRead';
 
 const dateTime = (value) => value ? new Date(value).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : 'não informado';
 
@@ -14,11 +15,9 @@ export default function MotorOperationalReadout({ data, error, accountId }) {
     if (!showEvidence || !accountId || !cycleDate) return;
     let active = true;
     setEvidence({ loading: true, error: null, data: null });
-    base44.functions.invoke('getMotorCycleEvidence', { account_id: accountId, date: cycleDate, source, offset,
+    loadMotorCycleEvidence(base44, { account_id: accountId, date: cycleDate, source, offset,
       ...(cycle.correlation_id ? { correlation_id: cycle.correlation_id } : {}),
-    }).then((response) => {
-      const result = response?.data ?? response;
-      if (result?.ok !== true) throw new Error(result?.error || 'Evidência indisponível');
+    }).then((result) => {
       if (active) setEvidence({ loading: false, error: null, data: result });
     }).catch((err) => { if (active) setEvidence({ loading: false, error: err.message, data: null }); });
     return () => { active = false; };
