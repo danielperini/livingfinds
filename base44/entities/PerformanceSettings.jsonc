@@ -205,12 +205,12 @@
     },
     "protection_confidence_threshold": {
       "type": "number",
-      "default": 85,
+      "default": 80,
       "description": "Confiança mínima (%) para ações defensivas, como reduzir lance."
     },
     "expansion_confidence_threshold": {
       "type": "number",
-      "default": 95,
+      "default": 85,
       "description": "Confiança mínima (%) para ações de expansão, como aumentar lance."
     },
     "policy_version": {
