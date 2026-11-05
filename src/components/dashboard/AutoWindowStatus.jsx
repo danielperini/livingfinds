@@ -1,4 +1,3 @@
-import { readAllDashboardPages } from '../../../base44/shared/dashboardReads.js';
 import { useState, useEffect, useCallback } from 'react';
 import { CalendarClock, CheckCircle2, Clock, Database } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
@@ -30,16 +29,16 @@ export default function AutoWindowStatus({
     try {
       if (!accountId) return;
       const targetDate = closedDayBrt();
-      const [runs, jobs, metrics] = await Promise.all([
-        // Only the latest run is needed here. Reading the full execution log
-        // made this small status card scan more than a million rows.
-        base44.entities.SyncExecutionLog.filter({ amazon_account_id: accountId }, '-started_at', 1),
+      const [account, jobs, metrics] = await Promise.all([
+        // AmazonAccount is keyed by id and already receives last_sync_at from
+        // the synchronizer. Avoid scanning the million-row execution log.
+        base44.entities.AmazonAccount.get(accountId),
         readAllDashboardPages(base44.entities.AmazonAdsReportJob, { filter: { end_date: targetDate } }),
         base44.entities.CampaignMetricsDaily.filter({}, '-date', 1),
       ]);
       setReadError('');
-      const lastRun = runs?.find(run => run.started_at || run.created_date);
-      setLastSync(lastRun ? new Date(lastRun.started_at || lastRun.created_date) : null);
+      const lastSyncValue = account?.last_sync_at || account?.updated_date || null;
+      setLastSync(lastSyncValue ? new Date(lastSyncValue) : null);
 
       const processed = REQUIRED_REPORTS.filter(type =>
         jobs.some(job => job.report_type_id === type && job.status === 'processed')
