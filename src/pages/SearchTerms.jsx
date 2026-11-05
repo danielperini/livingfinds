@@ -507,7 +507,7 @@ export default function SearchTerms() {
                           {normalizeText(termText(kw)) || '—'}
                         </p>
                         <p className="text-slate-600 font-mono truncate text-[10px]">{kw.match_type || kw.keyword_match_type || ''}</p>
-                        <p className="text-slate-600 mt-0.5 truncate text-[10px]" title={kw._rec}>{kw._rec}</p>
+                        <p className="text-slate-600 mt-0.5 truncate text-[10px]" title={kw._rec}>{kw._rec}</p>{aiReviews[kw.id] && <p className={aiReviews[kw.id].eligible ? "text-emerald-400 mt-0.5 text-[10px]" : "text-amber-400 mt-0.5 text-[10px]"}>IA {aiReviews[kw.id].confidence}% · {aiReviews[kw.id].status}</p>}
                       </td>
                       {/* Classe */}
                       <td className="px-3 py-2 whitespace-nowrap">
