@@ -46,8 +46,8 @@ const PERFORMANCE_DEFAULTS = {
   target_coverage_hours: 24,
   ai_auto_optimization: false,
   ai_mode: 'SHADOW',
-  protection_confidence_threshold: 85,
-  expansion_confidence_threshold: 95,
+  protection_confidence_threshold: 80,
+  expansion_confidence_threshold: 85,
   policy_version: 1,
 };
 
