@@ -25,10 +25,19 @@ function pctChange(curr, prev) {
 }
 
 function FreshnessSource({ label, timestamp, coverage }) {
+  const hasCoverage = coverage && Number.isFinite(Number(coverage.coverage_percent));
+  const status = coverage?.status === 'fresh'
+    ? 'cobertura recente completa'
+    : hasCoverage
+      ? 'cobertura parcial'
+      : 'cobertura não verificada';
+  const percent = hasCoverage ? `${Number(coverage.coverage_percent).toFixed(1)}%` : 'não disponível';
   return (
     <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-theme-card-2 border border-[var(--border-color)]">
       <span className="text-[11px] text-theme-muted font-medium">{label}</span>
-      <span className="text-[11px]">{timestamp ? new Date(timestamp).toLocaleString('pt-BR') : 'sem timestamp'} · {coverage?.status === 'fresh' ? 'cobertura recente completa' : 'cobertura incompleta ou não verificada'} ({coverage?.coverage_percent ?? '—'}%)</span>
+      <span className="text-[11px]">
+        {timestamp ? new Date(timestamp).toLocaleString('pt-BR') : 'sem timestamp'} · {status} ({percent})
+      </span>
     </div>
   );
 }
