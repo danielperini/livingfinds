@@ -31,7 +31,21 @@ export default function CampaignConfigPanel({ campaign, account, products, onSav
     setStatus('idle');
     setErrorMsg('');
     try {
-      // Salvar no banco local
+      const strategyChanged = form.bidding_strategy !== (campaign.bidding_strategy || 'dynamic_down_only');
+      if (strategyChanged) {
+        const strategyResponse = await base44.functions.invoke('applyBiddingStrategyByCampaign', {
+          amazon_account_id: account.id,
+          campaign_id: campaign.campaign_id || campaign.amazon_campaign_id,
+          strategy_mode: form.bidding_strategy === 'dynamic_up_down' ? 'up_and_down' : 'down_only',
+          force_strategy: true,
+        });
+        const strategyData = strategyResponse?.data || strategyResponse;
+        if (!strategyData?.ok || Number(strategyData?.applied || 0) < 1) {
+          throw new Error(strategyData?.error || strategyData?.results?.[0]?.error || 'A Amazon não confirmou a estratégia de lance.');
+        }
+      }
+
+      // Salvar no banco local somente após a confirmação da estratégia remota
       await base44.entities.Campaign.update(campaign.id, {
         state: form.state,
         status: form.state,
