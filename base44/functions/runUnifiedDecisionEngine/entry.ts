@@ -123,11 +123,18 @@ Deno.serve(async (request) => {
     const reportRequest = dailyClose && !body.skip_sync
       ? await invokeTracked('ensureDailyReportsCurrent', common)
       : { ok: true, skipped: true };
-    const dailyWinners = dailyClose && inventoryKickoff.ok === true && reportRequest.ok === true
-      ? await invokeTracked('runImmediateSameSkuSearchTermHarvest', {
-          ...common, lookback_days: 30, max_promotions: 2, require_fresh_inventory: true,
-          trigger_type: 'canonical_daily_same_sku_winners',
-        })
+    // Search-term harvesting is intentionally delegated to its dedicated 07:25 BRT job.
+    // It performs several sequential Amazon writes/retries and must not hold the
+    // canonical daily-close lease hostage. The dedicated job keeps its own audit,
+    // idempotency and confirmation flow.
+    const dailyWinners = dailyClose
+      ? {
+          ok: true,
+          skipped: true,
+          delegated_to: 'runImmediateSameSkuSearchTermHarvest',
+          reason: 'dedicated_daily_winners_job',
+          scheduled_at: '07:25 America/Sao_Paulo',
+        }
       : { ok: true, skipped: true };
     const scopeBefore = await invokeTracked('reconcileManualBidCycleScope', { ...common, skip_sync: body.skip_sync === true });
     const snapshots = await invokeTracked('buildCanonicalMarketplaceSnapshots', {
