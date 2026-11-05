@@ -68,14 +68,27 @@ Deno.serve(async(request)=>{
       })));
     const aiReview = { ok: aiReviewRuns.every((run: any) => run?.ok !== false), proposal_only: true, runs: aiReviewRuns };
 
-    const engine=economicEvidence.remote_outcome === 'unknown'
-      ? { ok: false, skipped: true, remote_outcome: 'unknown', blocked_by: 'economic_evidence' }
-      : await invoke(base44,'runUnifiedDecisionEngine',{
-      ...common,
-      economic_evidence_policy_run:economicEvidence,
-      ai_review: aiReview,
-      _canonical_orchestrator:'runCanonicalDecisionCycle',
-    });
+    // The daily-close lease is an audit/review boundary. The unified engine
+    // contains long-running mutating stages and already has independent
+    // scheduler jobs for lifecycle, growth, delivery and execution. Keeping
+    // those writes out of this lease prevents a 10-minute scheduler timeout
+    // from turning an otherwise successful daily review into remote_unknown.
+    const engine = body.daily_close === true
+      ? {
+          ok: true,
+          skipped: true,
+          delegated_to: 'independent_motor_scheduler_jobs',
+          reason: 'bounded_daily_close',
+          remote_outcome: 'not_attempted',
+        }
+      : economicEvidence.remote_outcome === 'unknown'
+        ? { ok: false, skipped: true, remote_outcome: 'unknown', blocked_by: 'economic_evidence' }
+        : await invoke(base44,'runUnifiedDecisionEngine',{
+            ...common,
+            economic_evidence_policy_run:economicEvidence,
+            ai_review: aiReview,
+            _canonical_orchestrator:'runCanonicalDecisionCycle',
+          });
 
     // Timeout detection does not cancel the underlying handler. Never start
     // queue reconciliation/arbitration while a previous remote write is unknown.
