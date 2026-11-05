@@ -790,6 +790,7 @@ export default function Dashboard() {
             {refreshingCurrentData ? 'Atualizando…' : 'Atualizar dados atuais'}
           </button>
           <AutoWindowStatus
+            accountId={account?.id || null}
             justUpdated={justUpdated}
             dashboardUpdatedAt={dashboardUpdatedLabel}
             nextSyncText={nextSyncLabel?.label || null}
