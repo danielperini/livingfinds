@@ -156,9 +156,20 @@ async function createRefreshSession(user: AuthUser): Promise<string> {
   }));
   return `${payload}.${await signValue(payload)}`;
 }
+
+function jsonWithSession(data: unknown, token: string, status = 200): Response {
+  const response = json(data, status);
+  response.headers.set('set-cookie', `lf_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`);
+  return response;
+}
+
 async function authenticatedUser(req: Request): Promise<AuthUser | null> {
   const auth = req.headers.get('authorization') ?? '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : req.headers.get('x-api-token') ?? '';
+  const cookie = req.headers.get('cookie') ?? '';
+  const cookieToken = cookie.match(/(?:^|;\s*)lf_session=([^;]+)/)?.[1];
+  const token = auth.startsWith('Bearer ')
+    ? auth.slice(7)
+    : req.headers.get('x-api-token') ?? (cookieToken ? decodeURIComponent(cookieToken) : '');
   if (!token) return null;
   if (SESSION_TOKEN && token === SESSION_TOKEN) return await ensureAdminUser();
   const [payload, signature] = token.split('.');
@@ -525,7 +536,9 @@ async function handler(req: Request): Promise<Response> {
     if (!await verifyAdminPassword(String(body.password ?? ''), user)) {
       return json({ ok: false, error: 'E-mail ou senha incorretos' }, 401);
     }
-    return json({ ok: true, token: await createUserSession(user), refresh_token: await createRefreshSession(user), user: publicUser(user) });
+    const sessionToken = await createUserSession(user);
+    const refreshToken = await createRefreshSession(user);
+    return jsonWithSession({ ok: true, token: sessionToken, refresh_token: refreshToken, user: publicUser(user) }, sessionToken);
   }
   if (path === '/api/auth/refresh' && req.method === 'POST') {
     const body = await req.json().catch(() => ({}));
@@ -552,7 +565,9 @@ async function handler(req: Request): Promise<Response> {
       );
       const user = users[0];
       if (!user) return json({ ok: false, error: 'Usuário não encontrado.' }, 401);
-      return json({ ok: true, token: await createUserSession(user), refresh_token: await createRefreshSession(user), user: publicUser(user) });
+      const sessionToken = await createUserSession(user);
+      const refreshToken = await createRefreshSession(user);
+      return jsonWithSession({ ok: true, token: sessionToken, refresh_token: refreshToken, user: publicUser(user) }, sessionToken);
     } catch {
       return json({ ok: false, error: 'Refresh token inválido.' }, 401);
     }
