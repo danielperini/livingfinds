@@ -109,6 +109,10 @@ function getRecommendation(cls, m) {
 
 // ─── Parâmetros padrão ───────────────────────────────────────────────────────
 
+const BID_FLOOR = 0.50;
+const BID_CEILING = 1.80;
+const clampBid = (value) => Math.min(BID_CEILING, Math.max(BID_FLOOR, Number(value) || BID_FLOOR));
+
 const DEFAULT_CFG = {
   meta_acos: 20,
   limite_cliques: 10,
@@ -132,6 +136,7 @@ export default function SearchTerms() {
   const [actionMsg, setActionMsg] = useState(null);
   const [actionLoading, setActionLoading] = useState(null);
   const [cfg, setCfg] = useState(DEFAULT_CFG);
+  const [aiReviews, setAiReviews] = useState({});
   const [showCfg, setShowCfg] = useState(false);
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef(null);
@@ -212,7 +217,7 @@ export default function SearchTerms() {
     const term = normalizeText(termText(kw));
     const baseBid = m.cpc > 0 ? m.cpc : 0.25;
     const mult = matchType === 'EXACT' ? cfg.mult_exact : matchType === 'PHRASE' ? cfg.mult_phrase : cfg.mult_broad;
-    const bid = +(baseBid * mult).toFixed(2);
+    const bid = clampBid(baseBid * mult);
 
     try {
       await base44.entities.KeywordSuggestion.create({
@@ -239,9 +244,7 @@ export default function SearchTerms() {
     setActionLoading(kw.id + '_bid');
     const current = m.cpc > 0 ? m.cpc : 0.25;
     const pct = direction === 'up' ? cfg.aumento_vencedor : cfg.reducao_fraco;
-    const newBid = direction === 'up'
-      ? +(current * (1 + pct / 100)).toFixed(2)
-      : +(current * (1 - pct / 100)).toFixed(2);
+    const newBid = clampBid(direction === 'up' ? current * (1 + pct / 100) : current * (1 - pct / 100));
 
     try {
       await base44.entities.AmazonActionQueue.create({
@@ -260,6 +263,27 @@ export default function SearchTerms() {
         max_attempts: 3,
       });
       notify('success', `✓ Bid ${direction === 'up' ? 'aumentado' : 'reduzido'}: R$${current.toFixed(2)} → R$${newBid.toFixed(2)} (+${pct}%)`);
+    } catch (e) { notify('error', e.message); }
+    finally { setActionLoading(null); }
+  };
+
+  const analyzeWithAI = async (kw, m) => {
+    const id = kw.id + '_ai';
+    setActionLoading(id);
+    try {
+      const response = await base44.functions.invoke('claudeAdsAgent', {
+        mode: 'analyze',
+        prompt: 'Analise este search term de Amazon Ads. Avalie bid atual, economia, potencial de venda e relevância. Recomende um único ajuste de bid entre R$0,50 e R$1,80 e indique se deve gerar EXACT, PHRASE e BROAD. Nunca invente métricas. A execução só é elegível com confiança >=80%. Retorne JSON conforme o schema do agente.',
+        context: { amazon_account_id: account.id, search_term: normalizeText(termText(kw)), asin: kw.asin || null, sku: kw.sku || null, metrics: m, current_bid: clampBid(m.cpc > 0 ? m.cpc : (kw.current_bid || kw.bid || BID_FLOOR)), bid_floor: BID_FLOOR, bid_ceiling: BID_CEILING, confidence_threshold: 80 },
+      });
+      const result = response?.data?.response ?? response?.response ?? response?.data ?? response;
+      const confidence = Number(result?.rationale?.confidence ?? 0);
+      const review = { confidence, status: result?.status || 'WAIT_FOR_DATA', action: result?.action || null, bid_before: result?.value_before ?? null, bid_after: result?.value_after != null ? clampBid(result.value_after) : null, rationale: result?.rationale?.diagnosis || result?.rationale?.why_this_action || 'Sem justificativa retornada.', eligible: confidence >= 80 && result?.status === 'EXECUTE_NOW' };
+      setAiReviews(previous => ({ ...previous, [kw.id]: review }));
+      if (review.eligible && review.bid_after != null && review.bid_before != null && review.bid_after !== review.bid_before) {
+        await base44.entities.AmazonActionQueue.create({ amazon_account_id: account.id, operation: 'keyword_bid_update', entity_type: 'keyword', entity_id: kw.keyword_id || kw.id, keyword_id: kw.keyword_id || kw.id, campaign_id: kw.campaign_id || '', payload: JSON.stringify({ bid: review.bid_after, bid_before: review.bid_before, reason: 'search_term_ai_confidence_80' }), status: 'pending', priority: 'high', confidence, source: 'SearchTermsAI', created_at: new Date().toISOString(), max_attempts: 3 });
+        notify('success', '✓ IA aprovou o ajuste com ' + confidence + '% de confiança; alteração enviada para a fila segura.');
+      } else notify('info', 'IA analisou o termo, mas não autorizou execução automática: confiança ' + confidence + '% ou evidência insuficiente.');
     } catch (e) { notify('error', e.message); }
     finally { setActionLoading(null); }
   };
@@ -316,7 +340,7 @@ export default function SearchTerms() {
     const m = calcMetrics(kw);
     const importedUnverified = kw.decision_eligible === false;
     const cls = importedUnverified ? 'no_data' : classifyTerm(m, cfg);
-    const bidSuggested = calcBidSuggested(m, cls, cfg);
+    const bidSuggested = clampBid(calcBidSuggested(m, cls, cfg));
     const recommendation = importedUnverified
       ? 'Importação manual: valores visíveis para consulta, mas sem confirmação de atribuição; ações do motor bloqueadas.'
       : getRecommendation(cls, m);
@@ -364,7 +388,7 @@ export default function SearchTerms() {
             <p className="text-xs text-slate-400">
               {keywords.length} termos · {winners} vencedores · {toNegate} para negativar · ROAS geral {overallRoas.toFixed(1)}x
             </p>
-            <p className="text-[10px] text-slate-500">Importação manual aceita somente linhas diárias com janela de atribuição explícita; os dados ficam fora das decisões automáticas.</p>
+            <p className="text-[10px] text-slate-500">GPT obrigatório na análise assistida · execução automática somente com confiança ≥80% · bids protegidos entre R$0,50 e R$1,80. TermBank funciona como banco alternativo de termos.</p>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -464,7 +488,7 @@ export default function SearchTerms() {
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-surface-2 bg-surface-2/50">
-                  {['Termo', 'Classe', 'Impr.', 'Cliques', 'CTR', 'Spend', 'CPC', 'Compras', 'CVR', 'CPA', 'Vendas', 'ACoS', 'ROAS', 'R$/clique', 'Bid atual', 'Bid sugerido', 'Ações'].map(h => (
+                  {['Termo', 'Classe', 'Impr.', 'Cliques', 'CTR', 'Spend', 'CPC', 'Compras', 'CVR', 'CPA', 'Vendas', 'ACoS', 'ROAS', 'R$/clique', 'Bid atual', 'Bid sugerido', 'IA', 'Ações'].map(h => (
                     <th key={h} className="px-3 py-2.5 text-left font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -480,6 +504,7 @@ export default function SearchTerms() {
                   const isNegate = cls === 'negate_candidate';
                   const bidCurrent = m.cpc > 0 ? m.cpc : (kw.current_bid || kw.bid || 0);
                   const loadingPrefix = actionLoading?.startsWith(kw.id);
+                  const aiReview = aiReviews[kw.id];
 
                   return (
                     <tr key={kw.id} className="border-b border-surface-2/30 hover:bg-surface-2/20 transition-colors">
@@ -513,6 +538,173 @@ export default function SearchTerms() {
                         <span className={`font-semibold ${kw._bidSuggested > bidCurrent ? 'text-emerald-400' : kw._bidSuggested < bidCurrent ? 'text-amber-400' : 'text-slate-400'}`}>
                           R${kw._bidSuggested.toFixed(2)}
                         </span>
+                      </td>
+                      {/* IA */}
+                      <td className="px-3 py-2 min-w-[120px]">
+                        {aiReview ? (<div title={aiReview.rationale}><span className={aiReview.eligible ? 'text-emerald-400 font-semibold' : 'text-amber-400'}>{aiReview.confidence}%</span><span className="text-slate-600 ml-1">{aiReview.status}</span>{aiReview.bid_after != null && <p className="text-[10px] text-slate-400">{'R
+                        <div className="flex items-center gap-1 flex-wrap">
+                          {/* IA */}
+                          <button onClick={() => analyzeWithAI(kw, m)} disabled={!!actionLoading || kw._importedUnverified} className="px-1.5 py-1 bg-fuchsia-500/10 border border-fuchsia-500/20 text-fuchsia-300 hover:bg-fuchsia-500/20 rounded text-[10px] font-bold transition-colors disabled:opacity-40" title="Analisar com GPT e exigir confiança mínima de 80%">{actionLoading === kw.id + '_ai' ? <Loader2 className="w-3 h-3 animate-spin" /> : 'IA 80%'}</button>
+
+                          {/* TermBank */}
+                          <button onClick={() => addToTermBank(kw, m, kw._bidSuggested)} disabled={!!actionLoading || kw._importedUnverified}
+                            className="flex items-center gap-0.5 px-1.5 py-1 bg-surface-2 border border-surface-3 text-slate-400 hover:text-cyan hover:border-cyan/30 rounded transition-colors disabled:opacity-40"
+                            title="Adicionar ao banco alternativo (TermBank)">
+                            {actionLoading === kw.id + '_tb' ? <Loader2 className="w-3 h-3 animate-spin" /> : <BookOpen className="w-3 h-3" />}
+                          </button>
+
+                          {/* EXACT */}
+                          <button onClick={() => createVariant(kw, m, 'EXACT')} disabled={!!actionLoading || kw._importedUnverified}
+                            className="px-1.5 py-1 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 rounded text-[10px] font-bold transition-colors disabled:opacity-40"
+                            title={`Criar EXACT · bid R$${(m.cpc * cfg.mult_exact).toFixed(2)}`}>
+                            {actionLoading === kw.id + '_EXACT' ? <Loader2 className="w-3 h-3 animate-spin" /> : 'E'}
+                          </button>
+
+                          {/* PHRASE */}
+                          <button onClick={() => createVariant(kw, m, 'PHRASE')} disabled={!!actionLoading || kw._importedUnverified}
+                            className="px-1.5 py-1 bg-blue-500/10 border border-blue-500/20 text-blue-400 hover:bg-blue-500/20 rounded text-[10px] font-bold transition-colors disabled:opacity-40"
+                            title={`Criar PHRASE · bid R$${(m.cpc * cfg.mult_phrase).toFixed(2)}`}>
+                            P
+                          </button>
+
+                          {/* BROAD */}
+                          <button onClick={() => createVariant(kw, m, 'BROAD')} disabled={!!actionLoading || kw._importedUnverified}
+                            className="px-1.5 py-1 bg-violet-500/10 border border-violet-500/20 text-violet-400 hover:bg-violet-500/20 rounded text-[10px] font-bold transition-colors disabled:opacity-40"
+                            title={`Criar BROAD · bid R$${(m.cpc * cfg.mult_broad).toFixed(2)}`}>
+                            B
+                          </button>
+
+                          {/* Aumentar bid */}
+                          {isWinner && (
+                            <button onClick={() => adjustBid(kw, m, 'up')} disabled={!!actionLoading || kw._importedUnverified}
+                              className="p-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 rounded transition-colors disabled:opacity-40"
+                              title={`Aumentar bid +${cfg.aumento_vencedor}%`}>
+                              {actionLoading === kw.id + '_bid' ? <Loader2 className="w-3 h-3 animate-spin" /> : <TrendingUp className="w-3 h-3" />}
+                            </button>
+                          )}
+
+                          {/* Reduzir bid */}
+                          {(cls === 'inefficient' || cls === 'negate_candidate') && (
+                            <button onClick={() => adjustBid(kw, m, 'down')} disabled={!!actionLoading || kw._importedUnverified}
+                              className="p-1 bg-amber-500/10 border border-amber-500/20 text-amber-400 hover:bg-amber-500/20 rounded transition-colors disabled:opacity-40"
+                              title={`Reduzir bid -${cfg.reducao_fraco}%`}>
+                              <TrendingDown className="w-3 h-3" />
+                            </button>
+                          )}
+
+                          {/* Negativar */}
+                          {isNegate && (
+                            <button onClick={() => negateKeyword(kw, m)} disabled={!!actionLoading || kw._importedUnverified}
+                              className="p-1 bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 rounded transition-colors disabled:opacity-40"
+                              title="Sugerir negativação">
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Legenda de ações */}
+          <div className="px-4 py-2 border-t border-surface-2 flex items-center gap-4 text-[10px] text-slate-600">
+            <span><span className="text-cyan font-bold">E</span> = EXACT</span>
+            <span><span className="text-blue-400 font-bold">P</span> = PHRASE</span>
+            <span><span className="text-violet-400 font-bold">B</span> = BROAD</span>
+            <span className="flex items-center gap-1"><BookOpen className="w-2.5 h-2.5" /> = Banco alternativo/TermBank</span>
+            <span className="flex items-center gap-1"><TrendingUp className="w-2.5 h-2.5 text-emerald-400" /> = Aumentar bid</span>
+            <span className="flex items-center gap-1"><TrendingDown className="w-2.5 h-2.5 text-amber-400" /> = Reduzir bid</span>
+            <span className="flex items-center gap-1"><X className="w-2.5 h-2.5 text-red-400" /> = Negativar</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+ + Number(aiReview.bid_before || 0).toFixed(2)} → {'R
+                        <div className="flex items-center gap-1 flex-wrap">
+                          {/* TermBank */}
+                          <button onClick={() => addToTermBank(kw, m, kw._bidSuggested)} disabled={!!actionLoading || kw._importedUnverified}
+                            className="flex items-center gap-0.5 px-1.5 py-1 bg-surface-2 border border-surface-3 text-slate-400 hover:text-cyan hover:border-cyan/30 rounded transition-colors disabled:opacity-40"
+                            title="Adicionar ao TermBank">
+                            {actionLoading === kw.id + '_tb' ? <Loader2 className="w-3 h-3 animate-spin" /> : <BookOpen className="w-3 h-3" />}
+                          </button>
+
+                          {/* EXACT */}
+                          <button onClick={() => createVariant(kw, m, 'EXACT')} disabled={!!actionLoading || kw._importedUnverified}
+                            className="px-1.5 py-1 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 rounded text-[10px] font-bold transition-colors disabled:opacity-40"
+                            title={`Criar EXACT · bid R$${(m.cpc * cfg.mult_exact).toFixed(2)}`}>
+                            {actionLoading === kw.id + '_EXACT' ? <Loader2 className="w-3 h-3 animate-spin" /> : 'E'}
+                          </button>
+
+                          {/* PHRASE */}
+                          <button onClick={() => createVariant(kw, m, 'PHRASE')} disabled={!!actionLoading || kw._importedUnverified}
+                            className="px-1.5 py-1 bg-blue-500/10 border border-blue-500/20 text-blue-400 hover:bg-blue-500/20 rounded text-[10px] font-bold transition-colors disabled:opacity-40"
+                            title={`Criar PHRASE · bid R$${(m.cpc * cfg.mult_phrase).toFixed(2)}`}>
+                            P
+                          </button>
+
+                          {/* BROAD */}
+                          <button onClick={() => createVariant(kw, m, 'BROAD')} disabled={!!actionLoading || kw._importedUnverified}
+                            className="px-1.5 py-1 bg-violet-500/10 border border-violet-500/20 text-violet-400 hover:bg-violet-500/20 rounded text-[10px] font-bold transition-colors disabled:opacity-40"
+                            title={`Criar BROAD · bid R$${(m.cpc * cfg.mult_broad).toFixed(2)}`}>
+                            B
+                          </button>
+
+                          {/* Aumentar bid */}
+                          {isWinner && (
+                            <button onClick={() => adjustBid(kw, m, 'up')} disabled={!!actionLoading || kw._importedUnverified}
+                              className="p-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 rounded transition-colors disabled:opacity-40"
+                              title={`Aumentar bid +${cfg.aumento_vencedor}%`}>
+                              {actionLoading === kw.id + '_bid' ? <Loader2 className="w-3 h-3 animate-spin" /> : <TrendingUp className="w-3 h-3" />}
+                            </button>
+                          )}
+
+                          {/* Reduzir bid */}
+                          {(cls === 'inefficient' || cls === 'negate_candidate') && (
+                            <button onClick={() => adjustBid(kw, m, 'down')} disabled={!!actionLoading || kw._importedUnverified}
+                              className="p-1 bg-amber-500/10 border border-amber-500/20 text-amber-400 hover:bg-amber-500/20 rounded transition-colors disabled:opacity-40"
+                              title={`Reduzir bid -${cfg.reducao_fraco}%`}>
+                              <TrendingDown className="w-3 h-3" />
+                            </button>
+                          )}
+
+                          {/* Negativar */}
+                          {isNegate && (
+                            <button onClick={() => negateKeyword(kw, m)} disabled={!!actionLoading || kw._importedUnverified}
+                              className="p-1 bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 rounded transition-colors disabled:opacity-40"
+                              title="Sugerir negativação">
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Legenda de ações */}
+          <div className="px-4 py-2 border-t border-surface-2 flex items-center gap-4 text-[10px] text-slate-600">
+            <span><span className="text-cyan font-bold">E</span> = EXACT</span>
+            <span><span className="text-blue-400 font-bold">P</span> = PHRASE</span>
+            <span><span className="text-violet-400 font-bold">B</span> = BROAD</span>
+            <span className="flex items-center gap-1"><BookOpen className="w-2.5 h-2.5" /> = TermBank</span>
+            <span className="flex items-center gap-1"><TrendingUp className="w-2.5 h-2.5 text-emerald-400" /> = Aumentar bid</span>
+            <span className="flex items-center gap-1"><TrendingDown className="w-2.5 h-2.5 text-amber-400" /> = Reduzir bid</span>
+            <span className="flex items-center gap-1"><X className="w-2.5 h-2.5 text-red-400" /> = Negativar</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+ + Number(aiReview.bid_after).toFixed(2)}</p>}</div>) : '—'}
                       </td>
                       {/* Ações */}
                       <td className="px-3 py-2">
