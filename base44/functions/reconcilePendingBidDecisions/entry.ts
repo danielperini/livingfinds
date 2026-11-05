@@ -18,8 +18,8 @@ Deno.serve(async(request)=>{try{
  const config=configs[0]||{},globalConfig=globalConfigs[0]||{},policy=performanceSettings[0]||{};
  const autonomy=Number(config.autonomy_level??1);
  const aiMode=String(policy.ai_mode||(policy.ai_auto_optimization?'LOW_RISK_AUTO':'SHADOW'));
- const protectionConfidence=Number(policy.protection_confidence_threshold??globalConfig.minimum_confidence??config.minimum_confidence??85);
- const expansionConfidence=Number(policy.expansion_confidence_threshold??globalConfig.minimum_confidence??config.minimum_confidence??95);
+ const protectionConfidence=Number(policy.protection_confidence_threshold??globalConfig.minimum_confidence??config.minimum_confidence??80);
+ const expansionConfidence=Number(policy.expansion_confidence_threshold??globalConfig.minimum_confidence??config.minimum_confidence??85);
  const queueHour=nextHour(),queueWindow=windowLabel(queueHour);
  const bidDecisions=pending.filter((decision:any)=>['reduce_bid','increase_bid','update_bid'].includes(String(decision.action)));
  const newestByKey=new Map();
