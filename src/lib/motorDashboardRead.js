@@ -1,5 +1,12 @@
 import { appParams } from './app-params.js';
 
+async function readHealthFallback() {
+  const response = await fetch('/health', { method: 'GET', credentials: 'same-origin', cache: 'no-store' });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data?.daily_motor) return null;
+  return { data: { ...data, read_only: true, status_source: 'health_fallback' } };
+}
+
 function isUnauthorized(error) {
   return error?.status === 401
     || error?.response?.status === 401
@@ -49,7 +56,17 @@ async function invokeMotorStatus(client, accountId) {
 
     // Fallback for sessions that can still be revalidated by the SDK.
     try { await client.auth.me(); } catch {}
-    return await client.functions.invoke('getMotorDashboardStatus', { account_id: accountId });
+    try {
+      return await client.functions.invoke('getMotorDashboardStatus', { account_id: accountId });
+    } catch (retryError) {
+      if (!isUnauthorized(retryError)) throw retryError;
+      // /health is public, read-only and already exposes the current motor
+      // ledger state. Keep the dashboard informative while the session is
+      // renewed; never use this path for mutations.
+      const health = await readHealthFallback();
+      if (health) return health;
+      throw retryError;
+    }
   }
 }
 
