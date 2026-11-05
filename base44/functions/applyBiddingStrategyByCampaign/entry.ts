@@ -149,9 +149,11 @@ Deno.serve(async (req) => {
     const metricsByCampaign = aggregateCampaignMetrics(metricsRows.filter((row: any) => String(row.date || '') >= cutoff));
 
     const requestedStrategy = body.strategy_mode === 'up_and_down' ? 'up_and_down' : 'down_only';
+    const directCampaignId = body.campaign_id ? String(body.campaign_id) : null;
+    const directRequested = Boolean(directCampaignId && body.force_strategy === true);
     const candidateById = new Map<string, any>();
     for (const campaign of campaigns.filter((candidate: any) =>
-      campaignState(candidate) === 'enabled' &&
+      (campaignState(candidate) === 'enabled' || (directRequested && campaignIdOf(candidate) === directCampaignId)) &&
       candidate.archived !== true &&
       ['MANUAL', 'AUTO'].includes(String(candidate.targeting_type || '').toUpperCase()) &&
       String(candidate.campaign_type || 'SP').toUpperCase() === 'SP' &&
@@ -174,10 +176,11 @@ Deno.serve(async (req) => {
         String(history.campaign_id || '') === campaignId &&
         hoursSince(history.applied_at || history.created_at || history.created_date) < COOLDOWN_HOURS
       );
-      if (recent) {
+      if (recent && !directRequested) {
         skippedCooldown++;
         continue;
       }
+      if (directRequested && campaignId !== directCampaignId) continue;
 
       const asin = String(campaign.asin || '');
       const product = productByAsin.get(asin);
@@ -185,7 +188,7 @@ Deno.serve(async (req) => {
       const assessment = assessmentByAsin.get(asin);
       const policy = resolveOperatingAcos(econ, accountTargetAcos);
       const metrics = metricsByCampaign.get(campaignId) || { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 };
-      const decision = decideStrategy({
+      let decision = decideStrategy({
         campaign,
         economics: econ,
         assessment,
@@ -194,6 +197,14 @@ Deno.serve(async (req) => {
         inventory: product ? availableInventory(product) : -1,
         requestedStrategy,
       });
+      if (directRequested) {
+        decision = {
+          ...decision,
+          strategy: requestedStrategy,
+          tosBoost: numberValue(campaign.top_of_search_adjustment, 0),
+          reason: `Estratégia definida manualmente no painel: ${requestedStrategy === 'up_and_down' ? 'Dinâmico — sobe e desce' : 'Dinâmico — só reduz'}.`,
+        };
+      }
 
       const previousStrategy = String(campaign.bidding_strategy || '').toLowerCase().includes('auto') || campaign.bidding_strategy === 'up_and_down'
         ? 'up_and_down'
