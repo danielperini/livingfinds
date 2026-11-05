@@ -19,6 +19,7 @@ export default function AutoWindowStatus({
   compact = false,
   dashboardUpdatedAt = null,
   nextSyncText = null,
+  accountId = null,
 }) {
   const [lastSync, setLastSync] = useState(null);
   const [readError, setReadError] = useState('');
@@ -27,9 +28,12 @@ export default function AutoWindowStatus({
 
   const load = useCallback(async () => {
     try {
+      if (!accountId) return;
       const targetDate = closedDayBrt();
       const [runs, jobs, metrics] = await Promise.all([
-        readAllDashboardPages(base44.entities.SyncExecutionLog, { sort: '-started_at' }),
+        // Only the latest run is needed here. Reading the full execution log
+        // made this small status card scan more than a million rows.
+        base44.entities.SyncExecutionLog.filter({ amazon_account_id: accountId }, '-started_at', 1),
         readAllDashboardPages(base44.entities.AmazonAdsReportJob, { filter: { end_date: targetDate } }),
         base44.entities.CampaignMetricsDaily.filter({}, '-date', 1),
       ]);
@@ -43,7 +47,7 @@ export default function AutoWindowStatus({
       setSuccessRate(Math.round(processed / REQUIRED_REPORTS.length * 100));
       setLastReportDate(metrics?.[0]?.date || (processed ? targetDate : null));
     } catch (error) { setReadError(error.message || 'Fontes indisponíveis'); }
-  }, []);
+  }, [accountId]);
 
   useEffect(() => {
     load();
