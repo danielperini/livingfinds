@@ -184,3 +184,9 @@
 .lf-nav-link.is-active { box-shadow: inset 3px 0 0 #2563eb; }
 .lf-topbar { background: rgba(255,255,255,.94); backdrop-filter: blur(10px); }
 .lf-page-content { background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%); }
+
+.api-variable-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; margin-top: 8px; }
+.api-variable-form input { min-width: 0; height: 30px; padding: 0 8px; border: 1px solid var(--lf-color-border-strong); border-radius: 6px; background: var(--lf-color-surface); color: var(--lf-color-text); font-size: 11px; }
+.api-variable-form button { height: 30px; padding: 0 10px; border: 0; border-radius: 6px; background: var(--lf-color-action); color: white; font-size: 11px; font-weight: 650; cursor: pointer; }
+.api-variable-form button:disabled { cursor: wait; opacity: 0.6; }
+.api-variable-message { grid-column: 1 / -1; color: var(--lf-color-text-muted); font-size: 10px; }
