@@ -34,8 +34,11 @@ async function invokeMotorStatus(client, accountId) {
     if (!isUnauthorized(error)) throw error;
 
     const token = await refreshAccessToken();
-    if (token && appParams.appId) {
-      const response = await fetch(`/api/apps/${encodeURIComponent(appParams.appId)}/functions/getMotorDashboardStatus`, {
+    if (token) {
+      // Self-hosted builds may not expose VITE_BASE44_APP_ID. The server accepts
+      // this stable application route and validates the renewed session token.
+      const appId = appParams.appId || 'livingfinds';
+      const response = await fetch(`/api/apps/${encodeURIComponent(appId)}/functions/getMotorDashboardStatus`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ account_id: accountId }),
