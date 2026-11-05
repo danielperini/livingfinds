@@ -1,19 +1,31 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AlertCircle, Check, CircleHelp, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
 
-async function readEnvironmentStatus() {
+async function requestEnvironment(path, options = {}) {
   const token = localStorage.getItem('base44_access_token');
-  const response = await fetch('/api/admin/environment-status', {
-    method: 'GET',
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  const response = await fetch(path, {
     credentials: 'same-origin',
     cache: 'no-store',
+    ...options,
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(options.headers || {}) },
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload?.ok !== true) {
     throw Object.assign(new Error(payload?.error || `Consulta indisponível (${response.status})`), { status: response.status });
   }
   return payload;
+}
+
+async function readEnvironmentStatus() {
+  return requestEnvironment('/api/admin/environment-status', { method: 'GET' });
+}
+
+async function saveEnvironmentValue(name, value) {
+  return requestEnvironment('/api/admin/environment-config', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name, value }),
+  });
 }
 
 function variableHelp(name, integrationKey) {
@@ -31,7 +43,59 @@ function variableHelp(name, integrationKey) {
   return 'Consulte o painel do provedor, copie o identificador solicitado e salve o segredo somente no backend. Esta tela não aceita nem exibe valores secretos.';
 }
 
-function IntegrationCard({ integration }) {
+function VariableRow({ variable, integrationKey, onSaved }) {
+  const editable = variable.name === 'ADS_ACCOUNT_ID' || variable.name === 'ADS_PROFILE_ID';
+  const [value, setValue] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+
+  const save = async (event) => {
+    event.preventDefault();
+    setSaving(true);
+    setMessage('');
+    try {
+      await saveEnvironmentValue(variable.name, value);
+      setValue('');
+      setMessage('Salvo no backend.');
+      await onSaved();
+    } catch (caught) {
+      setMessage(caught.message || 'Não foi possível salvar.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <li>
+      <div className="api-variable-main">
+        <code>{variable.name}</code>
+        <span className={variable.configured ? 'api-variable-state is-present' : 'api-variable-state'}>
+          <span className="api-variable-dot" aria-hidden="true" />
+          {variable.configured ? 'Presente' : variable.defaultValue ? `Padrão: ${variable.defaultValue}` : variable.required === false ? 'Opcional' : 'Ausente'}
+        </span>
+      </div>
+      <details className="api-variable-help">
+        <summary>Configurar</summary>
+        <p>{variableHelp(variable.name, integrationKey)}</p>
+        {editable && (
+          <form className="api-variable-form" onSubmit={save}>
+            <input
+              aria-label={`Novo valor para ${variable.name}`}
+              value={value}
+              onChange={(event) => setValue(event.target.value)}
+              placeholder={variable.configured ? 'Já configurado — informe para substituir' : 'Cole o identificador'}
+              autoComplete="off"
+            />
+            <button type="submit" disabled={saving || !value.trim()}>{saving ? 'Salvando…' : 'Salvar'}</button>
+            {message && <span className="api-variable-message" role="status">{message}</span>}
+          </form>
+        )}
+      </details>
+    </li>
+  );
+}
+
+function IntegrationCard({ integration, onSaved }) {
   const requiredVariables = integration.variables.filter((variable) => variable.required !== false);
   const configuredRequired = requiredVariables.filter((variable) => variable.configured).length;
   const complete = requiredVariables.length > 0 && configuredRequired === requiredVariables.length;
@@ -50,19 +114,7 @@ function IntegrationCard({ integration }) {
       </div>
       <ul className="api-variable-list">
         {integration.variables.map((variable) => (
-          <li key={variable.name}>
-            <div className="api-variable-main">
-              <code>{variable.name}</code>
-              <span className={variable.configured ? 'api-variable-state is-present' : 'api-variable-state'}>
-                <span className="api-variable-dot" aria-hidden="true" />
-                {variable.configured ? 'Presente' : variable.defaultValue ? `Padrão: ${variable.defaultValue}` : variable.required === false ? 'Opcional' : 'Ausente'}
-              </span>
-            </div>
-            <details className="api-variable-help">
-              <summary>Como configurar</summary>
-              <p>{variableHelp(variable.name, integration.key)}</p>
-            </details>
-          </li>
+          <VariableRow key={variable.name} variable={variable} integrationKey={integration.key} onSaved={onSaved} />
         ))}
       </ul>
     </article>
@@ -91,7 +143,7 @@ export default function ApiCatalog() {
         <div>
           <h2>Catálogo de integrações</h2>
           <p>Estado de configuração consultado no servidor. O Living Finds nunca mostra valores de credenciais nesta tela.</p>
-          <p className="api-catalog-hint">Para Ads: <code>ADS_ACCOUNT_ID</code> identifica a conta; <code>ADS_PROFILE_ID</code> identifica o perfil/marketplace. Use “Como configurar” ao lado de cada item.</p>
+          <p className="api-catalog-hint">Para Ads: <code>ADS_ACCOUNT_ID</code> identifica a conta; <code>ADS_PROFILE_ID</code> identifica o perfil/marketplace. Use “Configurar” para salvar os identificadores no backend. Segredos continuam no VPS/Hostinger.</p>
         </div>
         <button type="button" onClick={refresh} disabled={loading} className="api-refresh-button">
           {loading ? <Loader2 size={16} className="api-spin" /> : <RefreshCw size={16} />}
@@ -114,7 +166,7 @@ export default function ApiCatalog() {
         <>
           <p className="api-catalog-updated">Última consulta: <time dateTime={status.checkedAt}>{new Date(status.checkedAt).toLocaleString('pt-BR')}</time></p>
           <div className="api-catalog-grid">
-            {status.integrations.map((integration) => <IntegrationCard key={integration.key} integration={integration} />)}
+            {status.integrations.map((integration) => <IntegrationCard key={integration.key} integration={integration} onSaved={refresh} />)}
           </div>
         </>
       ) : null}
