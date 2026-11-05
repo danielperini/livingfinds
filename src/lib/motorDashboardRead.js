@@ -70,6 +70,51 @@ async function invokeMotorStatus(client, accountId) {
   }
 }
 
+async function invokeReadOnlyFunction(client, functionName, payload) {
+  try {
+    return await client.functions.invoke(functionName, payload);
+  } catch (error) {
+    if (!isUnauthorized(error)) throw error;
+  }
+
+  const appId = appParams.appId || 'livingfinds';
+  const route = `/api/apps/${encodeURIComponent(appId)}/functions/${encodeURIComponent(functionName)}`;
+  const direct = async (token) => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const response = await fetch(route, {
+      method: 'POST',
+      headers,
+      credentials: 'same-origin',
+      cache: 'no-store',
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.ok) return { data };
+    if (response.status !== 401) throw Object.assign(new Error(data?.error || `Request failed with status code ${response.status}`), { status: response.status, data });
+    return null;
+  };
+
+  // First preserve a valid same-origin session cookie; this is the normal
+  // self-hosted path and does not require exposing a token to the caller.
+  const cookieResponse = await direct(null);
+  if (cookieResponse) return cookieResponse;
+
+  const token = await refreshAccessToken();
+  const tokenResponse = token ? await direct(token) : null;
+  if (tokenResponse) return tokenResponse;
+
+  try { await client.auth.me(); } catch {}
+  return await client.functions.invoke(functionName, payload);
+}
+
+export async function loadMotorCycleEvidence(client, payload) {
+  const response = await invokeReadOnlyFunction(client, 'getMotorCycleEvidence', payload);
+  const data = response?.data ?? response;
+  if (!data?.ok) throw new Error(data?.error || 'Evidência indisponível');
+  return data;
+}
+
 export async function loadMotorDashboardStatus(client, accountId) {
   const response = await invokeMotorStatus(client, accountId);
   const data = response?.data ?? response;
