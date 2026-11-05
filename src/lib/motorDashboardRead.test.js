@@ -89,3 +89,30 @@ test('refreshes the session and retries the read-only diagnosis after 401', asyn
   assert.equal(result.read_only, true);
   assert.deepEqual(calls, ['invoke', 'me', 'invoke']);
 });
+
+
+test('uses the renewed session directly when the self-hosted app id is absent', async () => {
+  const calls = [];
+  const store = new Map([['base44_access_token', 'expired'], ['base44_refresh_token', 'refresh']]);
+  const previousWindow = globalThis.window;
+  const previousFetch = globalThis.fetch;
+  globalThis.window = { localStorage: {
+    getItem: (key) => store.get(key) ?? null,
+    setItem: (key, value) => store.set(key, value),
+  } };
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    if (url === '/api/auth/refresh') return new Response(JSON.stringify({ ok: true, token: 'fresh' }), { status: 200 });
+    return new Response(JSON.stringify({ daily_motor: { is_running: false }, read_only: true }), { status: 200 });
+  };
+  const client = { functions: { invoke: async () => { const error = new Error('Unauthorized'); error.status = 401; throw error; } } };
+  try {
+    const result = await loadMotorDashboardStatus(client, 'account');
+    assert.equal(result.read_only, true);
+    assert.equal(calls[1].url, '/api/apps/livingfinds/functions/getMotorDashboardStatus');
+    assert.match(calls[1].options.headers.Authorization, /^Bearer fresh$/);
+  } finally {
+    globalThis.window = previousWindow;
+    globalThis.fetch = previousFetch;
+  }
+});
