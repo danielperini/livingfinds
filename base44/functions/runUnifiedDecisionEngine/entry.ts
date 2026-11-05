@@ -198,7 +198,14 @@ Deno.serve(async (request) => {
           trigger_type: dailyClose ? 'unified_daily_asin_diversification' : 'unified_intraday_asin_diversification',
         });
 
-    const campaignLifecycle = lifecycleWindow
+    const campaignLifecycle = dailyClose
+      ? {
+          ok: true,
+          skipped: true,
+          delegated_to: 'runCanonicalCampaignLifecycleLayer',
+          reason: 'dedicated_lifecycle_job',
+        }
+      : lifecycleWindow
       ? await invokeTracked('runCanonicalCampaignLifecycleLayer', {
           ...common,
           daily_close: dailyClose,
@@ -218,8 +225,15 @@ Deno.serve(async (request) => {
         });
 
     const growthRecommendedByToday = salesRecovery?.serving_growth?.recommended === true;
-    const servingGrowth = body.skip_serving_campaign_growth === true
-      ? { ok: true, skipped: true }
+    const servingGrowth = body.skip_serving_campaign_growth === true || dailyClose
+      ? {
+          ok: true,
+          skipped: true,
+          ...(dailyClose ? {
+            delegated_to: 'runServingCampaignGrowthObjective',
+            reason: 'dedicated_serving_growth_job',
+          } : {}),
+        }
       : await invokeTracked('runServingCampaignGrowthObjective', {
           ...common,
           snapshot_run_id: snapshotRunId,
@@ -235,8 +249,15 @@ Deno.serve(async (request) => {
       ? Math.min(20, Math.max(2, servingGrowthGap))
       : 6;
 
-    const deliveryHealth = body.skip_campaign_delivery_health === true
-      ? { ok: true, skipped: true }
+    const deliveryHealth = body.skip_campaign_delivery_health === true || dailyClose
+      ? {
+          ok: true,
+          skipped: true,
+          ...(dailyClose ? {
+            delegated_to: 'reconcileCampaignDeliveryHealth',
+            reason: 'dedicated_delivery_health_job',
+          } : {}),
+        }
       : await invokeTracked('reconcileCampaignDeliveryHealth', {
           ...common,
           snapshot_run_id: snapshotRunId,
