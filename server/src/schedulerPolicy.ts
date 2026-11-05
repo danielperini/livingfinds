@@ -19,6 +19,7 @@ export type SchedulerRun = {
   recovery_count?: number;
   last_error?: string | null;
   remote_outcome?: string;
+  outcome_class?: string;
 };
 
 export type ClassifiedAuditOutcome = {
@@ -129,7 +130,9 @@ export function classifyAuditJobResponse(functionName: string, response: any): C
 }
 
 export function schedulerReplayBlocked(run: SchedulerRun | null | undefined): boolean {
-  return run?.remote_outcome === 'unknown' || /deployment_interrupted|remote_unknown|remote[ _](state|outcome).*?(unknown|not confirmed)|(?:estado|resultado) remoto desconhecido|automatic replay blocked/i.test(run?.last_error || '');
+  return run?.outcome_class === 'reconciled_no_external_action' ||
+    run?.remote_outcome === 'unknown' ||
+    /deployment_interrupted|remote_unknown|remote[ _](state|outcome).*?(unknown|not confirmed)|(?:estado|resultado) remoto desconhecido|automatic replay blocked/i.test(run?.last_error || '');
 }
 
 export function isDailyCycleExecutionConfirmedResponse(response: any): boolean {
