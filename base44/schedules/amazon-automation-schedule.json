@@ -5,128 +5,224 @@
       "name": "Confirm same-SKU promotions against Amazon - hourly",
       "function": "confirmSameSkuSearchTermPromotions",
       "cron": "12 * * * *",
-      "payload": { "_service_role": true, "max_promotions": 50 }
+      "payload": {
+        "_service_role": true,
+        "max_promotions": 50
+      }
     },
     {
       "name": "Daily profitable same-SKU search term discovery - 07:25 BRT",
       "function": "runImmediateSameSkuSearchTermHarvest",
       "cron": "25 7 * * *",
-      "payload": { "_service_role": true, "dry_run": false, "lookback_days": 30, "max_promotions": 5, "require_fresh_inventory": true, "trigger_type": "daily_winning_terms" }
+      "payload": {
+        "_service_role": true,
+        "dry_run": false,
+        "lookback_days": 30,
+        "max_promotions": 5,
+        "require_fresh_inventory": true,
+        "trigger_type": "daily_winning_terms"
+      }
     },
     {
       "name": "Canonical campaign lifecycle - every 6 hours",
       "function": "runCanonicalCampaignLifecycleLayer",
       "cron": "0 */6 * * *",
-      "retry": { "max_attempts": 2, "base_delay_seconds": 180, "max_delay_seconds": 900 },
-      "payload": { "_service_role": true, "_canonical_orchestrator": "runUnifiedDecisionEngine", "trigger_type": "scheduler_campaign_lifecycle" }
+      "retry": {
+        "max_attempts": 2,
+        "base_delay_seconds": 180,
+        "max_delay_seconds": 900
+      },
+      "payload": {
+        "_service_role": true,
+        "_canonical_orchestrator": "runUnifiedDecisionEngine",
+        "trigger_type": "scheduler_campaign_lifecycle"
+      }
     },
     {
       "name": "Serving campaign growth objective - every 6 hours",
       "function": "runServingCampaignGrowthObjective",
       "cron": "10 */6 * * *",
-      "retry": { "max_attempts": 2, "base_delay_seconds": 180, "max_delay_seconds": 900 },
-      "payload": { "_service_role": true, "_canonical_orchestrator": "runUnifiedDecisionEngine", "trigger_type": "scheduler_serving_growth" }
+      "retry": {
+        "max_attempts": 2,
+        "base_delay_seconds": 180,
+        "max_delay_seconds": 900
+      },
+      "payload": {
+        "_service_role": true,
+        "_canonical_orchestrator": "runUnifiedDecisionEngine",
+        "trigger_type": "scheduler_serving_growth"
+      }
     },
     {
       "name": "Campaign delivery health reconciliation - every 6 hours",
       "function": "reconcileCampaignDeliveryHealth",
       "cron": "20 */6 * * *",
-      "retry": { "max_attempts": 2, "base_delay_seconds": 180, "max_delay_seconds": 900 },
-      "payload": { "_service_role": true, "_canonical_orchestrator": "runUnifiedDecisionEngine", "trigger_type": "scheduler_delivery_health" }
+      "retry": {
+        "max_attempts": 2,
+        "base_delay_seconds": 180,
+        "max_delay_seconds": 900
+      },
+      "payload": {
+        "_service_role": true,
+        "_canonical_orchestrator": "runUnifiedDecisionEngine",
+        "trigger_type": "scheduler_delivery_health"
+      }
     },
     {
       "name": "Daily new product kickoff discovery - 07:05 BRT",
       "function": "discoverDailyKickoffProducts",
       "cron": "5 7 * * *",
-      "run_on_startup": true,
-      "payload": { "_service_role": true, "trigger_type": "daily_product_discovery" }
+      "payload": {
+        "_service_role": true,
+        "trigger_type": "daily_product_discovery"
+      }
     },
     {
       "name": "Sellable inventory kickoff and stock pauses - every 30 minutes",
       "function": "checkInventoryChangesAndKickoff",
       "cron": "3,33 * * * *",
-      "run_on_startup": true,
-      "payload": { "_service_role": true, "dry_run": false, "trigger_type": "scheduler_immediate_stock_kickoff" }
+      "payload": {
+        "_service_role": true,
+        "dry_run": false,
+        "trigger_type": "scheduler_immediate_stock_kickoff"
+      }
     },
     {
       "name": "Amazon Ads report polling - every 30 minutes",
       "function": "pollAmazonAdsReportJobs",
       "cron": "*/30 * * * *",
-      "payload": { "_service_role": true, "max_jobs": 10 }
+      "payload": {
+        "_service_role": true,
+        "max_jobs": 10
+      }
     },
     {
       "name": "Daily Amazon campaign metrics - 08:30 BRT",
       "function": "syncAmazonIntradayCampaignMetrics",
       "cron": "30 8 * * *",
-      "run_on_startup": true,
-      "payload": { "_service_role": true, "action": "auto", "trigger_type": "scheduler_intraday_startup" }
+      "payload": {
+        "_service_role": true,
+        "action": "auto",
+        "trigger_type": "scheduler_intraday_startup"
+      }
     },
     {
       "name": "AUTO discovery bid learning - daily after inventory and metrics sync",
       "function": "runAutoCampaignLearning",
       "cron": "40 7 * * *",
       "catch_up_daily": true,
-      "retry": { "max_attempts": 4, "base_delay_seconds": 120, "max_delay_seconds": 1800 },
-      "payload": { "_service_role": true, "dry_run": false, "trigger_type": "scheduler_daily_auto_campaign_learning" }
+      "retry": {
+        "max_attempts": 4,
+        "base_delay_seconds": 120,
+        "max_delay_seconds": 1800
+      },
+      "payload": {
+        "_service_role": true,
+        "dry_run": false,
+        "trigger_type": "scheduler_daily_auto_campaign_learning"
+      }
     },
     {
       "name": "Amazon campaign state reconciliation - hourly",
       "function": "syncAdsCampaignStatesV2",
       "cron": "1 * * * *",
-      "payload": { "_service_role": true, "trigger_type": "scheduler_intraday_state" }
+      "payload": {
+        "_service_role": true,
+        "trigger_type": "scheduler_intraday_state"
+      }
     },
     {
       "name": "Amazon offer and buyability verification - hourly",
       "function": "syncAmazonOfferAvailability",
       "cron": "1 * * * *",
-      "payload": { "_service_role": true }
+      "payload": {
+        "_service_role": true
+      }
     },
     {
       "name": "AUTO campaign repair queue - hourly",
       "function": "processAutoCampaignRepairQueueV2",
       "cron": "17 * * * *",
-      "payload": { "_service_role": true }
+      "payload": {
+        "_service_role": true
+      }
     },
     {
       "name": "Operational queue reconciliation - every 4 hours",
       "function": "reconcileOperationalQueues",
       "cron": "17 */4 * * *",
-      "payload": { "_service_role": true, "trigger_type": "scheduler_queue_reconciliation" }
+      "payload": {
+        "_service_role": true,
+        "trigger_type": "scheduler_queue_reconciliation"
+      }
     },
     {
       "name": "Daily Amazon reports and closed-day self-heal - 07:07 BRT",
       "function": "ensureDailyReportsCurrent",
       "cron": "7 7 * * *",
-      "run_on_startup": true,
-      "payload": { "_service_role": true, "trigger_type": "scheduler_reports_self_heal" }
+      "payload": {
+        "_service_role": true,
+        "trigger_type": "scheduler_reports_self_heal"
+      }
     },
     {
       "name": "Motor history audit - daily + startup",
       "function": "pruneMotorDecisionHistory",
       "cron": "37 3 * * *",
-      "run_on_startup": true,
-      "payload": { "_service_role": true, "dry_run": true, "max_delete": 5000, "trigger_type": "scheduler_motor_history_audit" }
+      "payload": {
+        "_service_role": true,
+        "dry_run": true,
+        "max_delete": 5000,
+        "trigger_type": "scheduler_motor_history_audit"
+      }
     },
     {
       "name": "Sales Mode - winner harvesting and recovery - hourly",
       "function": "runSalesMode",
       "cron": "4 * * * *",
-      "run_on_startup": true,
-      "payload": { "_service_role": true, "dry_run": false, "trigger_type": "scheduler_sales_mode_v1", "max_new_exact_today": 20, "tomorrow_new_exact_target": 10, "max_actions": 180, "max_bid_step_pct": 15, "competitive_bid_step_pct": 10, "max_budget_step_pct": 15, "lookback_days": 65, "waste_lookback_days": 7, "waste_min_age_days": 7 }
+      "payload": {
+        "_service_role": true,
+        "dry_run": false,
+        "trigger_type": "scheduler_sales_mode_v1",
+        "max_new_exact_today": 20,
+        "tomorrow_new_exact_target": 10,
+        "max_actions": 180,
+        "max_bid_step_pct": 15,
+        "competitive_bid_step_pct": 10,
+        "max_budget_step_pct": 15,
+        "lookback_days": 65,
+        "waste_lookback_days": 7,
+        "waste_min_age_days": 7
+      }
     },
     {
       "name": "Weekly AI Decision Manager - Sunday 07:15 BRT",
       "function": "runWeeklyAIDecisionManager",
       "cron": "15 7 * * 0",
-      "payload": { "_service_role": true, "dry_run": true, "trigger_type": "scheduler_weekly_ai_engine_review" }
+      "payload": {
+        "_service_role": true,
+        "dry_run": true,
+        "trigger_type": "scheduler_weekly_ai_engine_review"
+      }
     },
     {
       "name": "Canonical daily close, bootstrap-aware audit and repricing - 01:25 BRT",
       "function": "runCanonicalDecisionCycle",
       "cron": "25 1 * * *",
       "catch_up_daily": true,
-      "retry": { "max_attempts": 6, "base_delay_seconds": 60, "max_delay_seconds": 1800 },
-      "payload": { "_service_role": true, "dry_run": false, "daily_close": true, "full_repricing_evaluation": true, "trigger_type": "scheduler_daily_close", "sales_engine_version": "vendas-v1" }
+      "retry": {
+        "max_attempts": 6,
+        "base_delay_seconds": 60,
+        "max_delay_seconds": 1800
+      },
+      "payload": {
+        "_service_role": true,
+        "dry_run": false,
+        "daily_close": true,
+        "full_repricing_evaluation": true,
+        "trigger_type": "scheduler_daily_close",
+        "sales_engine_version": "vendas-v1"
+      }
     },
     {
       "name": "Independent daily motor watchdog and active-SKU E2E recovery - 01:50 BRT",
@@ -134,94 +230,144 @@
       "cron": "50 1 * * *",
       "catch_up_daily": true,
       "reconciles_daily_function": "runCanonicalDecisionCycle",
-      "retry": { "max_attempts": 4, "base_delay_seconds": 300, "max_delay_seconds": 1800 },
-      "payload": { "_service_role": true, "trigger_type": "scheduler_daily_motor_watchdog" }
+      "retry": {
+        "max_attempts": 4,
+        "base_delay_seconds": 300,
+        "max_delay_seconds": 1800
+      },
+      "payload": {
+        "_service_role": true,
+        "trigger_type": "scheduler_daily_motor_watchdog"
+      }
     },
     {
       "name": "Canonical decision executor - hourly",
       "function": "executeApprovedDecisionQueue",
       "cron": "6 * * * *",
-      "run_on_startup": true,
-      "payload": { "_service_role": true, "max_decisions": 25 }
+      "payload": {
+        "_service_role": true,
+        "max_decisions": 25
+      }
     },
     {
       "name": "Canonical Amazon decision confirmation - hourly",
       "function": "confirmExecutedDecisions",
       "cron": "9 * * * *",
-      "run_on_startup": true,
-      "payload": { "_service_role": true }
+      "payload": {
+        "_service_role": true
+      }
     },
     {
       "name": "Manual bid parity reconciliation - daily 04:10 BRT",
       "function": "reconcileManualBidParity",
       "cron": "10 4 * * *",
-      "payload": { "_service_role": true }
+      "payload": {
+        "_service_role": true
+      }
     },
     {
       "name": "Ads automation E2E health audit - daily 04:13 BRT",
       "function": "auditAdsAutomationE2E",
       "cron": "13 4 * * *",
-      "payload": { "_service_role": true, "trigger_type": "scheduler_e2e_audit" }
+      "payload": {
+        "_service_role": true,
+        "trigger_type": "scheduler_e2e_audit"
+      }
     },
     {
       "name": "Repricing transport queue - hourly",
       "function": "runAutomaticRepricing",
       "cron": "47 * * * *",
-      "payload": { "_service_role": true, "operation": "process_queue", "max_actions": 20, "transport_only": true }
+      "payload": {
+        "_service_role": true,
+        "operation": "process_queue",
+        "max_actions": 20,
+        "transport_only": true
+      }
     },
     {
       "name": "Repricing transport reconciliation - 04:43 BRT",
       "function": "runAutomaticRepricing",
       "cron": "43 4 * * *",
-      "payload": { "_service_role": true, "operation": "reconcile", "max_actions": 100, "transport_only": true }
+      "payload": {
+        "_service_role": true,
+        "operation": "reconcile",
+        "max_actions": 100,
+        "transport_only": true
+      }
     },
     {
       "name": "Finance events freshness - 05:50 BRT",
       "function": "syncFinanceEventsFromSpApi",
       "cron": "50 5 * * *",
-      "payload": { "_service_role": true }
+      "payload": {
+        "_service_role": true
+      }
     },
     {
       "name": "Weekend/holiday daypart learning - daily 06:10 BRT",
       "function": "runWeekendHolidayDaypartLearning",
       "cron": "10 6 * * *",
-      "payload": { "_service_role": true, "dry_run": false, "trigger_type": "scheduler_weekend_holiday_learning" }
+      "payload": {
+        "_service_role": true,
+        "dry_run": false,
+        "trigger_type": "scheduler_weekend_holiday_learning"
+      }
     },
     {
       "name": "Amazon data consistency reconciliation - daily after close",
       "function": "auditAmazonDataConsistency",
       "cron": "10 2 * * *",
-      "payload": { "_service_role": true, "trigger_type": "scheduler_daily_reconciliation" }
+      "payload": {
+        "_service_role": true,
+        "trigger_type": "scheduler_daily_reconciliation"
+      }
     },
     {
       "name": "Finance events refresh - 13:20 and 20:20 BRT",
       "function": "syncFinanceEventsFromSpApi",
       "cron": "20 13,20 * * *",
-      "payload": { "_service_role": true }
+      "payload": {
+        "_service_role": true
+      }
     },
     {
       "name": "Daily decision outcome monitor - 03:30 BRT",
       "function": "monitorRulePerformance",
       "cron": "30 3 * * *",
-      "payload": { "_service_role": true }
+      "payload": {
+        "_service_role": true
+      }
     },
     {
       "name": "Daily GPT sales and risk supervisor - 18:15 BRT",
       "function": "runCanonicalWeeklyDecisionReview",
       "cron": "15 18 * * *",
-      "payload": { "_service_role": true, "trigger_type": "scheduler_intraday_gpt_sales_supervisor", "sales_engine_version": "vendas-v1", "growth_mode": true }
+      "payload": {
+        "_service_role": true,
+        "trigger_type": "scheduler_intraday_gpt_sales_supervisor",
+        "sales_engine_version": "vendas-v1",
+        "growth_mode": true
+      }
     },
     {
       "name": "Canonical weekly GPT supervisor - Sunday 21:00 BRT",
       "function": "runCanonicalWeeklyDecisionReview",
       "cron": "0 21 * * 0",
-      "payload": { "_service_role": true, "trigger_type": "scheduler_weekly_gpt_supervisor", "sales_engine_version": "vendas-v1" }
+      "payload": {
+        "_service_role": true,
+        "trigger_type": "scheduler_weekly_gpt_supervisor",
+        "sales_engine_version": "vendas-v1"
+      }
     },
     {
       "name": "Weekly GPT campaign prelection and discovery - Sunday 22:00 BRT",
       "function": "runWeeklyMotorPrelection",
       "cron": "0 22 * * 0",
-      "payload": { "_service_role": true, "dry_run": false }
+      "payload": {
+        "_service_role": true,
+        "dry_run": false
+      }
     }
   ]
 }
