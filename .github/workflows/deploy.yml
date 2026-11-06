@@ -1,12 +1,10 @@
 name: Deploy para VPS
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:
-  group: deploy-vps
+  group: hostinger-production
   cancel-in-progress: false
 
 permissions:
