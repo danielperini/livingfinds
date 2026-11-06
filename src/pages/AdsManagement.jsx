@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
 import { loadAllCampaigns, classifyCampaigns, campaignState } from '@/lib/campaignUtils';
 import {
@@ -21,8 +21,9 @@ import ReactivateWithBudgetModal from '@/components/ads/ReactivateWithBudgetModa
 
 const NOW_MS = Date.now();
 const H24 = 24 * 60 * 60 * 1000;
-const CAMPAIGN_REFRESH_MS = 10 * 60 * 1000;
-const AMAZON_SYNC_THROTTLE_MS = 30 * 60 * 1000;
+const CAMPAIGN_REFRESH_MS = 30 * 60 * 1000;
+const VISIBILITY_REFRESH_THROTTLE_MS = 15 * 60 * 1000;
+const AMAZON_SYNC_THROTTLE_MS = 60 * 60 * 1000;
 
 function campaignTargetingType(campaign) {
   // O tipo vindo da Amazon é a fonte de verdade.  Não deixe uma keyword
@@ -623,6 +624,9 @@ export default function AdsManagement() {
   };
 
   const loadCampaigns = async ({ syncFromAmazon = false, silent = false } = {}) => {
+    const now = Date.now();
+    if (silent && now - lastCampaignLoadRef.current < 60 * 1000) return;
+    lastCampaignLoadRef.current = now;
     if (!silent) setLoading(true);
     try {
       const me = await base44.auth.me();
@@ -791,7 +795,10 @@ export default function AdsManagement() {
       CAMPAIGN_REFRESH_MS
     );
     const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
+      if (
+        document.visibilityState === 'visible' &&
+        Date.now() - lastCampaignLoadRef.current >= VISIBILITY_REFRESH_THROTTLE_MS
+      ) {
         loadCampaigns({ syncFromAmazon: true, silent: true });
       }
     };
