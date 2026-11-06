@@ -22,6 +22,7 @@ test('Hostinger release archive is created outside the checked-out source tree',
   assert.match(workflow, /tar --exclude=\.git --exclude=node_modules -czf "\$archive" -C "\$GITHUB_WORKSPACE" \./);
   assert.match(workflow, /scp[^\n]*"\$archive"/);
   assert.doesNotMatch(workflow, /-czf release\.tgz \./);
+  assert.match(workflow, /export LIVINGFINDS_RELEASE_SHA="\\$RELEASE_SHA"/);
 });
 
 test('public verification retries a restart 502 then confirms exact release and capabilities', async () => {
