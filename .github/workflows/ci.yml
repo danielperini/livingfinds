@@ -175,9 +175,10 @@ jobs:
         run: |
           deno check --node-modules-dir=auto \
             base44/functions/smartBidFromCpc/entry.ts \
+            base44/shared/salesModeWasteDecisionPersistence.ts \
             base44/functions/runSalesModeWasteRotation/entry.ts \
             base44/functions/runSalesMode/entry.ts
-          deno test --node-modules-dir=auto base44/shared/searchTermWastePolicy.test.ts
+          deno test --node-modules-dir=auto base44/shared/searchTermWastePolicy.test.ts base44/shared/salesModeWasteDecisionPersistence.test.ts
       - name: Test search term quality repository without database or Amazon access
         run: deno test --config server/tests/searchTermQuality/deno.json server/tests/searchTermQuality/repository.test.ts server/src/searchTermQualityContext.test.ts
       - name: Check search term quality and ingestion
