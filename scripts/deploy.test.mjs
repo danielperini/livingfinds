@@ -16,6 +16,14 @@ const script = `set -Eeuo pipefail\nprintf 'STARTED\\n'\nresult="$(cat >/dev/nul
 const healthy = { release_sha: sha, db: true, scheduler: { enabled: true }, motor_worker: { enabled: true } };
 const responseFor = (url, health = healthy) => new Response(JSON.stringify(url.includes('/health') ? health : { functions: requiredFunctions }));
 
+test('Hostinger release archive is created outside the checked-out source tree', () => {
+  const workflow = readFileSync(new URL('../.github/workflows/deploy-hostinger.yml', import.meta.url), 'utf8');
+  assert.match(workflow, /archive="\$RUNNER_TEMP\/livingfinds-\$\{GITHUB_SHA\}\.tgz"/);
+  assert.match(workflow, /tar --exclude=\.git --exclude=node_modules -czf "\$archive" -C "\$GITHUB_WORKSPACE" \./);
+  assert.match(workflow, /scp[^\n]*"\$archive"/);
+  assert.doesNotMatch(workflow, /-czf release\.tgz \./);
+});
+
 test('public verification retries a restart 502 then confirms exact release and capabilities', async () => {
   let calls = 0;
   const result = await verifyPublicDeploy({ base: 'https://example.test', sha, wait: async () => {}, fetchFn: async (url, options) => {

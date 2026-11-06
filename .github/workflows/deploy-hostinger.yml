@@ -36,8 +36,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tar --exclude=.git --exclude=node_modules -czf release.tgz .
-          scp -P "${{ secrets.VPS_SSH_PORT || 22 }}" -i ~/.ssh/deploy_key release.tgz "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/tmp/livingfinds-${GITHUB_SHA}.tgz"
+          archive="$RUNNER_TEMP/livingfinds-${GITHUB_SHA}.tgz"
+          tar --exclude=.git --exclude=node_modules -czf "$archive" -C "$GITHUB_WORKSPACE" .
+          scp -P "${{ secrets.VPS_SSH_PORT || 22 }}" -i ~/.ssh/deploy_key "$archive" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/tmp/livingfinds-${GITHUB_SHA}.tgz"
 
       - name: Deploy and smoke test
         shell: bash
