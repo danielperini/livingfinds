@@ -61,6 +61,7 @@ jobs:
           fi
           cd "$deploy"
           docker compose -p server -f server/docker-compose.yml down
+          export LIVINGFINDS_RELEASE_SHA="$RELEASE_SHA"
           docker compose -p server -f server/docker-compose.yml up -d --build
           for i in $(seq 1 24); do
             status="$(docker inspect --format '{{.State.Health.Status}}' server-app-1 2>/dev/null || true)"
