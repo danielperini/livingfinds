@@ -132,7 +132,7 @@ export default function ReportPipelineWatchdogPanel({ account }) {
   useEffect(() => {
     recoveryFiredRef.current = false;
     checkJobs();
-    const interval = setInterval(() => checkJobs(true), 5 * 60 * 1000);
+    const interval = setInterval(() => checkJobs(true), 30 * 60 * 1000);
     return () => clearInterval(interval);
   }, [account?.id]);
 
