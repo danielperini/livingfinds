@@ -1,5 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { aggregateSearchTermWasteTargets, decideWasteProgression, firstWasteBid, isTermTargetWaste } from '../../shared/searchTermWastePolicy.ts';
+import { createSalesModeWasteDecision } from '../../shared/salesModeWasteDecisionPersistence.ts';
 
 const n = (value: unknown) => Number.isFinite(Number(value)) ? Number(value) : 0;
 const active = (value: unknown) => ['enabled', 'active'].includes(String(value || '').toLowerCase());
@@ -116,6 +117,7 @@ Deno.serve(async (request) => {
       }
 
       const created: any[] = [];
+      const reused: any[] = [];
       for (const [id, candidates] of byCampaign) {
         if (!liveCampaigns.has(id)) {
           skipped.push({ campaign_id: id, reason: 'campaign_not_confirmed_enabled_in_amazon' });
@@ -186,7 +188,7 @@ Deno.serve(async (request) => {
             )) continue;
             const rationale = `Termo exato “${term.text}” gastou R$ ${term.spend.toFixed(2)} e teve ${term.clicks} cliques sem pedido; target recebeu duas reduções confirmadas há pelo menos 72h. A campanha permanece ativa.`;
             if (dryRun) { created.push({ campaign_id: id, target_id: candidate.targetId, action: 'negative_exact', keyword_text: term.text, rationale, dry_run: true }); continue; }
-            const decision = await base44.asServiceRole.entities.OptimizationDecision.create({
+            const persisted = await createSalesModeWasteDecision(base44, {
               amazon_account_id: aid, decision_type: 'sales_mode_waste_rotation', entity_type: 'keyword', entity_id: candidate.targetId,
               campaign_id: id, campaign_name: candidate.campaign.name || candidate.campaign.campaign_name || null,
               asin: candidate.campaign.asin || candidate.campaign.advertised_asin || null, keyword_text: term.text,
@@ -199,6 +201,16 @@ Deno.serve(async (request) => {
               model_version: 'sales-mode-v1.3-term-target-waste', data_used: JSON.stringify({ from_date: fromDate, through_date: throughDate, term_spend: term.spend, term_clicks: term.clicks, target_spend: candidate.spend, target_orders: candidate.orders, fba_inventory: candidate.product.fba_inventory }),
               created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
             });
+            if (persisted.conflict) {
+              skipped.push({ campaign_id: id, target_id: candidate.targetId, reason: 'idempotency_intent_conflict', constraint: persisted.conflict.constraint, fields: persisted.conflict.fields });
+              continue;
+            }
+            if (persisted.reused) {
+              reused.push({ decision_id: persisted.decision?.id, campaign_id: id, target_id: candidate.targetId, action: 'negative_exact', keyword_text: term.text });
+              continue;
+            }
+            if (!persisted.created || !persisted.decision) throw new Error('Criação idempotente não confirmou a decisão negativa.');
+            const decision = persisted.decision;
             created.push({ decision_id: decision.id, campaign_id: id, action: 'negative_exact', keyword_text: term.text, rationale });
             continue;
           }
@@ -213,7 +225,7 @@ Deno.serve(async (request) => {
           const topTerm = candidate.terms[0];
           const rationale = `${lookbackDays} dias fechados, target ${candidate.isAutomatic ? 'automático' : 'manual'} do SKU ${candidate.product.sku || candidate.campaign.sku || '—'}: gasto R$ ${candidate.spend.toFixed(2)}, ${candidate.clicks} cliques e zero pedidos/vendas no target; última linha ${candidate.latestDate}. Lance confirmado na Amazon: R$ ${currentBid.toFixed(2)} → R$ ${after.toFixed(2)} (${action === 'REDUCE_BID_30' ? '-30%' : '-10%'}). Termo de maior gasto: “${topTerm?.text || '—'}”. O SKU tem ${n(candidate.product.fba_inventory)} unidades FBA, atualização ${candidate.product.inventory_snapshot_at || candidate.product.inventory_updated_at}.`;
           if (dryRun) { created.push({ campaign_id: id, target_id: candidate.targetId, action, before: currentBid, after, rationale, dry_run: true }); continue; }
-          const decision = await base44.asServiceRole.entities.OptimizationDecision.create({
+          const persisted = await createSalesModeWasteDecision(base44, {
             amazon_account_id: aid, decision_type: 'sales_mode_waste_rotation', entity_type: candidate.isAutomatic ? 'product_target' : 'keyword',
             entity_id: candidate.targetId, target_id: candidate.isAutomatic ? candidate.targetId : null,
             keyword_id: candidate.isAutomatic ? null : candidate.targetId, campaign_id: id,
@@ -228,11 +240,21 @@ Deno.serve(async (request) => {
             model_version: 'sales-mode-v1.3-term-target-waste', data_used: JSON.stringify({ from_date: fromDate, through_date: candidate.latestDate, target_spend: candidate.spend, target_sales: candidate.sales, target_orders: candidate.orders, target_clicks: candidate.clicks, top_terms: candidate.terms.slice(0, 10), minimum_spend: minimumSpend, fba_inventory: candidate.product.fba_inventory, inventory_snapshot_at: candidate.product.inventory_snapshot_at || candidate.product.inventory_updated_at, prior_confirmed_reductions: confirmedReductions.length }),
             created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
           });
+          if (persisted.conflict) {
+            skipped.push({ campaign_id: id, target_id: candidate.targetId, reason: 'idempotency_intent_conflict', constraint: persisted.conflict.constraint, fields: persisted.conflict.fields });
+            continue;
+          }
+          if (persisted.reused) {
+            reused.push({ decision_id: persisted.decision?.id, campaign_id: id, target_id: candidate.targetId, action: 'reduce_bid' });
+            continue;
+          }
+          if (!persisted.created || !persisted.decision) throw new Error('Criação idempotente não confirmou a decisão de redução.');
+          const decision = persisted.decision;
           created.push({ decision_id: decision.id, campaign_id: id, target_id: candidate.targetId, action, before: currentBid, after, rationale });
         }
       }
       eligible.push(...[...byCampaign.values()].flat().map((item) => ({ campaign_id: item.campaignId, target_id: item.targetId, spend: Number(item.spend.toFixed(2)), clicks: item.clicks, orders: item.orders, sales: Number(item.sales.toFixed(2)), latest_date: item.latestDate })));
-      results.push({ amazon_account_id: aid, policy: 'term_target_level_no_sale_waste_with_fba_and_remote_state_guards', report_window: { from_date: fromDate, through_date: throughDate }, candidate_targets: eligible.length, decisions_created: created.length, decisions: created, eligible, skipped: skipped.slice(0, 100) });
+      results.push({ amazon_account_id: aid, policy: 'term_target_level_no_sale_waste_with_fba_and_remote_state_guards', report_window: { from_date: fromDate, through_date: throughDate }, candidate_targets: eligible.length, decisions_created: created.length, decisions_reused: reused.length, decisions: created, reused_decisions: reused, eligible, skipped: skipped.slice(0, 100) });
     }
     return Response.json({ ok: true, engine: 'sales-mode-waste-rotation-v1.3', dry_run: dryRun, report_window: { from_date: fromDate, through_date: throughDate }, results });
   } catch (error: any) {
