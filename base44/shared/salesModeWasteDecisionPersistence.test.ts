@@ -39,7 +39,7 @@ Deno.test('divergent intent is surfaced as conflict, preserving the canonical ro
 Deno.test('persistence failure is not reported as success', async () => {
   const { base44 } = fixture(() => ({ ok: false, error: 'database unavailable' }));
   try {
-    await createSalesModeWasteDecision(base44, { amazon_account_id: 'acct-1', idempotency_key: 'key' });
+    await createSalesModeWasteDecision(base44, { amazon_account_id: 'acct-1', idempotency_key: 'key', cycle_key: '2026-11-05' });
     throw new Error('expected persistence failure');
   } catch (error) {
     if (!String(error).includes('database unavailable')) throw error;
