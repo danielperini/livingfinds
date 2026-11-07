@@ -10,6 +10,8 @@ type IdempotentResult = {
 
 /** Persist a sales-mode waste decision through the Hostinger PostgreSQL transaction. */
 export async function createSalesModeWasteDecision(base44: any, input: Record<string, unknown>): Promise<IdempotentResult> {
+  const intentVersion = String(input.cycle_key || input.intent_version || input.decision_window || '').trim();
+  if (!intentVersion) throw new Error('Criação idempotente requer cycle_key, intent_version ou decision_window.');
   return await createOrLoadOptimizationDecision(
     base44.asServiceRole.entities.OptimizationDecision,
     input,
