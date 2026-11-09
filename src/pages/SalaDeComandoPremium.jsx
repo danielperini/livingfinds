@@ -9,6 +9,7 @@ import {
   Sparkles, Wrench, XCircle,
 } from 'lucide-react';
 import TokenExpiredBanner from '@/components/amazon/TokenExpiredBanner';
+import KeywordIntelligenceStatus from '@/components/dashboard/KeywordIntelligenceStatus';
 
 const TABS = [
   { id: 'pendentes', label: 'Pendentes' },
@@ -341,6 +342,7 @@ export default function SalaDeComandoPremium() {
   return (
     <div className="p-4 md:p-6 space-y-5 animate-fade-in max-w-[1680px] mx-auto">
       {account ? <TokenExpiredBanner accountId={account.id} /> : null}
+      <KeywordIntelligenceStatus accountId={account?.id} />
 
       <section className="rounded-3xl border border-[#E5E7EB] bg-white p-5 md:p-7 overflow-hidden relative">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_0%,rgba(37,99,235,0.07),transparent_38%)] pointer-events-none" />

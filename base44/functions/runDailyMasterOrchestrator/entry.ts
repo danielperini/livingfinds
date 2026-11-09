@@ -3,6 +3,7 @@ import {
   logTokenPrecheckFailure,
   runAmazonAdsTokenPrecheck,
 } from '../../shared/amazonAdsTokenPrecheck.ts';
+import { AUTONOMOUS_ADS_RISK_POLICY } from '../../shared/dailyAiAdsPolicy.ts';
 
 /**
  * runDailyMasterOrchestrator v5
@@ -66,6 +67,9 @@ Deno.serve(async (req) => {
 
     const force = body.force === true;
     const today = todayBRT();
+    const maxNewCampaignsToday = today === AUTONOMOUS_ADS_RISK_POLICY.exceptionalDateBrt
+      ? AUTONOMOUS_ADS_RISK_POLICY.exceptionalDailyMaxNewCampaigns
+      : AUTONOMOUS_ADS_RISK_POLICY.maxNewCampaignsPerDay;
 
     // ── Resolver conta ────────────────────────────────────────────────────
     let account: any = null;
@@ -191,7 +195,7 @@ Deno.serve(async (req) => {
     // limite global de no máximo cinco novas campanhas por dia.
     if (dailyDue('stock_campaign_coverage')) {
       add('reconcileDailyActiveSkuAds', 'stock_campaign_coverage', {
-        dry_run: false, pause_inactive: true, max_new_campaigns: 5,
+        dry_run: false, pause_inactive: true, max_new_campaigns: maxNewCampaignsToday,
       }, true);
     } else skipped.push('stock_campaign_coverage');
 
