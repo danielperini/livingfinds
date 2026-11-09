@@ -51,6 +51,10 @@ export const AUTONOMOUS_ADS_RISK_POLICY = Object.freeze({
   maxNewCampaignBudget: 20,
   allowBulkCreation: false,
   allowCampaignPause: false,
+  // Exceção determinística de ciclo de catálogo: campanhas de produto
+  // inativo não participam da gestão econômica e são pausadas com confirmação
+  // da Amazon. Isso não libera a IA a pausar campanhas por desempenho.
+  inactiveProductCampaignPause: true,
   requireAccountSpendCap: true,
   requireSkuMarginForScaling: true,
   stopOnStaleData: true,
@@ -288,4 +292,3 @@ export function rebalanceBudgetPlan(
     allocations,
   };
 }
-

@@ -189,11 +189,12 @@ Deno.serve(async (req) => {
     if (!invDone || force) add('checkInventoryChangesAndKickoff', 'inventory_kickoff', {}, true);
     else skipped.push('inventory_kickoff');
 
-    // Politica canonica de estoque e cobertura: pausa todas as campanhas de SKU
-    // com 0/1 unidade e cria ou reativa uma AUTO para cada novo SKU com >=2.
+    // Ciclo único de catálogo/Ads: produtos inativos saem da gestão e ficam
+    // pausados; SKUs ativos com estoque recebem cobertura AUTO, respeitando o
+    // limite global de no máximo cinco novas campanhas por dia.
     if (dailyDue('stock_campaign_coverage')) {
-      add('ensureActiveProductCampaignCoverage', 'stock_campaign_coverage', {
-        dry_run: false, max_products: 500, lookback_days: 65,
+      add('reconcileDailyActiveSkuAds', 'stock_campaign_coverage', {
+        dry_run: false, pause_inactive: true, max_new_campaigns: 5,
       }, true);
     } else skipped.push('stock_campaign_coverage');
 
@@ -242,9 +243,10 @@ Deno.serve(async (req) => {
     if (dailyDue('audit_auto_manual_competition')) add('auditAutoManualCompetition', 'audit_auto_manual_competition', { trigger_type: 'automatic' }, true);
     else skipped.push('audit_auto_manual_competition');
 
-    // Expansão de cobertura: sempre — cria campanhas canônicas para ASINs elegíveis
-    if (dailyDue('expand_coverage_auto')) add('expandCoverageForAsin', 'expand_coverage_auto', { trigger_type: 'automatic', max_campaigns: 30 }, true);
-    else skipped.push('expand_coverage_auto');
+    // A cobertura AUTO já é executada no ciclo único acima. Manter uma segunda
+    // expansão diária causaria duplicidade de chamadas e poderia violar o teto
+    // de cinco novas campanhas.
+    skipped.push('expand_coverage_auto');
 
     // 1x/dia: Auditoria de divergência de budget — ativa KillSwitch se delta > 5%
     const budgetAuditDone = await wasRunTodaySuccessfully(base44, aid, 'audit_budget_divergence');
@@ -279,7 +281,7 @@ Deno.serve(async (req) => {
     else skipped.push('reactivate_paused_with_stock');
 
     // Sempre: criar campanhas MANUAL EXACT para winners do TermBank (1 campanha por termo)
-    if (dailyDue('term_bank_to_campaigns')) add('runTermBankToCampaigns', 'term_bank_to_campaigns', { max_per_run: 10, max_per_asin: 5 }, true);
+    if (dailyDue('term_bank_to_campaigns')) add('runTermBankToCampaigns', 'term_bank_to_campaigns', { max_per_run: 5, max_per_asin: 5 }, true);
     else skipped.push('term_bank_to_campaigns');
 
     // Ultima acao de Ads: restaura e confirma remotamente o piso depois dos
@@ -394,4 +396,3 @@ Deno.serve(async (req) => {
     return Response.json({ ok: false, error: error?.message, duration_ms: Date.now() - t0 }, { status: 500 });
   }
 });
-
