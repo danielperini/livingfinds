@@ -39,7 +39,7 @@ export default async function handler(req: Request): Promise<Response> {
     const perf = settings[0] || {};
 
     const dailyCap = goal(perf.daily_budget_limit);
-    const minBudget = goal(perf.minimum_campaign_budget);
+    const minBudget = Math.max(15, goal(perf.minimum_campaign_budget) || 15);
     const now = new Date().toISOString();
     const todayBRT = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
     const results: any = { budgets: null, placements: null, controller: null, validation: null };
