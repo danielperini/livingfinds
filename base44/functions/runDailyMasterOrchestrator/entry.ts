@@ -1,4 +1,8 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
+import {
+  logTokenPrecheckFailure,
+  runAmazonAdsTokenPrecheck,
+} from '../../shared/amazonAdsTokenPrecheck.ts';
 
 /**
  * runDailyMasterOrchestrator v5
@@ -13,6 +17,12 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
 function todayBRT() { return new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10); }
 function nowIso() { return new Date().toISOString(); }
+function brtHour(now = new Date()): number {
+  const hour = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false,
+  }).format(now);
+  return Number(hour) % 24;
+}
 
 async function wasRunTodaySuccessfully(base44: any, aid: string, operation: string): Promise<boolean> {
   try {
@@ -58,33 +68,68 @@ Deno.serve(async (req) => {
     const today = todayBRT();
 
     // ── Resolver conta ────────────────────────────────────────────────────
-    const accounts = await base44.asServiceRole.entities.AmazonAccount.filter(
-      { status: 'connected' }, '-updated_date', 1
-    ).catch(() => []);
-    const account = accounts[0];
-    if (!account) return Response.json({ ok: false, error: 'Nenhuma conta conectada' });
+    let account: any = null;
+    if (body.amazon_account_id) {
+      const accounts = await base44.asServiceRole.entities.AmazonAccount.filter(
+        { id: String(body.amazon_account_id) }, '-updated_date', 1,
+      ).catch(() => []);
+      account = accounts[0] || null;
+    } else {
+      const accounts = await base44.asServiceRole.entities.AmazonAccount.list('-updated_date', 50).catch(() => []);
+      account = accounts.find((item: any) => item.status === 'connected')
+        || accounts.find((item: any) => item.ads_refresh_token)
+        || accounts[0]
+        || null;
+    }
+    if (!account) return Response.json({ ok: false, error: 'Nenhuma conta Amazon encontrada' }, { status: 400 });
     const aid = account.id;
     const bp = { amazon_account_id: aid, _service_role: true };
 
-    // Guard global: já rodou hoje com sucesso?
-    if (!force) {
-      const alreadyRan = await wasRunTodaySuccessfully(base44, aid, 'daily_master_orchestrator');
-      if (alreadyRan) {
-        return Response.json({ ok: true, skipped: true, reason: 'already_ran_today', date: today });
-      }
+    const tokenPrecheck = await runAmazonAdsTokenPrecheck(base44, aid, 'runDailyMasterOrchestrator');
+    if (!tokenPrecheck.ok) {
+      const tokenSummary = {
+        ok: false,
+        error_type: tokenPrecheck.details?.error_type || null,
+        amazon_error_code: tokenPrecheck.details?.amazon_error_code || null,
+        status_code: tokenPrecheck.details?.status_code || null,
+        requires_reauthorization: tokenPrecheck.details?.requires_reauthorization === true,
+      };
+      await logTokenPrecheckFailure(base44, {
+        accountId: aid,
+        operation: 'daily_master_orchestrator',
+        triggerType: body._service_role ? 'automatic' : 'manual',
+        startedAt,
+        startedMs: t0,
+        error: tokenPrecheck.error!,
+        details: tokenSummary,
+      });
+      return Response.json({
+        ok: false,
+        orchestrator: 'daily_master_v5',
+        account_id: aid,
+        error: tokenPrecheck.error,
+        error_message: tokenPrecheck.error,
+        token_precheck: tokenSummary,
+        dispatched: 0,
+        tasks: [],
+      }, { status: tokenPrecheck.httpStatus });
     }
+
+    // Não há guard global diário aqui. O orquestrador pode ser chamado muitas
+    // vezes ao dia: as etapas caras já têm TTL próprio abaixo, enquanto o motor
+    // de decisão e o executor precisam continuar consumindo a fila entre os
+    // ciclos para que uma decisão recém-criada não fique parada até amanhã.
 
     // ── Verificar estado de cada etapa em paralelo ────────────────────────
     const [
       catalogDone, salesDone, allJobsExist,
-      campStateDone, productAdsDone, invDone, manualTermsDone,
+      campStateDone, invDone, manualTermsDone,
       eval72hDone, backupDone, acosCheckerDone,
     ] = await Promise.all([
       wasRunTodaySuccessfully(base44, aid, 'sync_catalog'),
       wasRunTodaySuccessfully(base44, aid, 'sync_sales'),
       hasValidReportJobsToday(base44, aid),
       wasRunTodaySuccessfully(base44, aid, 'sync_campaign_states'),
-      wasRunTodaySuccessfully(base44, aid, 'sku_campaign_daily_analysis'),
       wasRunTodaySuccessfully(base44, aid, 'inventory_kickoff'),
       wasRunTodaySuccessfully(base44, aid, 'manual_campaign_terms'),
       wasRunTodaySuccessfully(base44, aid, 'evaluate_new_campaigns_72h'),
@@ -100,6 +145,13 @@ Deno.serve(async (req) => {
       { amazon_account_id: aid }, '-created_date', 10
     ).catch(() => []);
     const hasPending = pendingJobs.some((j: any) => ['pending', 'processing'].includes(j.status));
+    const successfulToday = await base44.asServiceRole.entities.SyncExecutionLog.filter(
+      { amazon_account_id: aid, execution_date: today, status: 'success' }, '-started_at', 500
+    ).catch(() => []);
+    const successfulLabels = new Set(successfulToday.map((row: any) => String(row.operation || '')));
+    const dailyDue = (label: string) => force || !successfulLabels.has(label);
+    const aiDailyDue = dailyDue('daily_ai_ads_analysis') &&
+      (brtHour() >= 10 || body.daily_ai_force === true);
 
     // ── Montar fila (sem janelas horárias — apenas TTL diário) ────────────
     type Task = { fn: string; payload: object; label: string; ttl?: boolean };
@@ -133,19 +185,17 @@ Deno.serve(async (req) => {
       add('syncAdGroupsAndKeywords', 'sync_ad_groups_keywords');
     } else skipped.push('sync_campaign_states');
 
-    // A sincronização percorre todas as páginas de Product Ads e grava a análise por SKU.
-    if (!productAdsDone || force) add('syncProductAds', 'sku_campaign_daily_analysis', { trigger_type: 'scheduled_daily' });
-    else skipped.push('sku_campaign_daily_analysis');
-
     // 1x/dia: inventário
     if (!invDone || force) add('checkInventoryChangesAndKickoff', 'inventory_kickoff', {}, true);
     else skipped.push('inventory_kickoff');
 
     // Politica canonica de estoque e cobertura: pausa todas as campanhas de SKU
     // com 0/1 unidade e cria ou reativa uma AUTO para cada novo SKU com >=2.
-    add('ensureActiveProductCampaignCoverage', 'stock_campaign_coverage', {
-      dry_run: false, max_products: 500, lookback_days: 65,
-    });
+    if (dailyDue('stock_campaign_coverage')) {
+      add('ensureActiveProductCampaignCoverage', 'stock_campaign_coverage', {
+        dry_run: false, max_products: 500, lookback_days: 65,
+      }, true);
+    } else skipped.push('stock_campaign_coverage');
 
     // Sempre: motor de decisão + execução (idempotentes)
     add('runUnifiedDecisionEngine', 'decision_engine');
@@ -162,28 +212,39 @@ Deno.serve(async (req) => {
     if (!eval72hDone || force) add('evaluateNewCampaigns72h', 'evaluate_new_campaigns_72h', {}, true);
     else skipped.push('evaluate_new_campaigns_72h');
 
-    // Promoção de search terms vencedores AUTO → MANUAL EXACT + Cross-ASIN
-    // Executado após sync de relatórios e estados de campanha (idempotente)
-    add('promoteWinningSearchTerms', 'promote_winning_terms');
+    if (aiDailyDue) add('runDailyAiAdsAnalysis', 'daily_ai_ads_analysis', {
+      model: body.daily_ai_model || undefined,
+    }, true);
+    else skipped.push('daily_ai_ads_analysis');
+
+    // Promoção de search terms vencedores AUTO → MANUAL EXACT + Cross-ASIN.
+    // A análise é diária; a execução continua protegida pela evidência same-SKU.
+    if (dailyDue('promote_winning_terms')) add('promoteWinningSearchTerms', 'promote_winning_terms', {}, true);
+    else skipped.push('promote_winning_terms');
 
     // Negative Product Target Guard: bloqueia ASINs concorrentes com clicks sem conversão
     // Executado após promoção de termos — age imediatamente na API da Amazon
-    add('runNegativeProductTargetGuard', 'negative_product_target_guard');
+    if (dailyDue('negative_product_target_guard')) add('runNegativeProductTargetGuard', 'negative_product_target_guard', {}, true);
+    else skipped.push('negative_product_target_guard');
 
     // Bids iniciais: idempotente, só processa pendentes
-    add('applyInitialBidsToAllCampaigns', 'apply_initial_bids', { batch_size: 10 });
+    if (dailyDue('apply_initial_bids')) add('applyInitialBidsToAllCampaigns', 'apply_initial_bids', { batch_size: 10 }, true);
+    else skipped.push('apply_initial_bids');
 
     // Confirmação pós-execução: verifica se a Amazon aplicou os valores (sempre — leve)
     add('confirmExecutedDecisions', 'confirm_decisions');
 
     // Auditoria de estados de campanha: valida divergências locais vs Amazon
-    add('auditCampaignStateSync', 'audit_campaign_states');
+    if (dailyDue('audit_campaign_states')) add('auditCampaignStateSync', 'audit_campaign_states', {}, true);
+    else skipped.push('audit_campaign_states');
 
     // Auditoria de competição AUTO vs MANUAL: sempre — detecta colisões e negativa fire-and-forget
-    add('auditAutoManualCompetition', 'audit_auto_manual_competition', { trigger_type: 'automatic' });
+    if (dailyDue('audit_auto_manual_competition')) add('auditAutoManualCompetition', 'audit_auto_manual_competition', { trigger_type: 'automatic' }, true);
+    else skipped.push('audit_auto_manual_competition');
 
-    // Promoção manual ocorre somente pelo TermBank, com duas vendas verificadas do mesmo SKU.
-    // O antigo expandCoverageForAsin aceitava sugestões sem conversão comprovada e foi retirado do ciclo.
+    // Expansão de cobertura: sempre — cria campanhas canônicas para ASINs elegíveis
+    if (dailyDue('expand_coverage_auto')) add('expandCoverageForAsin', 'expand_coverage_auto', { trigger_type: 'automatic', max_campaigns: 30 }, true);
+    else skipped.push('expand_coverage_auto');
 
     // 1x/dia: Auditoria de divergência de budget — ativa KillSwitch se delta > 5%
     const budgetAuditDone = await wasRunTodaySuccessfully(base44, aid, 'audit_budget_divergence');
@@ -196,34 +257,41 @@ Deno.serve(async (req) => {
     else skipped.push('profit_bid_reduction');
 
     // Sempre: motor de proteção de rentabilidade — pausa ASINs com lucro pós-Ads negativo (atua 1 dia após redução de bids)
-    add('runProfitAfterAdsPauseGuard', 'profit_after_ads_pause_guard');
+    if (dailyDue('profit_after_ads_pause_guard')) add('runProfitAfterAdsPauseGuard', 'profit_after_ads_pause_guard', {}, true);
+    else skipped.push('profit_after_ads_pause_guard');
 
     // 1x/semana (segunda-feira): ACoS Violation Checker
     if (isMonday && (!acosCheckerDone || force)) add('runAcosViolationChecker', 'acos_violation_checker', {}, true);
     else skipped.push('acos_violation_checker');
 
     // Sempre: deduplicar e reescandar jobs travados da fila de kick-off
-    add('rescheduleStaleKickoffJobs', 'kickoff_queue_reschedule');
+    if (dailyDue('kickoff_queue_reschedule')) add('rescheduleStaleKickoffJobs', 'kickoff_queue_reschedule', {}, true);
+    else skipped.push('kickoff_queue_reschedule');
 
     // Reparo de campanhas incompletas: sempre — idempotente, só processa pendentes
-    add('repairIncompleteAutoCampaigns', 'repair_incomplete_auto', { _window_execution: true });
-    add('repairIncompleteManualExactCampaigns', 'repair_incomplete_manual_exact', { target: 'manual_only' });
+    if (dailyDue('repair_incomplete_auto')) add('repairIncompleteAutoCampaigns', 'repair_incomplete_auto', { _window_execution: true }, true);
+    else skipped.push('repair_incomplete_auto');
+    if (dailyDue('repair_incomplete_manual_exact')) add('repairIncompleteManualExactCampaigns', 'repair_incomplete_manual_exact', { target: 'manual_only' }, true);
+    else skipped.push('repair_incomplete_manual_exact');
 
     // Sempre: reativar campanhas AUTO pausadas com estoque + reparar incompletas
-    add('reactivatePausedWithStock', 'reactivate_paused_with_stock', { targeting_type_filter: 'AUTO', include_incomplete: true });
-    add('repairIncompleteAutoCampaigns', 'repair_incomplete_auto');
-    add('repairIncompleteManualExactCampaigns', 'repair_incomplete_manual_exact');
+    if (dailyDue('reactivate_paused_with_stock')) add('reactivatePausedWithStock', 'reactivate_paused_with_stock', { targeting_type_filter: 'AUTO', include_incomplete: true }, true);
+    else skipped.push('reactivate_paused_with_stock');
 
     // Sempre: criar campanhas MANUAL EXACT para winners do TermBank (1 campanha por termo)
-    add('runTermBankToCampaigns', 'term_bank_to_campaigns', { max_per_run: 10, max_per_asin: 5 });
+    if (dailyDue('term_bank_to_campaigns')) add('runTermBankToCampaigns', 'term_bank_to_campaigns', { max_per_run: 10, max_per_asin: 5 }, true);
+    else skipped.push('term_bank_to_campaigns');
 
     // Ultima acao de Ads: restaura e confirma remotamente o piso depois dos
     // guardrails, motores de lucro e reparos que podem alterar estados.
-    add('ensureSkuCampaignFloor', 'sku_campaign_floor_final', { manual_floor: 0 });
-    // Trava final: reduz qualquer excesso ao teto salvo em Configurações.
-    add('bulkSetAllBids', 'amazon_bid_ceiling_final');
-    // O estado local nao e prova de ativacao; confirmar novamente na Amazon.
-    add('verifyRemoteSkuCampaignFloor', 'sku_campaign_floor_remote_verification', { manual_floor: 0 });
+    if (dailyDue('sku_campaign_floor_final')) add('ensureSkuCampaignFloor', 'sku_campaign_floor_final', { manual_floor: 5 }, true);
+    else skipped.push('sku_campaign_floor_final');
+    // Trava final diária: reduz qualquer excesso ao teto salvo em Configurações.
+    if (dailyDue('amazon_bid_ceiling_final')) add('bulkSetAllBids', 'amazon_bid_ceiling_final', {}, true);
+    else skipped.push('amazon_bid_ceiling_final');
+    // O estado local não é prova de ativação; confirmar novamente na Amazon.
+    if (dailyDue('sku_campaign_floor_remote_verification')) add('verifyRemoteSkuCampaignFloor', 'sku_campaign_floor_remote_verification', { manual_floor: 5 }, true);
+    else skipped.push('sku_campaign_floor_remote_verification');
 
     // 1x/dia: backup
     if (!backupDone || force) add('runBackupToDrive', 'daily_backup', { backup_type: 'daily_incremental' }, true);
@@ -235,11 +303,15 @@ Deno.serve(async (req) => {
     const TTL_LABELS = new Set(queue.filter(t => t.ttl).map(t => t.label));
 
     (async () => {
+      // O motor de decisão materializa registros em OptimizationDecision. Executá-lo
+      // em paralelo com o consumidor da fila causava uma corrida: o consumidor era
+      // chamado antes de existirem decisões aprovadas e elas só seriam consideradas
+      // no próximo ciclo. Estes dois passos precisam manter a ordem causal.
+      const dependencyCriticalLabels = new Set(['decision_engine', 'execute_decisions']);
       for (let i = 0; i < queue.length; i++) {
         const t = queue[i];
         if (i > 0) await new Promise(r => setTimeout(r, 800)); // cadência mínima
-        base44.asServiceRole.functions.invoke(t.fn, t.payload)
-          .then(async (res: any) => {
+        const handleResult = async (res: any) => {
             const data = res?.data || res || {};
             const ok = data?.ok !== false && !data?.error;
             if (!ok) {
@@ -256,14 +328,33 @@ Deno.serve(async (req) => {
                 execution_date: today, started_at: nowIso(), completed_at: nowIso(),
               }).catch(() => {});
             }
+          };
+        const handleFailure = async (e: any) => {
+          await base44.asServiceRole.entities.SyncExecutionLog.create({
+            amazon_account_id: aid, operation: `orchestrator:fail:${t.label}`,
+            trigger_type: 'automatic', status: 'error',
+            execution_date: today, started_at: nowIso(), completed_at: nowIso(),
+            error_message: (e?.message || 'invoke failed').slice(0, 300),
+          }).catch(() => {});
+        };
+
+        if (dependencyCriticalLabels.has(t.label)) {
+          try {
+            // Await apenas a cadeia motor → executor; as outras tarefas continuam
+            // assíncronas para preservar a resposta rápida do orquestrador.
+            await handleResult(await base44.asServiceRole.functions.invoke(t.fn, t.payload));
+          } catch (e: any) {
+            await handleFailure(e);
+          }
+          continue;
+        }
+
+        base44.asServiceRole.functions.invoke(t.fn, t.payload)
+          .then(async (res: any) => {
+            await handleResult(res);
           })
           .catch(async (e: any) => {
-            await base44.asServiceRole.entities.SyncExecutionLog.create({
-              amazon_account_id: aid, operation: `orchestrator:fail:${t.label}`,
-              trigger_type: 'automatic', status: 'error',
-              execution_date: today, started_at: nowIso(), completed_at: nowIso(),
-              error_message: (e?.message || 'invoke failed').slice(0, 300),
-            }).catch(() => {});
+            await handleFailure(e);
           });
       }
     })();
@@ -303,3 +394,4 @@ Deno.serve(async (req) => {
     return Response.json({ ok: false, error: error?.message, duration_ms: Date.now() - t0 }, { status: 500 });
   }
 });
+

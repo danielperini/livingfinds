@@ -1,19 +1,36 @@
 # Ciclo do motor unificado via GitHub Actions
 
-O motor está na fase `full` (autonomia total). Este ciclo deve ser agendado no repositório
-onde o backend externo é implantado. Crie manualmente o arquivo
-`.github/workflows/unified-engine-cycle.yml` com o conteúdo abaixo — o app Base44 não tem
-permissão para gravar arquivos em `.github/workflows/`.
+O motor está na fase `full` (autonomia total). O ciclo está versionado em
+`.github/workflows/unified-engine-cycle.yml` no mesmo repositório em que o backend externo
+é implantado.
 
-Horários: 06:00 BRT (09:00 UTC) e 20:00 BRT (23:00 UTC).
+Cadência: a cada 3 horas. O cron do GitHub Actions usa UTC; no horário de
+Brasília, os ciclos ocorrem às 00h, 03h, 06h, 09h, 12h, 15h, 18h e 21h.
+
+Além do ciclo operacional, existe uma execução diária separada às 13:00 UTC
+(10:00 BRT): `runDailyAiAdsAnalysis`. Ela lê os relatórios já sincronizados,
+monta um conjunto compacto de evidências, consulta o modelo configurado em
+`OPENAI_MODEL` (padrão econômico `gpt-4o-mini`) e grava recomendações na fila
+de decisões. A rotina é idempotente por conta/data e não dispara uma segunda
+análise no mesmo dia.
+
+Guardrails da análise diária:
+
+- reduções de bid têm piso, teto e passo máximo;
+- aumentos de bid exigem conversão, ACoS compatível e confiança mínima de 80%;
+- redistribuição de orçamento não aumenta o teto diário da conta;
+- termo irrelevante com gasto e zero venda pode virar negativo exato;
+- criação de campanha manual exige conversão atribuída ao mesmo SKU;
+- pausa de campanha fica em revisão manual e só é válida como último recurso;
+- decisões de baixo risco são aprovadas para `executeApprovedDecisionQueue`,
+  enquanto criação, expansão de budget e pausa ficam pendentes de revisão.
 
 ```yaml
 name: Ciclo do motor unificado (fase full)
 
 on:
   schedule:
-    - cron: '0 9 * * *'
-    - cron: '0 23 * * *'
+    - cron: '0 */3 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -59,6 +76,7 @@ jobs:
               fi
 
               docker compose -f server/docker-compose.yml exec -T app deno eval '
+                const TOKEN_REVOKED = "ADS_TOKEN_REVOKED_REAUTH_REQUIRED";
                 const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
                 const call = async (name, payload) => {
                   const response = await fetch("http://127.0.0.1:8000/functions/" + name, {
@@ -68,11 +86,23 @@ jobs:
                   });
                   const data = await response.json().catch(() => ({}));
                   console.log(name.toUpperCase() + "_HTTP=" + response.status + "|OK=" + data.ok + "|DATA=" + JSON.stringify(data).slice(0, 20000));
-                  if (!response.ok || data.ok === false) throw new Error(data.error || ("Falha em " + name));
+                  const operationalError = String(data.error_message || data.error || "");
+                  if (operationalError === TOKEN_REVOKED) {
+                    console.error(TOKEN_REVOKED + ": ciclo abortado antes das demais funções.");
+                    throw new Error(TOKEN_REVOKED);
+                  }
+                  if (!response.ok || data.ok === false) throw new Error(operationalError || ("Falha em " + name));
                   return data;
                 };
 
                 const common = { _service_role: true, dry_run: false, trigger_type: "github_actions_unified_engine_cycle" };
+
+                await call("refreshAmazonAdsTokenDailyOrHourly", {
+                  _service_role: true,
+                  force: true,
+                  precheck_operation: "unified_engine_cycle",
+                  trigger_type: "github_actions_unified_engine_token_precheck",
+                });
 
                 await call("classifyMarketplaceCampaignJourneys", common);
                 await call("reactivatePausedWithStock", common);
@@ -128,5 +158,37 @@ Guardrails mantidos: `max_bid` R$1,80, `daily_budget_limit` R$125,
 
 ## Pré-requisito crítico
 
-O token da Amazon Ads está com status `revoked`. Enquanto ele não for reconectado em
-Configurações, o motor decide e registra as ações, mas **não escreve na Amazon**.
+Antes de qualquer função decisória, o workflow força uma tentativa de renovação do token.
+Se a Amazon ainda retornar `invalid_grant`, `unauthorized_client`, 401 ou 403, o job encerra
+com código diferente de zero e `ADS_TOKEN_REVOKED_REAUTH_REQUIRED`; nenhuma nova decisão é
+enfileirada. Depois da reautorização em Configurações, a próxima pré-checagem resolve o alerta
+operacional automaticamente e o ciclo volta a prosseguir.
+
+## Análise diária de Ads com IA
+
+Às 10:00 BRT (`0 13 * * *` em UTC), o workflow chama `runDailyAiAdsAnalysis` uma vez por conta.
+Antes de analisar, a função atualiza os relatórios do dia; se a atualização falhar, nenhuma decisão
+é criada com dados antigos. A análise envia ao GPT apenas um conjunto compacto de evidências e inclui
+a distribuição de orçamento das campanhas ativas, participação de cada budget, campanhas sem gasto,
+vencedoras e campanhas acima do ACoS máximo.
+
+As propostas respeitam os limites determinísticos: bid mínimo/máximo, variação máxima, teto diário,
+confiança mínima de 80%, aumento de budget sem ultrapassar o teto e pausa somente como último recurso.
+Reduções de bid e negativas de baixo risco podem ser executadas automaticamente; criação de campanha,
+aumento de budget e pausa ficam em revisão manual. Decisões aprovadas de baixo risco são executadas e
+depois confirmadas pela Amazon no ciclo seguinte.
+
+Para reduzir CPU e picos de chamadas, a rotina lê campanhas, keywords, termos, métricas e economia
+em páginas de até 400 registros, com intervalo de 250 ms entre páginas. As decisões automáticas são
+enviadas à Amazon em lotes de até 5, com intervalo de 800 ms, e a confirmação ocorre somente depois
+do último lote.
+
+### Política fixa de risco do supervisor
+
+`AUTONOMOUS_ADS_RISK_POLICY` fica no backend e não é editável pela IA: confiança mínima calibrada de
+80%, aumento de bid limitado a 10%/24h, redução limitada a 20%/24h e nenhuma elevação automática de
+budget. São permitidas no máximo 5 novas campanhas por dia, com budget máximo de R$20 por campanha;
+criação em massa e pausa automática permanecem desativadas. Aumento de bid exige conversão, margem
+ou lucro pós-Ads positivo, estoque e cap de gasto disponível. Reduções não podem ser motivadas apenas
+pela diferença entre ontem e hoje: exigem pelo menos dois dias de evidência.
+
