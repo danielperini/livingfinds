@@ -441,8 +441,20 @@ async function persistProposal(base44: any, accountId: string, candidate: DailyA
 Deno.serve(async (request) => {
   const startedAt = nowIso();
   const startedMs = Date.now();
+  let lockClient: any = null;
+  let dailyRunLock: any = null;
+  const finishDailyRunLock = async (status: string, details: any = {}) => {
+    if (!lockClient || !dailyRunLock?.id) return;
+    await lockClient.asServiceRole.entities.SyncExecutionLog.update(dailyRunLock.id, {
+      status,
+      completed_at: nowIso(),
+      duration_ms: Date.now() - startedMs,
+      result_summary: JSON.stringify(details).slice(0, 4000),
+    }).catch(() => null);
+  };
   try {
     const base44 = createClientFromRequest(request);
+    lockClient = base44;
     const body = await request.json().catch(() => ({}));
     const authenticated = await base44.auth.isAuthenticated().catch(() => false);
     if (!authenticated && !body._service_role) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
@@ -460,8 +472,30 @@ Deno.serve(async (request) => {
     }, '-started_at', 1).catch(() => []);
     if (prior.length && body.force !== true) return Response.json({ ok: true, skipped: true, reason: 'already_completed_today', date });
 
+    // Durable daily lock: do not load reports, keywords or metrics twice for the same account/day.
+    const running = await base44.asServiceRole.entities.SyncExecutionLog.filter({
+      [ACCOUNT_ID]: accountId, operation: 'daily_ai_ads_analysis', execution_date: date, status: 'started',
+    }, '-started_at', 5).catch(() => []);
+    const freshRunning = running.find((row: any) => {
+      const started = new Date(String(value(row, 'started_at', ''))).getTime();
+      return Number.isFinite(started) && Date.now() - started < 6 * 60 * 60 * 1000;
+    });
+    if (freshRunning) return Response.json({ ok: true, skipped: true, reason: 'already_running', date, lock_id: freshRunning.id });
+
+    dailyRunLock = await base44.asServiceRole.entities.SyncExecutionLog.create({
+      [ACCOUNT_ID]: accountId,
+      operation: 'daily_ai_ads_analysis',
+      trigger_type: body._service_role ? 'automatic' : 'manual',
+      status: 'started',
+      execution_date: date,
+      started_at: startedAt,
+      idempotency_key: `daily_ai_ads_analysis|${accountId}|${date}`,
+      source_function: 'runDailyAiAdsAnalysis',
+      message: 'Daily AI analysis lock acquired before report and metric reads.',
+    }).catch(() => null);
+
     const precheck = await runAmazonAdsTokenPrecheck(base44, accountId, 'runDailyAiAdsAnalysis');
-    if (!precheck.ok) return Response.json({ ok: false, error: precheck.error, token_precheck: precheck.details }, { status: precheck.httpStatus });
+    if (!precheck.ok) { await finishDailyRunLock('failed', { error: precheck.error }); return Response.json({ ok: false, error: precheck.error, token_precheck: precheck.details }, { status: precheck.httpStatus }); }
 
     // A análise diária só pode propor mudanças com os relatórios fechados e a
     // sincronização intradiária atualizados. Se a atualização falhar, não cria
@@ -474,6 +508,7 @@ Deno.serve(async (request) => {
     }).catch((error: any) => ({ ok: false, error: error?.response?.data?.error || error?.message || String(error) }));
     const reportSync = reportSyncRaw?.data || reportSyncRaw || {};
     if (reportSync.ok === false) {
+      await finishDailyRunLock('failed', { error: 'RELATORIOS_NAO_ATUALIZADOS', report_sync: reportSync });
       return Response.json({ ok: false, error: 'RELATORIOS_NAO_ATUALIZADOS', report_sync: reportSync }, { status: 503 });
     }
 
@@ -581,7 +616,7 @@ Deno.serve(async (request) => {
     };
 
     const apiKey = Deno.env.get('OPENAI_API_KEY') || '';
-    if (!apiKey) return Response.json({ ok: false, error: 'OPENAI_API_KEY ausente', ai_unavailable: true }, { status: 503 });
+    if (!apiKey) { await finishDailyRunLock('failed', { error: 'OPENAI_API_KEY ausente' }); return Response.json({ ok: false, error: 'OPENAI_API_KEY ausente', ai_unavailable: true }, { status: 503 }); }
     const model = Deno.env.get('OPENAI_MODEL') || String(body.model || 'gpt-4o-mini');
     const ai = await callOpenAi(apiKey, model, evidence);
     const recommendations = Array.isArray(ai?.recommendations) ? ai.recommendations : [];
@@ -632,8 +667,10 @@ Deno.serve(async (request) => {
         const current = Number(candidate.daily_budget || 0);
         const proposed = Number(checked.normalized.proposed_value || 0);
         const delta = Math.max(0, proposed - current);
-        if (budgetPlan.totalBudget + plannedBudgetIncrease + delta > settings.dailyBudgetCap) {
-          rejected.push({ entity_id: candidate.entity_id, reason: 'DAILY_BUDGET_CAP_REACHED' });
+        // Campaign budgets are nominal Amazon limits. Only realized account spend
+        // is capped here; the kill-switch/controller remains the enforcement owner.
+        if (metricSummary.totals.spend >= settings.dailyBudgetCap) {
+          rejected.push({ entity_id: candidate.entity_id, reason: 'ACCOUNT_SPEND_CAP_REACHED' });
           continue;
         }
         plannedBudgetIncrease += delta;
@@ -674,18 +711,29 @@ Deno.serve(async (request) => {
         }).then((result: any) => result?.data || result || {})
           .catch((error: any) => ({ ok: false, error: error?.response?.data?.error || error?.message || String(error) }));
 
-    await base44.asServiceRole.entities.SyncExecutionLog.create({
-      [ACCOUNT_ID]: accountId,
-      operation: 'daily_ai_ads_analysis',
-      trigger_type: body._service_role ? 'automatic' : 'manual',
-      status: 'success',
-      execution_date: date,
-      started_at: startedAt,
-      completed_at: nowIso(),
-      duration_ms: Date.now() - startedMs,
-      records_processed: persisted.length,
-      result_summary: JSON.stringify({ model, report_sync: reportSync, candidates: candidates.length, recommendations: recommendations.length, persisted: persisted.length, rejected: rejected.length, execution, confirmation, budget_plan: budgetPlan }).slice(0, 4000),
-    }).catch(() => {});
+    const completedSummary = { model, report_sync: reportSync, candidates: candidates.length, recommendations: recommendations.length, persisted: persisted.length, rejected: rejected.length, execution, confirmation, budget_plan: budgetPlan };
+    if (dailyRunLock?.id) {
+      await base44.asServiceRole.entities.SyncExecutionLog.update(dailyRunLock.id, {
+        status: 'success',
+        completed_at: nowIso(),
+        duration_ms: Date.now() - startedMs,
+        records_processed: persisted.length,
+        result_summary: JSON.stringify(completedSummary).slice(0, 4000),
+      }).catch(() => null);
+    } else {
+      await base44.asServiceRole.entities.SyncExecutionLog.create({
+        [ACCOUNT_ID]: accountId,
+        operation: 'daily_ai_ads_analysis',
+        trigger_type: body._service_role ? 'automatic' : 'manual',
+        status: 'success',
+        execution_date: date,
+        started_at: startedAt,
+        completed_at: nowIso(),
+        duration_ms: Date.now() - startedMs,
+        records_processed: persisted.length,
+        result_summary: JSON.stringify(completedSummary).slice(0, 4000),
+      }).catch(() => {});
+    }
 
     return Response.json({
       ok: true,
@@ -722,6 +770,7 @@ Deno.serve(async (request) => {
       proposals: persisted,
     });
   } catch (error: any) {
+    await finishDailyRunLock('failed', { error: error?.message || String(error) });
     return Response.json({ ok: false, error: error?.message || 'Falha na análise diária de IA' }, { status: 500 });
   }
 });

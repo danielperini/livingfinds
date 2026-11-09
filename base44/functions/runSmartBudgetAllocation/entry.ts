@@ -1,4 +1,4 @@
-import {nominalBudgetExceedsLimit,campaignBudgetPolicy} from '../../shared/campaignBudgetPolicy.ts';
+import {campaignBudgetPolicy} from '../../shared/campaignBudgetPolicy.ts';
 /**
  * runSmartBudgetAllocation — Motor de redistribuição inteligente de budget diário
  *
@@ -10,10 +10,10 @@ import {nominalBudgetExceedsLimit,campaignBudgetPolicy} from '../../shared/campa
  *     - BLEEDING  : ACoS > break_even_acos OU sem vendas com gasto → budget reduz ao mínimo (R$5)
  *     - NEW       : < 72h de vida (created_by_app) → imune, mantido
  *
- *  2. Garante que a SOMA total dos budgets não ultrapasse o daily_budget_limit de PerformanceSettings
- *     (hard cap de conta). Se ultrapassar, escala todos proporcionalmente.
+ *  2. Mantém budgets nominais de campanha independentes do teto de gasto da conta.
+ *     O gasto efetivo é limitado por AccountDailySpendController/kill-switch.
  *
- *  3. Aplica o guardrail de ±20% máximo por ciclo e respeita min_budget=R$5.
+ *  3. Aplica o guardrail de ±20% máximo por ciclo e respeita min_budget=R$15.
  *
  *  4. Envia para Amazon Ads API via adjustCampaignBudgets e grava histórico no SyncExecutionLog.
  *
@@ -130,7 +130,7 @@ Deno.serve(async (req) => {
     const TARGET_ACOS    = Number(perf.target_acos || 15);
     const BREAK_EVEN_ACOS = Number(perf.max_acos || TARGET_ACOS * 2);
     const ACCOUNT_BUDGET_CAP = Number(perf.daily_budget_limit || 70); // hard cap da conta
-    const MIN_CAMPAIGN_BUDGET = Number(perf.minimum_campaign_budget || 5);
+    const MIN_CAMPAIGN_BUDGET = Math.max(15, Number(perf.minimum_campaign_budget || 15));
     const MAX_CAMPAIGN_BUDGET = campaignBudgetPolicy(perf).maximumCampaignBudget; // teto por campanha para evitar concentração excessiva
 
     // ── Filtrar campanhas ativas ────────────────────────────────────
@@ -189,17 +189,8 @@ Deno.serve(async (req) => {
       });
     }
 
-    // ── Hard cap de conta: escalar se soma > ACCOUNT_BUDGET_CAP ───
-    const totalNewBudget = decisions.reduce((s, d) => s + d.new_budget, 0);
-    if (nominalBudgetExceedsLimit(perf,ACCOUNT_BUDGET_CAP,totalNewBudget)) {
-      const scale = ACCOUNT_BUDGET_CAP / totalNewBudget;
-      for (const d of decisions) {
-        d.new_budget = r2(Math.max(MIN_CAMPAIGN_BUDGET, d.new_budget * scale));
-        d.scaled_down = true;
-        d.change_pct = r2(((d.new_budget - d.current_budget) / Math.max(d.current_budget, 0.01)) * 100);
-        d.will_change = Math.abs(d.new_budget - d.current_budget) >= 0.01;
-      }
-    }
+    // O teto de R$100/dia limita gasto efetivo, não a soma dos budgets nominais.
+    // Não escalar budgets só porque a soma configurada ultrapassa o teto da conta.
 
     // Apenas campanhas que realmente mudam (excluir imunes e sem alteração)
     const toAdjust = decisions.filter(d => d.will_change && !['HOLD', 'NEW'].includes(d.tier) && !d.is_protected);

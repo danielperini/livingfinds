@@ -1,4 +1,4 @@
-import {nominalBudgetHeadroom} from '../../shared/campaignBudgetPolicy.ts';
+
 /**
  * calculateDailyBudgetAllocation — Motor Oficial de Orçamento v2
  *
@@ -115,7 +115,7 @@ Deno.serve(async (req) => {
     const coverageHours   = clamp(Number(budgetCfg.target_coverage_hours || 24), 1, 24);
     const campaignWeight  = Number(budgetCfg.campaign_weight || 2);
     const hoursWeight     = Number(budgetCfg.hours_weight    || 1);
-    const minBudget       = Number(budgetCfg.minimum_campaign_budget  || MIN_CAMPAIGN_BUDGET);
+    const minBudget       = Math.max(MIN_CAMPAIGN_BUDGET, Number(budgetCfg.minimum_campaign_budget  || MIN_CAMPAIGN_BUDGET));
     const increment       = Number(budgetCfg.campaign_budget_increment || BUDGET_INCREMENT);
 
     // ── 3. Campanhas elegíveis (ENABLED, não-archived, não-duplicadas) ──────
@@ -211,7 +211,7 @@ Deno.serve(async (req) => {
     //   - nenhum aumento já pendente hoje
     //   - limite geral ainda permite gasto adicional
     const totalCurrentBudget = dedupedEligible.reduce((s: number, c: any) => s + Number(c.daily_budget || 0), 0);
-    const budgetRemainingForIncreases = nominalBudgetHeadroom(nominalSettings,daily_limit,totalCurrentBudget);
+    const budgetRemainingForIncreases = Number.POSITIVE_INFINITY; // R$100 é teto de gasto efetivo, não soma de budgets nominais
 
     const allocations: any[] = [];
     let totalIncreases = 0;
