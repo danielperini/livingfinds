@@ -12,7 +12,7 @@ const MIN_CONFIDENCE = AUTONOMOUS_ADS_RISK_POLICY.minCalibratedConfidence;
 const MIN_NEGATIVE_CLICKS = 20;
 const MIN_NEGATIVE_DAYS = 7;
 const MAX_NEGATIVES_PER_RUN = 10;
-const MAX_PROMOTIONS_PER_RUN = 5;
+const MAX_PROMOTIONS_PER_RUN = 10;
 
 function n(value: unknown): number {
   const parsed = Number(value);

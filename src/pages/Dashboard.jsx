@@ -23,6 +23,7 @@ import FinanceSyncDiagnostic from '@/components/dashboard/FinanceSyncDiagnostic'
 import MotorStatusBySku from '@/components/analytics/MotorStatusBySku';
 import BudgetHistoryPanel from '@/components/dashboard/BudgetHistoryPanel';
 import DecisionalOverview from '@/components/dashboard/DecisionalOverview';
+import KeywordIntelligenceStatus from '@/components/dashboard/KeywordIntelligenceStatus';
 import { canonicalAccountSalesByDate } from '../../base44/shared/salesDailyIntegrity.ts';
 
 // ─── Utilitários de período fechado ─────────────────────────────────────────
@@ -763,6 +764,7 @@ export default function Dashboard() {
         decisionReadState={decisionReadState}
         onRefresh={loadData}
       />
+      <KeywordIntelligenceStatus accountId={account?.id} />
 
       {/* ── 1. HEADER ───────────────────────────────────────────────────────── */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-4">

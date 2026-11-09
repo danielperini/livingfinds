@@ -48,6 +48,10 @@ export const AUTONOMOUS_ADS_RISK_POLICY = Object.freeze({
   maxBidDecreasePct24h: 20,
   maxBudgetIncreasePct: 0,
   maxNewCampaignsPerDay: 5,
+  // Exceção operacional autorizada pelo gestor para 09/11/2026; expira
+  // automaticamente e não altera o limite padrão dos demais dias.
+  exceptionalDailyMaxNewCampaigns: 15,
+  exceptionalDateBrt: '2026-11-09',
   maxNewCampaignBudget: 20,
   allowBulkCreation: false,
   allowCampaignPause: false,
