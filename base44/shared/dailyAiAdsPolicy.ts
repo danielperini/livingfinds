@@ -18,6 +18,8 @@ export type DailyAdsCandidate = {
   stock?: number;
   safe_max_cpc?: number;
   target_acos?: number;
+  margin_rate?: number;
+  profit_after_ads?: number;
   evidence_days?: number;
 };
 
@@ -33,6 +35,29 @@ export type DailyAdsSettings = {
   aiConfidenceThreshold: number;
   minReductionEvidenceDays: number;
 };
+
+/** Política fixa no backend; a IA pode sugerir, mas não pode alterá-la. */
+export const AUTONOMOUS_ADS_RISK_POLICY = Object.freeze({
+  version: '2026-11-09-br-v1',
+  marketplace: 'BR',
+  currency: 'BRL',
+  mode: 'autonomous',
+  minCalibratedConfidence: 0.80,
+  requireHumanApproval: false,
+  maxBidIncreasePct24h: 10,
+  maxBidDecreasePct24h: 20,
+  maxBudgetIncreasePct: 0,
+  maxNewCampaignsPerDay: 5,
+  maxNewCampaignBudget: 20,
+  allowBulkCreation: false,
+  allowCampaignPause: false,
+  requireAccountSpendCap: true,
+  requireSkuMarginForScaling: true,
+  stopOnStaleData: true,
+  requireExecutionConfirmation: true,
+  enableAuditLog: true,
+  enableKillSwitch: true,
+});
 
 export type AiAdsRecommendation = {
   entity_id: string;
@@ -80,7 +105,10 @@ export function clampBidChange(
 ): number {
   const current = clampBid(currentValue, settings);
   const raw = clampBid(proposedValue, settings);
-  const maxStep = settings.maxBidStepPct / 100;
+  const directionLimit = raw >= current
+    ? AUTONOMOUS_ADS_RISK_POLICY.maxBidIncreasePct24h
+    : AUTONOMOUS_ADS_RISK_POLICY.maxBidDecreasePct24h;
+  const maxStep = Math.min(settings.maxBidStepPct, directionLimit) / 100;
   return clampBid(Math.min(current * (1 + maxStep), Math.max(current * (1 - maxStep), raw)), settings);
 }
 
@@ -164,6 +192,13 @@ export function validateRecommendation(
     if (isReduction && (candidate.evidence_days || 0) < settings.minReductionEvidenceDays) {
       return { valid: false, autoApprove: false, reason: 'REDUCTION_REQUIRES_MULTI_DAY_EVIDENCE' };
     }
+    if (!isReduction && candidate.sales <= 0) {
+      return { valid: false, autoApprove: false, reason: 'SCALING_REQUIRES_CONVERSION' };
+    }
+    if (!isReduction && (candidate.margin_rate == null || candidate.margin_rate <= 0) &&
+      (candidate.profit_after_ads == null || candidate.profit_after_ads <= 0)) {
+      return { valid: false, autoApprove: false, reason: 'SCALING_REQUIRES_SKU_MARGIN' };
+    }
     normalized.proposed_value = proposed;
   }
 
@@ -173,11 +208,25 @@ export function validateRecommendation(
     if (!current || proposed > current * (1 + settings.maxBudgetStepPct / 100)) {
       return { valid: false, autoApprove: false, reason: 'BUDGET_INCREASE_OUTSIDE_GUARDRAIL' };
     }
+    if (proposed > current && AUTONOMOUS_ADS_RISK_POLICY.maxBudgetIncreasePct <= 0) {
+      return { valid: false, autoApprove: false, reason: 'BUDGET_INCREASE_DISABLED_BY_POLICY' };
+    }
     normalized.proposed_value = Math.round(proposed * 100) / 100;
   }
 
-  if (action === 'pause_campaign' && candidate.stock !== 0 && !recommendation.last_resort) {
-    return { valid: false, autoApprove: false, reason: 'PAUSE_IS_LAST_RESORT_ONLY' };
+  if (action === 'pause_campaign' && !AUTONOMOUS_ADS_RISK_POLICY.allowCampaignPause) {
+    return { valid: false, autoApprove: false, reason: 'CAMPAIGN_PAUSE_DISABLED_BY_POLICY' };
+  }
+
+  if (action === 'create_manual_campaign') {
+    if (candidate.entity_type !== 'search_term' || candidate.orders <= 0 || !candidate.sku || !candidate.asin) {
+      return { valid: false, autoApprove: false, reason: 'CAMPAIGN_CREATION_REQUIRES_SAME_SKU_CONVERSION' };
+    }
+    const proposedBudget = n(recommendation.proposed_value, 0);
+    if (proposedBudget > AUTONOMOUS_ADS_RISK_POLICY.maxNewCampaignBudget) {
+      return { valid: false, autoApprove: false, reason: 'NEW_CAMPAIGN_BUDGET_LIMIT' };
+    }
+    normalized.proposed_value = proposedBudget;
   }
 
   const budgetIncrease = ['increase_budget', 'update_budget'].includes(action)

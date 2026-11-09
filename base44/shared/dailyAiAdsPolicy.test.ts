@@ -30,7 +30,7 @@ Deno.test('pausa não é autoaprovada sem último recurso', () => {
 Deno.test('confiança de 80% permite somente ajuste de baixo risco', () => {
   const bid = validateRecommendation(
     { entity_id: 'k1', action: 'update_bid', proposed_value: 0.8, confidence: 0.80 },
-    { entity_id: 'k1', entity_type: 'keyword', state: 'enabled', spend: 2, sales: 30, orders: 1, clicks: 4, impressions: 100, acos: 6.7, current_bid: 0.7, evidence_days: 2, stock: 5 },
+    { entity_id: 'k1', entity_type: 'keyword', state: 'enabled', spend: 2, sales: 30, orders: 1, clicks: 4, impressions: 100, acos: 6.7, current_bid: 0.7, evidence_days: 2, margin_rate: 0.2, stock: 5 },
   );
   const budget = validateRecommendation(
     { entity_id: 'c1', action: 'increase_budget', proposed_value: 11, confidence: 0.80 },

@@ -3,6 +3,7 @@ import {
   buildDailyAdsCandidates,
   calculateAcos,
   DEFAULT_DAILY_AI_SETTINGS,
+  AUTONOMOUS_ADS_RISK_POLICY,
   normalizeConfidence,
   rebalanceBudgetPlan,
   validateRecommendation,
@@ -204,6 +205,8 @@ function buildCandidates(campaigns: any[], keywords: any[], searchTerms: any[], 
       stock: optionalNumber(row, 'stock') ?? optionalNumber(row, 'available_quantity'),
       safe_max_cpc: number(row, 'safe_max_cpc') || number(economicsRow, 'safe_max_cpc'),
       target_acos: number(economicsRow, 'target_acos'),
+      margin_rate: optionalNumber(economicsRow, 'margin_rate') ?? optionalNumber(economicsRow, 'margin_percent'),
+      profit_after_ads: optionalNumber(economicsRow, 'profit_after_ads'),
       evidence_days: aggregated.days || 0,
     });
   }
@@ -232,6 +235,8 @@ function buildCandidates(campaigns: any[], keywords: any[], searchTerms: any[], 
       stock: campaignsById.get(campaignId)?.stock,
       safe_max_cpc: campaignsById.get(campaignId)?.safe_max_cpc,
       target_acos: campaignsById.get(campaignId)?.target_acos,
+      margin_rate: campaignsById.get(campaignId)?.margin_rate,
+      profit_after_ads: campaignsById.get(campaignId)?.profit_after_ads,
     });
   }
 
@@ -261,6 +266,8 @@ function buildCandidates(campaigns: any[], keywords: any[], searchTerms: any[], 
       stock: campaignsById.get(campaignId)?.stock,
       safe_max_cpc: number(row, 'maximum_profitable_cpc') || campaignsById.get(campaignId)?.safe_max_cpc,
       target_acos: campaignsById.get(campaignId)?.target_acos,
+      margin_rate: campaignsById.get(campaignId)?.margin_rate,
+      profit_after_ads: campaignsById.get(campaignId)?.profit_after_ads,
     });
   }
   return candidates;
@@ -293,6 +300,7 @@ async function callOpenAi(apiKey: string, model: string, evidence: any): Promise
               'termos irrelevantes, caros ou sem venda podem ser negative_keyword somente com evidência suficiente e correspondência segura',
               'não pausar campanhas; pause_campaign só seria aceitável como último recurso com estoque zero e last_resort=true',
               'métricas são somente leitura; altere apenas bid, budget dentro do teto, keyword/negative keyword e campanha pelos IDs fornecidos',
+              'nunca altere a política de risco; no máximo 5 campanhas novas por dia, sem criação em massa e com budget máximo de R$20 por campanha',
             ],
             output_schema: { recommendations: [{ entity_id: 'string', action: 'update_bid|negative_keyword|update_budget|create_manual_campaign|pause_campaign', proposed_value: 'number', confidence: '0..1', rationale: 'string', evidence: ['string'], last_resort: 'boolean' }] },
             evidence,
@@ -410,6 +418,9 @@ Deno.serve(async (request) => {
     const recentExecutionLogs = await base44.asServiceRole.entities.SyncExecutionLog.filter(
       { [ACCOUNT_ID]: accountId, operation: 'daily_ai_ads_analysis' }, '-started_at', 20,
     ).catch(() => []);
+    const recentBidDecisions = await base44.asServiceRole.entities.OptimizationDecision.filter(
+      { [ACCOUNT_ID]: accountId }, '-created_at', 250,
+    ).catch(() => []);
     const settings = mapSettings(settingsRows[0] || {});
     const rawCandidates = buildCandidates(campaigns, keywords, searchTerms, metrics, economics);
     const allCampaigns = rawCandidates.filter((row) => {
@@ -426,6 +437,7 @@ Deno.serve(async (request) => {
       date,
       generated_at: startedAt,
       settings,
+      risk_policy: AUTONOMOUS_ADS_RISK_POLICY,
       budget_plan: budgetPlan,
       metric_summary: metricSummary,
       learning,
@@ -442,6 +454,16 @@ Deno.serve(async (request) => {
     const persisted: any[] = [];
     const rejected: any[] = [];
     let plannedBudgetIncrease = 0;
+    let newCampaignsProposed = recentDecisions.filter((row: any) =>
+      String(value(row, 'action', value(row, 'decision_type', ''))) === 'create_manual_campaign'
+      && Date.now() - new Date(String(value(row, 'created_at', 0))).getTime() <= 24 * 3600000,
+    ).length;
+    const recentBidEntities = new Set(recentBidDecisions.filter((row: any) => {
+      const action = String(value(row, 'action', value(row, 'decision_type', ''))).toLowerCase();
+      const createdAt = new Date(String(value(row, 'created_at', 0))).getTime();
+      return action.includes('bid') && Date.now() - createdAt <= 24 * 3600000 &&
+        !['cancelled', 'failed', 'blocked', 'skipped'].includes(String(value(row, 'status', '')).toLowerCase());
+    }).map((row: any) => String(value(row, 'entity_id', ''))).filter(Boolean));
 
     for (const recommendation of recommendations.slice(0, settings.maxProposals * 2)) {
       const candidate = byEntity.get(String(recommendation?.entity_id || ''));
@@ -453,6 +475,23 @@ Deno.serve(async (request) => {
       const dedupe = `${candidate.entity_id}:${checked.normalized.action}`;
       if (seen.has(dedupe)) continue;
       seen.add(dedupe);
+      if (['increase_bid', 'reduce_bid', 'update_bid'].includes(checked.normalized.action)
+        && recentBidEntities.has(candidate.entity_id)) {
+        rejected.push({ entity_id: candidate.entity_id, reason: 'BID_CHANGE_ALREADY_APPLIED_IN_24H' });
+        continue;
+      }
+      if (['increase_bid', 'update_bid'].includes(checked.normalized.action)
+        && metricSummary.totals.spend >= settings.dailyBudgetCap) {
+        rejected.push({ entity_id: candidate.entity_id, reason: 'ACCOUNT_SPEND_CAP_REACHED' });
+        continue;
+      }
+      if (checked.normalized.action === 'create_manual_campaign') {
+        if (newCampaignsProposed >= AUTONOMOUS_ADS_RISK_POLICY.maxNewCampaignsPerDay) {
+          rejected.push({ entity_id: candidate.entity_id, reason: 'NEW_CAMPAIGN_DAILY_LIMIT_REACHED' });
+          continue;
+        }
+        newCampaignsProposed += 1;
+      }
       if (['increase_budget', 'update_budget'].includes(checked.normalized.action)) {
         const current = Number(candidate.daily_budget || 0);
         const proposed = Number(checked.normalized.proposed_value || 0);
@@ -532,6 +571,8 @@ Deno.serve(async (request) => {
         mode: 'AUTONOMOUS_SUPERVISOR',
         confidence_minimum: settings.aiConfidenceThreshold,
         human_approval_for_eligible: false,
+        max_new_campaigns_per_day: AUTONOMOUS_ADS_RISK_POLICY.maxNewCampaignsPerDay,
+        max_new_campaign_budget: AUTONOMOUS_ADS_RISK_POLICY.maxNewCampaignBudget,
         daily_once: true,
         scheduled_brt: '10:00',
         pause_only_last_resort: true,

@@ -183,3 +183,12 @@ em páginas de até 400 registros, com intervalo de 250 ms entre páginas. As de
 enviadas à Amazon em lotes de até 5, com intervalo de 800 ms, e a confirmação ocorre somente depois
 do último lote.
 
+### Política fixa de risco do supervisor
+
+`AUTONOMOUS_ADS_RISK_POLICY` fica no backend e não é editável pela IA: confiança mínima calibrada de
+80%, aumento de bid limitado a 10%/24h, redução limitada a 20%/24h e nenhuma elevação automática de
+budget. São permitidas no máximo 5 novas campanhas por dia, com budget máximo de R$20 por campanha;
+criação em massa e pausa automática permanecem desativadas. Aumento de bid exige conversão, margem
+ou lucro pós-Ads positivo, estoque e cap de gasto disponível. Reduções não podem ser motivadas apenas
+pela diferença entre ontem e hoje: exigem pelo menos dois dias de evidência.
+
