@@ -215,12 +215,12 @@ Deno.serve(async (request) => {
       const activeKeys = new Set(activeProducts.map(productKey));
       const activeAsins = new Set(activeProducts.map((row: any) => text(row, 'asin').toUpperCase()).filter(Boolean));
       const inactiveKeys = new Set(products
-        .filter(isInactiveProduct)
+        .filter((row: any) => !productIsActiveAndSellable(row))
         .map(productKey)
         .filter((key: string) => key !== '|'));
       // Do not let one inactive variation pause a different active SKU of the same ASIN.
       const inactiveAsinsWithoutActiveSku = new Set(products
-        .filter(isInactiveProduct)
+        .filter((row: any) => !productIsActiveAndSellable(row))
         .map((row: any) => text(row, 'asin').toUpperCase())
         .filter((asin: string) => asin && !activeAsins.has(asin)));
       const nonArchivedCampaigns = campaigns.filter((row: any) => !isArchivedCampaign(row) && campaignId(row));
@@ -228,13 +228,13 @@ Deno.serve(async (request) => {
         const asin = campaignAsin(row);
         const sku = campaignSku(row);
         return campaignMatchesInactiveProduct(row, inactiveKeys, inactiveAsinsWithoutActiveSku)
-          || (sku && !activeKeys.has(`${asin}|${sku}`) && isInactiveProduct(byKey.get(`${asin}|${sku}`)));
+          || (sku && !activeKeys.has(`${asin}|${sku}`) && !productIsActiveAndSellable(byKey.get(`${asin}|${sku}`)));
       }).filter(isEnabledCampaign);
 
       const report: any = {
         [ACCOUNT_ID]: accountId,
         active_skus: activeProducts.length,
-        inactive_products: products.filter(isInactiveProduct).length,
+        inactive_products: products.filter((row: any) => !productIsActiveAndSellable(row)).length,
         paused_inactive_campaigns: 0,
         reactivated_sold_campaigns: 0,
         created_auto_campaigns: 0,
