@@ -105,6 +105,13 @@ function productIsActiveAndSellable(row: any): boolean {
     && hasStock(row);
 }
 
+function campaignMatchesInactiveProduct(campaign: any, inactiveKeys: Set<string>, inactiveAsinsWithoutActiveSku: Set<string>): boolean {
+  const asin = campaignAsin(campaign);
+  const sku = campaignSku(campaign);
+  if (sku && inactiveKeys.has(`${asin}|${sku}`)) return true;
+  return !sku && inactiveAsinsWithoutActiveSku.has(asin);
+}
+
 function adsBase(region: unknown): string {
   const normalized = String(region || 'NA').toUpperCase();
   if (normalized.includes('EU')) return 'https://advertising-api-eu.amazon.com';
@@ -205,19 +212,29 @@ Deno.serve(async (request) => {
         if (asin) byAsin.set(asin, [...(byAsin.get(asin) || []), product]);
       }
       const activeProducts = products.filter(productIsActiveAndSellable);
-      const inactiveAsins = new Set(products.filter(isInactiveProduct).map((row: any) => text(row, 'asin').toUpperCase()).filter(Boolean));
       const activeKeys = new Set(activeProducts.map(productKey));
+      const activeAsins = new Set(activeProducts.map((row: any) => text(row, 'asin').toUpperCase()).filter(Boolean));
+      const inactiveKeys = new Set(products
+        .filter((row: any) => !productIsActiveAndSellable(row))
+        .map(productKey)
+        .filter((key: string) => key !== '|'));
+      // Do not let one inactive variation pause a different active SKU of the same ASIN.
+      const inactiveAsinsWithoutActiveSku = new Set(products
+        .filter((row: any) => !productIsActiveAndSellable(row))
+        .map((row: any) => text(row, 'asin').toUpperCase())
+        .filter((asin: string) => asin && !activeAsins.has(asin)));
       const nonArchivedCampaigns = campaigns.filter((row: any) => !isArchivedCampaign(row) && campaignId(row));
       const inactiveCampaigns = nonArchivedCampaigns.filter((row: any) => {
         const asin = campaignAsin(row);
         const sku = campaignSku(row);
-        return inactiveAsins.has(asin) || isInactiveProduct(byKey.get(`${asin}|${sku}`) || byAsin.get(asin)?.[0]);
+        return campaignMatchesInactiveProduct(row, inactiveKeys, inactiveAsinsWithoutActiveSku)
+          || (sku && !activeKeys.has(`${asin}|${sku}`) && !productIsActiveAndSellable(byKey.get(`${asin}|${sku}`)));
       }).filter(isEnabledCampaign);
 
       const report: any = {
         [ACCOUNT_ID]: accountId,
         active_skus: activeProducts.length,
-        inactive_products: products.filter(isInactiveProduct).length,
+        inactive_products: products.filter((row: any) => !productIsActiveAndSellable(row)).length,
         paused_inactive_campaigns: 0,
         reactivated_sold_campaigns: 0,
         created_auto_campaigns: 0,
@@ -257,7 +274,8 @@ Deno.serve(async (request) => {
         report.paused_inactive_campaigns = inactiveCampaigns.length;
       }
 
-      const currentCampaigns = nonArchivedCampaigns.filter((row: any) => !inactiveAsins.has(campaignAsin(row)));
+      const currentCampaigns = nonArchivedCampaigns.filter((row: any) =>
+        !campaignMatchesInactiveProduct(row, inactiveKeys, inactiveAsinsWithoutActiveSku));
       const activeProductRows = [...new Map(activeProducts.map((row: any) => [productKey(row), row])).values()];
       const activeCampaignsByKey = new Map<string, any[]>();
       for (const campaign of currentCampaigns) {
@@ -279,10 +297,6 @@ Deno.serve(async (request) => {
 
         if (!dryRun) {
           for (const campaign of linked.filter(isPausedOrIncomplete)) {
-            if (!hasSalesEvidence(campaign)) {
-              report.skipped_no_sales_evidence += 1;
-              continue;
-            }
             try {
               const result = await updateRemoteCampaignState(await ensureToken(), account, campaignId(campaign), 'ENABLED');
               if (!result.ok) {
@@ -291,7 +305,7 @@ Deno.serve(async (request) => {
               }
               await base44.asServiceRole.entities.Campaign.update(campaign.id, {
                 status: 'enabled', state: 'enabled', reconciliation_status: 'ok',
-                reconciliation_notes: 'reactivated_active_sku_with_sales_history',
+                reconciliation_notes: 'reactivated_active_sku_with_stock',
                 last_sync_at: new Date().toISOString(),
               }).catch(() => {});
               report.reactivated_sold_campaigns += 1;
@@ -369,7 +383,7 @@ Deno.serve(async (request) => {
       policy: {
         max_new_campaigns_per_day: AUTONOMOUS_ADS_RISK_POLICY.maxNewCampaignsPerDay,
         inactive_product_campaign_pause: true,
-        reactivation_requires_sales_history: true,
+        reactivation_requires_active_stock: true,
         historical_data_deleted: false,
       },
       reports,
