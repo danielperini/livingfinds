@@ -76,6 +76,83 @@ function safeJson(valueToParse: unknown): any {
   try { return JSON.parse(cleaned); } catch { return {}; }
 }
 
+function productValue(row: any, key: string, fallback: unknown = undefined): unknown {
+  return row?.[key] ?? row?.data?.[key] ?? fallback;
+}
+
+function productText(row: any, key: string): string {
+  return String(productValue(row, key, '') || '').trim();
+}
+
+function productNumber(row: any, ...keys: string[]): number {
+  for (const key of keys) {
+    const parsed = Number(productValue(row, key, undefined));
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function productHasStock(row: any): boolean {
+  return productNumber(row, 'fba_inventory', 'available_quantity', 'total_quantity', 'fba_quantity') > 0;
+}
+
+function productIsInactive(row: any): boolean {
+  const status = productText(row, 'status').toLowerCase();
+  const lifecycle = productText(row, 'lifecycle_status').toLowerCase();
+  return ['inactive', 'archived', 'deleted', 'removed', 'not_found'].includes(status)
+    || ['inactive', 'archived', 'deleted', 'removed', 'not_found'].includes(lifecycle)
+    || productValue(row, 'offer_active', undefined) === false
+    || productValue(row, 'listing_buyable', undefined) === false
+    || productValue(row, 'listing_suppressed', undefined) === true;
+}
+
+function productIsActiveAndSellable(row: any): boolean {
+  const status = productText(row, 'status').toLowerCase();
+  return !productIsInactive(row) && !['draft', 'deleted', 'removed'].includes(status) && productHasStock(row);
+}
+
+function campaignKey(row: any): string {
+  return `${productText(row, 'asin').toUpperCase()}|${productText(row, 'sku').toUpperCase()}`;
+}
+
+function campaignIsAuto(row: any): boolean {
+  const type = productText(row, 'targeting_type').toUpperCase();
+  const name = (productText(row, 'name') || productText(row, 'campaign_name')).toUpperCase();
+  return type === 'AUTO' || (name.includes('AUTO') && !name.includes('MANUAL'));
+}
+
+function campaignCoverage(products: any[], campaigns: any[]) {
+  const byKey = new Map<string, any[]>();
+  const uniqueProducts = [...new Map(products.map((row) => {
+    const asin = productText(row, 'asin').toUpperCase();
+    const sku = productText(row, 'sku').toUpperCase();
+    return [`${asin}|${sku}`, row];
+  })).values()];
+  for (const campaign of campaigns) {
+    const key = campaignKey(campaign);
+    byKey.set(key, [...(byKey.get(key) || []), campaign]);
+  }
+  return uniqueProducts.map((product) => {
+    const asin = productText(product, 'asin').toUpperCase();
+    const sku = productText(product, 'sku').toUpperCase();
+    const linked = byKey.get(`${asin}|${sku}`) || campaigns.filter((row) => productText(row, 'asin').toUpperCase() === asin);
+    const live = linked.filter((row) => !row.archived && !['archived', 'removed'].includes(productText(row, 'state').toLowerCase()));
+    return {
+      asin,
+      sku,
+      title: productText(product, 'product_name') || productText(product, 'title') || productText(product, 'name'),
+      product_status: productText(product, 'status'),
+      stock: productNumber(product, 'fba_inventory', 'available_quantity', 'total_quantity', 'fba_quantity'),
+      active_sellable: productIsActiveAndSellable(product),
+      campaigns_total: live.length,
+      campaigns_enabled: live.filter((row) => ['enabled', 'active'].includes(productText(row, 'state').toLowerCase() || productText(row, 'status').toLowerCase())).length,
+      auto_campaigns: live.filter(campaignIsAuto).length,
+      manual_campaigns: live.filter((row) => !campaignIsAuto(row)).length,
+      paused_campaigns: live.filter((row) => ['paused', 'incomplete'].includes(productText(row, 'state').toLowerCase() || productText(row, 'status').toLowerCase())).length,
+    };
+  });
+}
+
 function mapSettings(row: any): DailyAdsSettings {
   const base = DEFAULT_DAILY_AI_SETTINGS;
   return {
@@ -290,6 +367,7 @@ async function callOpenAi(apiKey: string, model: string, evidence: any): Promise
             objective: 'propor alterações econômicas com baixo risco',
             rules: [
               'verifique todos os indicadores recebidos: gasto, vendas, pedidos, impressões, cliques, CTR, CPC, CVR, ACoS, ROAS, orçamento, participação do budget, estoque, margem, lucro pós-Ads, idade e qualidade da evidência',
+              'analise todos os active_sku_coverage e active_sku_campaigns: todo SKU ativo com estoque deve ter cobertura AUTO; campanha ativa sem entrega deve ser diagnosticada antes de alterar bid; campanha ligada a produto inativo deve permanecer pausada e fora da gestão econômica',
               'compare campanha, keyword e search term; compare também com o próprio histórico, com o SKU e com campanhas equivalentes',
               'reduza bids de termos com gasto sem venda, ACoS acima do máximo, CPC acima do econômico ou prejuízo, sempre respeitando o bid mínimo e o teto econômico',
               'nunca reduza bid apenas por comparar ontem com hoje; para redução, exija evidência de pelo menos dois dias',
@@ -298,7 +376,7 @@ async function callOpenAi(apiKey: string, model: string, evidence: any): Promise
               'campanha sem gasto deve receber aumento somente se houver impressões, estoque, elegibilidade e oportunidade mensurável; caso contrário propor investigação',
               'crie campanha manual apenas para termo vencedor com conversão do mesmo SKU; use a API Amazon e nunca invente IDs',
               'termos irrelevantes, caros ou sem venda podem ser negative_keyword somente com evidência suficiente e correspondência segura',
-              'não pausar campanhas; pause_campaign só seria aceitável como último recurso com estoque zero e last_resort=true',
+              'não pausar campanhas econômicas por falta de venda; o ciclo determinístico já pausa campanhas de produto inativo e só reativa produto ativo com histórico de venda',
               'métricas são somente leitura; altere apenas bid, budget dentro do teto, keyword/negative keyword e campanha pelos IDs fornecidos',
               'nunca altere a política de risco; no máximo 5 campanhas novas por dia, sem criação em massa e com budget máximo de R$20 por campanha',
             ],
@@ -399,9 +477,31 @@ Deno.serve(async (request) => {
       return Response.json({ ok: false, error: 'RELATORIOS_NAO_ATUALIZADOS', report_sync: reportSync }, { status: 503 });
     }
 
+    // Ciclo único de cobertura dos SKUs ativos. O orquestrador pode já ter
+    // executado esta etapa; o log diário evita chamadas duplicadas quando a IA
+    // é disparada manualmente ou por retry.
+    const lifecycleAlreadyRun = await base44.asServiceRole.entities.SyncExecutionLog.filter({
+      [ACCOUNT_ID]: accountId,
+      operation: 'daily_active_sku_ads_lifecycle',
+      execution_date: date,
+      status: 'success',
+    }, '-started_at', 1).catch(() => []);
+    const lifecycle = lifecycleAlreadyRun.length
+      ? { ok: true, skipped: true, reason: 'already_completed_today' }
+      : await base44.asServiceRole.functions.invoke('reconcileDailyActiveSkuAds', {
+          _service_role: true,
+          [ACCOUNT_ID]: accountId,
+          pause_inactive: true,
+          dry_run: false,
+          trigger_type: 'daily_ai_ads_analysis',
+        }).then((result: any) => result?.data || result || {})
+        .catch((error: any) => ({ ok: false, error: error?.response?.data?.error || error?.message || String(error) }));
+
     // Leitura faseada: evita seis consultas grandes simultâneas no PostgreSQL.
     const settingsRows = await base44.asServiceRole.entities.PerformanceSettings
       .filter({ [ACCOUNT_ID]: accountId }, '-updated_at', 1).catch(() => []);
+    const products = await pagedFilter(base44, base44.asServiceRole.entities.Product,
+      { [ACCOUNT_ID]: accountId }, '-updated_at', MAX_ROWS);
     const campaigns = await pagedFilter(base44, base44.asServiceRole.entities.Campaign,
       { [ACCOUNT_ID]: accountId }, '-updated_at', MAX_ROWS);
     const keywords = await pagedFilter(base44, base44.asServiceRole.entities.Keyword,
@@ -423,21 +523,47 @@ Deno.serve(async (request) => {
     ).catch(() => []);
     const settings = mapSettings(settingsRows[0] || {});
     const rawCandidates = buildCandidates(campaigns, keywords, searchTerms, metrics, economics);
-    const allCampaigns = rawCandidates.filter((row) => {
+    const activeSkuCoverage = campaignCoverage(products, campaigns);
+    const activeAsins = new Set(activeSkuCoverage.filter((row) => row.active_sellable).map((row) => row.asin));
+    const analysisCandidates = rawCandidates.filter((row) => !row.asin || activeAsins.has(row.asin));
+    const allCampaigns = analysisCandidates.filter((row) => {
       const state = String(row.state || '').toLowerCase();
       return row.entity_type === 'campaign'
         && !['archived', 'paused', 'inactive'].includes(state)
         && row.stock !== 0;
     });
-    const candidates = buildDailyAdsCandidates(rawCandidates, settings);
+    const candidates = buildDailyAdsCandidates(analysisCandidates, settings);
     const budgetPlan = rebalanceBudgetPlan(allCampaigns, settings);
-    const metricSummary = summarizeMetrics(rawCandidates, budgetPlan, settings);
+    const metricSummary = summarizeMetrics(analysisCandidates, budgetPlan, settings);
     const learning = summarizeLearning(recentDecisions, recentExecutionLogs);
+    const activeSkuCampaigns = analysisCandidates
+      .filter((row) => row.entity_type === 'campaign')
+      .filter((row) => row.asin && activeSkuCoverage.some((sku) => sku.asin === row.asin && sku.active_sellable))
+      .map((row) => ({
+        entity_id: row.entity_id,
+        campaign_id: row.campaign_id,
+        asin: row.asin,
+        sku: row.sku,
+        state: row.state,
+        spend: row.spend,
+        sales: row.sales,
+        orders: row.orders,
+        clicks: row.clicks,
+        impressions: row.impressions,
+        acos: row.acos,
+        daily_budget: row.daily_budget,
+        stock: row.stock,
+        evidence_days: row.evidence_days,
+      }));
     const evidence = {
       date,
       generated_at: startedAt,
       settings,
       risk_policy: AUTONOMOUS_ADS_RISK_POLICY,
+      lifecycle,
+      active_sku_coverage: activeSkuCoverage,
+      active_sku_campaigns: activeSkuCampaigns,
+      inactive_entities_excluded_from_ai: rawCandidates.length - analysisCandidates.length,
       budget_plan: budgetPlan,
       metric_summary: metricSummary,
       learning,
@@ -556,6 +682,8 @@ Deno.serve(async (request) => {
       date,
       model,
       report_sync: reportSync,
+      lifecycle,
+      active_sku_coverage: activeSkuCoverage,
       metric_summary: metricSummary,
       learning,
       candidates_evaluated: candidates.length,
@@ -587,4 +715,3 @@ Deno.serve(async (request) => {
     return Response.json({ ok: false, error: error?.message || 'Falha na análise diária de IA' }, { status: 500 });
   }
 });
-
