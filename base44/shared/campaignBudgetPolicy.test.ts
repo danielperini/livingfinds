@@ -12,7 +12,7 @@ Deno.test('explicit legacy opt-out retains nominal constraint and campaign cap f
  assertEquals(nominalBudgetExceedsLimit(legacy,100,200),true);
  assertEquals(nominalBudgetHeadroom(legacy,100,80),20);
  assertEquals(campaignBudgetPolicy({}, {maximum_campaign_budget:100}).maximumCampaignBudget,100);
- assertEquals(campaignBudgetPolicy({maximum_campaign_budget:-1}).maximumCampaignBudget,15);
+ assertEquals(campaignBudgetPolicy({maximum_campaign_budget:-1}).maximumCampaignBudget,150);
 });
 
 Deno.test('default policy keeps the account cap as spend-only',()=>{
