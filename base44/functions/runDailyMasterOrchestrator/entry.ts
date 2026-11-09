@@ -150,9 +150,6 @@ Deno.serve(async (req) => {
     ).catch(() => []);
     const successfulLabels = new Set(successfulToday.map((row: any) => String(row.operation || '')));
     const dailyDue = (label: string) => force || !successfulLabels.has(label);
-    const aiDailyDue = dailyDue('daily_ai_ads_analysis') &&
-      (brtHour() >= 10 || body.daily_ai_force === true);
-
     // ── Montar fila (sem janelas horárias — apenas TTL diário) ────────────
     type Task = { fn: string; payload: object; label: string; ttl?: boolean };
     const queue: Task[] = [];
@@ -213,15 +210,15 @@ Deno.serve(async (req) => {
     if (!eval72hDone || force) add('evaluateNewCampaigns72h', 'evaluate_new_campaigns_72h', {}, true);
     else skipped.push('evaluate_new_campaigns_72h');
 
-    if (aiDailyDue) add('runDailyAiAdsAnalysis', 'daily_ai_ads_analysis', {
+    // Ciclo diário unificado: descoberta, previsão econômica, promoção,
+    // defesa contra desperdício e registro de aprendizagem. As rotinas
+    // internas mantêm seus próprios guardrails e limites de idempotência.
+    const keywordIntelligenceDue = dailyDue('daily_keyword_intelligence') &&
+      (brtHour() >= 10 || body.daily_ai_force === true);
+    if (keywordIntelligenceDue) add('runDailyKeywordIntelligence', 'daily_keyword_intelligence', {
       model: body.daily_ai_model || undefined,
     }, true);
-    else skipped.push('daily_ai_ads_analysis');
-
-    // Promoção de search terms vencedores AUTO → MANUAL EXACT + Cross-ASIN.
-    // A análise é diária; a execução continua protegida pela evidência same-SKU.
-    if (dailyDue('promote_winning_terms')) add('promoteWinningSearchTerms', 'promote_winning_terms', {}, true);
-    else skipped.push('promote_winning_terms');
+    else skipped.push('daily_keyword_intelligence');
 
     // Negative Product Target Guard: bloqueia ASINs concorrentes com clicks sem conversão
     // Executado após promoção de termos — age imediatamente na API da Amazon
