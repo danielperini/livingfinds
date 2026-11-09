@@ -524,8 +524,18 @@ Deno.serve(async (request) => {
     const settings = mapSettings(settingsRows[0] || {});
     const rawCandidates = buildCandidates(campaigns, keywords, searchTerms, metrics, economics);
     const activeSkuCoverage = campaignCoverage(products, campaigns);
-    const activeAsins = new Set(activeSkuCoverage.filter((row) => row.active_sellable).map((row) => row.asin));
-    const analysisCandidates = rawCandidates.filter((row) => !row.asin || activeAsins.has(row.asin));
+    const activeCoverage = activeSkuCoverage.filter((row) => row.active_sellable);
+    const activeKeys = new Set(activeCoverage.map((row) => `${row.asin}|${row.sku}`));
+    const activeAsins = new Set(activeCoverage.map((row) => row.asin));
+    const analysisCandidates = rawCandidates.filter((row) => {
+      if (!row.asin) return false;
+      const asin = String(row.asin).toUpperCase();
+      const sku = String(row.sku || '').toUpperCase();
+      // Exact ASIN/SKU matching keeps inactive variations out of AI/bid management.
+      // ASIN-only rows are accepted only when the ASIN has one active SKU.
+      if (sku) return activeKeys.has(`${asin}|${sku}`);
+      return activeCoverage.filter((item) => item.asin === asin).length === 1 && activeAsins.has(asin);
+    });
     const allCampaigns = analysisCandidates.filter((row) => {
       const state = String(row.state || '').toLowerCase();
       return row.entity_type === 'campaign'
