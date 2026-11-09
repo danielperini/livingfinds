@@ -65,6 +65,28 @@ function getCampaignAsin(c) {
   return c.asin || extractAsinFromName(c.name || c.campaign_name) || null;
 }
 
+function isActiveStockedProduct(product) {
+  const status = String(product?.status || product?.lifecycle_status || '').toLowerCase();
+  const stock = Number(product?.fba_inventory ?? product?.available_quantity ?? product?.total_quantity ?? 0);
+  return !['inactive', 'archived', 'deleted', 'removed', 'not_found', 'draft'].includes(status)
+    && product?.offer_active !== false
+    && product?.listing_buyable !== false
+    && product?.listing_suppressed !== true
+    && stock > 0;
+}
+
+function belongsToActiveStockedProduct(campaign, products) {
+  const active = products.filter(isActiveStockedProduct);
+  const asin = String(getCampaignAsin(campaign) || '').toUpperCase();
+  const sku = String(campaign?.sku || '').toUpperCase();
+  if (!asin) return false;
+  if (sku) return active.some((product) =>
+    String(product.asin || '').toUpperCase() === asin &&
+    String(product.sku || '').toUpperCase() === sku
+  );
+  return active.filter((product) => String(product.asin || '').toUpperCase() === asin).length === 1;
+}
+
 /** Detecta campanha manual com múltiplas keywords (precisa migração) */
 function needsMigration(campaign, keywords) {
   if ((campaign.targeting_type || '').toUpperCase() !== 'MANUAL') return false;
@@ -688,9 +710,11 @@ export default function AdsManagement() {
           : campaign;
       });
 
+      const activeStockedProducts = prods.filter(isActiveStockedProduct);
       const operational = classifiedCampaigns.filter((c) => {
         const state = campaignState(c);
-        return state === 'enabled' || state === 'paused';
+        return (state === 'enabled' || state === 'paused')
+          && belongsToActiveStockedProduct(c, activeStockedProducts);
       });
 
       // Garantir que campanhas externas (não criadas pelo app) também sejam marcadas como elegíveis para IA
@@ -703,7 +727,7 @@ export default function AdsManagement() {
       }
 
       setCampaigns(operational);
-      setProducts(prods);
+      setProducts(activeStockedProducts);
       setMigrationInProgress(false);
 
       // Deduplicar campanhas AUTO duplicadas por ASIN — fire-and-forget silencioso
@@ -731,7 +755,8 @@ export default function AdsManagement() {
             });
             const operational3 = refreshedClassified.filter((c) => {
               const state = campaignState(c);
-              return state === 'enabled' || state === 'paused';
+              return (state === 'enabled' || state === 'paused')
+                && belongsToActiveStockedProduct(c, activeStockedProducts);
             });
             setCampaigns(operational3);
           } catch {}
@@ -769,7 +794,8 @@ export default function AdsManagement() {
             });
             const operational2 = refreshedClassified.filter((c) => {
               const state = campaignState(c);
-              return state === 'enabled' || state === 'paused';
+              return (state === 'enabled' || state === 'paused')
+                && belongsToActiveStockedProduct(c, activeStockedProducts);
             });
             setCampaigns(operational2);
             const stillPending = operational2.some(
