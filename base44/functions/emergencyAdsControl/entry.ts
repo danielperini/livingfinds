@@ -72,9 +72,10 @@ async function fetchRemoteCampaigns(base44: any, accountId: string, type: Produc
   const rows = new Map<string, RemoteCampaign>();
   const seenTokens = new Set<string>();
   let token: string | null = null;
+  let sdStartIndex = 0;
   for (let page = 0; page < MAX_CAMPAIGN_PAGES; page++) {
     const path = type === "SD"
-      ? "/sd/campaigns?count=100&stateFilter=enabled,paused" + (token ? "&nextToken=" + encodeURIComponent(token) : "")
+      ? "/sd/campaigns?count=" + PAGE_SIZE + "&stateFilter=enabled,paused&startIndex=" + sdStartIndex
       : spec.listPath;
     const listRequest = spec.listMethod === "GET" ? undefined : {
       stateFilter: { include: ["ENABLED", "PAUSED"] },
@@ -85,9 +86,11 @@ async function fetchRemoteCampaigns(base44: any, accountId: string, type: Produc
     const error = responseError(response);
     if (error) return { rows: [...rows.values()], complete: false, reason: "READ_" + type + ": " + error };
     const responsePayload: any = bodyOf(response);
-    const hasCampaignList = Array.isArray(responsePayload?.campaigns) || Array.isArray(responsePayload?.campaigns?.success) || Array.isArray(responsePayload?.items);
+    const hasCampaignList = (type === "SD" && Array.isArray(responsePayload))
+      || Array.isArray(responsePayload?.campaigns) || Array.isArray(responsePayload?.campaigns?.success) || Array.isArray(responsePayload?.items);
     if (!hasCampaignList) return { rows: [...rows.values()], complete: false, reason: "CAMPAIGN_LIST_SHAPE_INVALID_" + type };
-    const pageRows = listOf(response);
+    const pageRows = type === "SD" && Array.isArray(responsePayload) ? responsePayload : listOf(response);
+    if (type === "SD" && pageRows.length === 0) return { rows: [...rows.values()], complete: true };
     let addedOnPage = 0;
     for (const item of pageRows) {
       const id = String(item?.campaignId || item?.id || "");
@@ -97,6 +100,13 @@ async function fetchRemoteCampaigns(base44: any, accountId: string, type: Produc
       if (prior && prior.state !== current.state) return { rows: [...rows.values()], complete: false, reason: "CAMPAIGN_STATE_CONFLICT_" + type };
       if (!prior) addedOnPage += 1;
       rows.set(id, current);
+    }
+    if (type === "SD") {
+      if (addedOnPage === 0) return { rows: [...rows.values()], complete: false, reason: "PAGINATION_NO_PROGRESS_SD" };
+      if (pageRows.length < PAGE_SIZE) return { rows: [...rows.values()], complete: true };
+      sdStartIndex += pageRows.length;
+      await sleep(250);
+      continue;
     }
     const next = String(bodyOf(response)?.nextToken || bodyOf(response)?.campaigns?.nextToken || "");
     if (next && addedOnPage === 0) return { rows: [...rows.values()], complete: false, reason: "PAGINATION_NO_PROGRESS_" + type };
