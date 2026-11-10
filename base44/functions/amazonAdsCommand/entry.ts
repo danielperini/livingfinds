@@ -17,6 +17,8 @@ import { loadConfiguredBidPolicy } from '../../shared/configuredBidPolicy.ts';
 
 const ALLOWED_PATHS = [
   '/sp/campaigns', '/sp/campaigns/list',
+  '/sb/v4/campaigns', '/sb/v4/campaigns/list',
+  '/sd/campaigns',
   '/sp/adGroups', '/sp/adGroups/list',
   '/sp/productAds', '/sp/productAds/list',
   '/sp/keywords', '/sp/keywords/list',
