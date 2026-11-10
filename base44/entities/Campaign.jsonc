@@ -3,6 +3,7 @@
   "type": "object",
   "properties": {
     "last_pause_reason": { "type": "string" },
+    "emergency_pause_batch_id": { "type": "string", "description": "Identifica o lote emergencial que pausou esta campanha; somente esse lote pode habilitar a restauração segura." },
     "amazon_account_id": {
       "type": "string"
     },

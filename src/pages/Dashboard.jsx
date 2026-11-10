@@ -14,6 +14,7 @@ import {
   BarChart2, Megaphone, BookOpen, Terminal, Zap
 } from 'lucide-react';
 import TokenExpiredBanner from '@/components/amazon/TokenExpiredBanner';
+import EmergencyAdsControls from '@/components/dashboard/EmergencyAdsControls';
 import MoMComparisonChart from '@/components/dashboard/MoMComparisonChart';
 import UnifiedMetricsPanel from '@/components/dashboard/UnifiedMetricsPanel';
 import PerformanceGoalsPanel from '@/components/dashboard/PerformanceGoalsPanel';
@@ -805,6 +806,10 @@ export default function Dashboard() {
           ) : null}
         </div>
       </div>
+
+      {account && user?.role === 'admin' ? (
+        <EmergencyAdsControls account={account} user={user} campaigns={campaigns} onRefresh={loadData} />
+      ) : null}
 
       {/* ── 1b. INDICADOR DE CONSISTÊNCIA Dashboard ↔ Motor de IA ───────────── */}
       {/* ── TOKEN EXPIRED BANNER ────────────────────────────────────────────── */}
