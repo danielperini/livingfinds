@@ -160,6 +160,13 @@ Deno.serve(async (req) => {
     }
     const { amazon_account_id, asin, sku, product_name } = body;
     const forceReactivate = body.force_reactivate === true;
+    const requestedBidValue = Number(body.initial_bid ?? body.auto_initial_bid);
+    const requestedInitialBid = Number.isFinite(requestedBidValue)
+      ? Math.min(1000, Math.max(0.02, Math.round(requestedBidValue * 100) / 100))
+      : null;
+    const requestedStrategy = body.strategy_mode === 'down_only' || body.bidding_strategy === 'down_only'
+      ? 'down_only'
+      : null;
     if (!amazon_account_id || !asin) return Response.json({ error: 'amazon_account_id and asin required' }, { status: 400 });
 
     const account = await base44.asServiceRole.entities.AmazonAccount.get(amazon_account_id).catch(() => null);
@@ -210,7 +217,7 @@ Deno.serve(async (req) => {
     // configurado e so e elevada posteriormente pelo motor, quando houver
     // entrega e evidencia economica. Assim uma criacao/reconciliacao nunca
     // introduz um CPC alto por conta propria.
-    const requestedDiscoveryBid = 0.50;
+    const requestedDiscoveryBid = requestedInitialBid ?? 0.50;
     const initialBid = Math.round((
       launchAtMinimum ? requestedDiscoveryBid : proportionalActivationBid(goalSettings, economics, assessment)
     ) * 100) / 100;
@@ -347,6 +354,9 @@ Deno.serve(async (req) => {
           state: 'ENABLED',
           budget: { budgetType: 'DAILY', budget: campaignBudget },
           startDate: today,
+          ...(requestedStrategy === 'down_only'
+            ? { dynamicBidding: { strategy: 'LEGACY_FOR_SALES' } }
+            : {}),
         }],
       };
 
@@ -437,6 +447,7 @@ Deno.serve(async (req) => {
       campaign_name: campaignName,
       campaign_type: 'SP',
       targeting_type: 'AUTO',
+      bidding_strategy: requestedStrategy || 'down_only',
       state: productAdId ? 'enabled' : 'incomplete',
       status: productAdId ? 'enabled' : 'incomplete',
       amazon_status: productAdId ? 'enabled' : 'incomplete',
@@ -514,6 +525,7 @@ Deno.serve(async (req) => {
       campaign_name: campaignName,
       daily_budget: campaignBudget,
       initial_bid: initialBid,
+      bidding_strategy: requestedStrategy || 'down_only',
       http_status: campaignResult.status,
       request_id: campaignResult.headers.requestId,
       ad_confirmed: !!adGroupId,

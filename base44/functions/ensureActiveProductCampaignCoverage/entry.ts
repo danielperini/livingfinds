@@ -27,6 +27,13 @@ Deno.serve(async (req) => {
     }
 
     const dryRun = body.dry_run !== false;
+    const requestedBidValue = Number(body.initial_bid ?? body.auto_initial_bid);
+    const requestedInitialBid = Number.isFinite(requestedBidValue)
+      ? Math.min(1000, Math.max(0.02, Math.round(requestedBidValue * 100) / 100))
+      : null;
+    const requestedStrategy = body.strategy_mode === 'down_only' || body.bidding_strategy === 'down_only'
+      ? 'down_only'
+      : null;
     const fastMode = body.fast_mode === true;
     const maxProducts = Math.min(Math.max(Number(body.max_products || 200), 1), 500);
     const lookbackDays = Math.min(Math.max(Number(body.lookback_days || 65), 1), 65);
@@ -146,6 +153,9 @@ Deno.serve(async (req) => {
             sku,
             product_name: product.product_name || product.title || product.name || '',
             launch_at_minimum: true,
+            initial_bid: requestedInitialBid,
+            strategy_mode: requestedStrategy,
+            force_reactivate: body.force_reactivate === true,
           }));
           rows.push({ sku, asin, ok: created.ok !== false, action: created.action_label || (created.already_exists ? 'existing_enabled' : 'created'), campaign_id: created.campaign_id || null, error: created.error || null });
         } catch (error: any) {
@@ -216,6 +226,8 @@ Deno.serve(async (req) => {
       ok: failed === 0 && !noRequiredActions,
       dry_run: dryRun,
       fast_mode: fastMode,
+      requested_initial_bid: requestedInitialBid,
+      requested_strategy: requestedStrategy,
       started_at: startedAt,
       completed_at: new Date().toISOString(),
       connected_accounts: connectedAccounts.length,

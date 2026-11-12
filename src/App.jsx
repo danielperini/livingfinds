@@ -61,9 +61,15 @@ const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError } = useAuth();
   const [splashDone, setSplashDone] = useState(false);
   const [showSplash, setShowSplash] = useState(false);
+  const isPublicAuthRoute = ['/login', '/register', '/forgot-password', '/reset-password'].includes(window.location.pathname);
 
   useEffect(() => {
     const checkSplash = async () => {
+      if (isPublicAuthRoute) {
+        setShowSplash(false);
+        setSplashDone(true);
+        return;
+      }
       try {
         const isAuth = await base44.auth.isAuthenticated();
         if (!isAuth) { setSplashDone(true); return; }
@@ -86,7 +92,7 @@ const AuthenticatedApp = () => {
       }
     };
     checkSplash();
-  }, []);
+  }, [isPublicAuthRoute]);
 
   if (isLoadingPublicSettings || isLoadingAuth) {
     return (

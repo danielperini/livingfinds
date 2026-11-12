@@ -1,0 +1,83 @@
+name: Provision active AUTO campaigns
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/provision-active-auto-campaigns.yml
+  workflow_dispatch:
+
+concurrency:
+  group: provision-active-auto-campaigns
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Prepare SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_SSH_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Wait for this release and provision campaigns
+        shell: bash
+        env:
+          VPS_PORT: ${{ secrets.VPS_SSH_PORT || 22 }}
+          VPS_PATH: ${{ secrets.VPS_PATH || '/opt/livingfinds' }}
+        run: |
+          set -euo pipefail
+          ssh -p "$VPS_PORT" -i ~/.ssh/deploy_key "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "EXPECTED_SHA='$GITHUB_SHA' VPS_PATH='$VPS_PATH' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$VPS_PATH"
+          ready=0
+          for attempt in $(seq 1 120); do
+            body="$(curl -sf --max-time 10 http://127.0.0.1:8000/health || true)"
+            if echo "$body" | grep -Fq "\"release_sha\":\"$EXPECTED_SHA\""; then
+              ready=1
+              break
+            fi
+            sleep 5
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "Release $EXPECTED_SHA was not deployed within 10 minutes."
+            exit 1
+          fi
+
+          result="$(docker compose -f server/docker-compose.yml exec -T app deno eval '
+            const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
+            if (!token) throw new Error("API token unavailable");
+            const response = await fetch("http://127.0.0.1:8000/functions/provisionActiveAutoCampaignsExact", {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                "x-api-token": token,
+              },
+              body: JSON.stringify({
+                _service_role: true,
+                dry_run: false,
+                sync_first: true,
+                initial_bid: 1,
+                strategy_mode: "down_only",
+                max_products: 200,
+                trigger_type: "user_requested_2026_11_12",
+              }),
+            });
+            const text = await response.text();
+            console.log(text);
+            if (!response.ok) Deno.exit(2);
+            const data = JSON.parse(text);
+            if (data.ok !== true || data.verification_complete !== true) Deno.exit(3);
+          ' </dev/null)"
+          printf '%s\n' "$result"
+          echo "PROVISION_ACTIVE_AUTO_CAMPAIGNS_VERIFIED=true"
+          REMOTE
