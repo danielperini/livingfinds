@@ -77,6 +77,7 @@ export default function KeywordManagement() {
   const [autoNegating, setAutoNegating] = useState(false);
   const [acosTarget, setAcosTarget] = useState(30);
   const fileInputRef = useRef(null);
+  const autoFetchAttemptedRef = useRef(new Set());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -102,6 +103,27 @@ export default function KeywordManagement() {
       const visibleImportedRows = selectActiveImportedSearchTermRows(importedRows, importBatches);
       setKeywords([...searchTerms, ...visibleImportedRows]);
       setConfiguredKeywords(configured.filter(k => String(k.state || k.status).toLowerCase() !== 'archived'));
+
+      // A página vazia não deve parecer uma falha silenciosa: solicita uma
+      // atualização de 30 dias uma vez por conta, sem criar keywords.
+      const autoFetchKey = `search-terms:${acc.id}:${new Date().toISOString().slice(0, 10)}`;
+      if (searchTerms.length === 0 && importedRows.length === 0 && !autoFetchAttemptedRef.current.has(autoFetchKey)) {
+        autoFetchAttemptedRef.current.add(autoFetchKey);
+        try {
+          const response = await base44.functions.invoke('fetchSearchTermsFromApi', {
+            amazon_account_id: acc.id, days: 30, manual: false,
+          });
+          const data = response?.data ?? response;
+          setActionMsg({
+            type: data?.ok === false ? 'info' : 'success',
+            text: data?.ok === false
+              ? (data.error || 'O relatório de termos foi solicitado, mas ainda está sendo processado pela Amazon.')
+              : 'Relatório de termos solicitado à Amazon. Atualize a página após o processamento.',
+          });
+        } catch (error) {
+          setActionMsg({ type: 'info', text: 'Não há relatório de termos disponível; use “Buscar Amazon” para solicitar uma nova coleta.' });
+        }
+      }
       setNegatives(suggestions);
       setCampaigns(loadedCampaigns.filter((campaign) => !campaignIsArchived(campaign)));
     } catch (error) {
