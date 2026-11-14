@@ -70,7 +70,7 @@ function decideStrategy(params: {
   metrics: any;
   targetAcos: number;
   inventory: number;
-  requestedStrategy: 'down_only' | 'up_and_down';
+  requestedStrategy: 'down_only' | 'up_and_down' | 'fixed';
 }): { strategy: 'down_only' | 'up_and_down' | 'fixed'; tosBoost: number; rosBoost: number; reason: string; acos: number | null } {
   const { campaign, economics, assessment, metrics, targetAcos, inventory, requestedStrategy } = params;
   const ageHours = hoursSince(campaign.start_date || campaign.created_at);
@@ -326,7 +326,7 @@ Deno.serve(async (req) => {
         change_type: 'bidding_strategy_auto',
         field_changed: 'bidding_strategy + bid + placements',
         old_value: `${previousStrategy} / bid ${previousBid || '—'} / ToS ${previousTos}% / RoS ${previousRos}%`,
-        new_value: `${decision.strategy} / bid ${targetBid ?? previousBid || '—'} / ToS ${decision.tosBoost}% / RoS ${decision.rosBoost}%`,
+        new_value: `${decision.strategy} / bid ${targetBid ?? (previousBid || '—')} / ToS ${decision.tosBoost}% / RoS ${decision.rosBoost}%`,
         reason: decision.reason,
         acos_at_change: decision.acos || 0,
         target_acos_at_change: policy.target_acos,
