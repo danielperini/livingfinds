@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { clampBidToConfiguredPolicy, loadConfiguredBidPolicy } from '../../shared/configuredBidPolicy.ts';
 import {
   availableInventory,
   classifyProfitPressure,
@@ -14,7 +15,8 @@ const STRATEGY_MAP: Record<string, string> = {
   up_and_down: 'AUTO_FOR_SALES',
   fixed: 'MANUAL',
 };
-const MAX_TOP_OF_SEARCH_BOOST = 20;
+const MAX_TOP_OF_SEARCH_BOOST = 900;
+const MAX_REST_OF_SEARCH_BOOST = 900;
 const COOLDOWN_HOURS = 24;
 const LOOKBACK_DAYS = 14;
 const AI_OPPORTUNITY_CONFIDENCE = 0.85;
@@ -69,7 +71,7 @@ function decideStrategy(params: {
   targetAcos: number;
   inventory: number;
   requestedStrategy: 'down_only' | 'up_and_down';
-}): { strategy: 'down_only' | 'up_and_down' | 'fixed'; tosBoost: number; reason: string; acos: number | null } {
+}): { strategy: 'down_only' | 'up_and_down' | 'fixed'; tosBoost: number; rosBoost: number; reason: string; acos: number | null } {
   const { campaign, economics, assessment, metrics, targetAcos, inventory, requestedStrategy } = params;
   const ageHours = hoursSince(campaign.start_date || campaign.created_at);
   const spend = numberValue(metrics.spend);
@@ -77,16 +79,16 @@ function decideStrategy(params: {
   const orders = numberValue(metrics.orders);
   const acos = sales > 0 ? spend / sales * 100 : null;
 
-  if (inventory === 0) return { strategy: 'down_only', tosBoost: 0, reason: 'Estoque zero: nenhuma ampliação de lance ou placement.', acos };
-  if (ageHours < 72 && spend < 5) return { strategy: 'fixed', tosBoost: 0, reason: 'Campanha com menos de 72h e pouca evidência: lance fixo sem placement.', acos };
-  if (!economicsAreActionable(economics, assessment)) return { strategy: 'down_only', tosBoost: 0, reason: 'Economia do SKU incompleta: somente redução dinâmica.', acos };
+  if (inventory === 0) return { strategy: 'down_only', tosBoost: 0, rosBoost: 0, reason: 'Estoque zero: nenhuma ampliação de lance ou placement.', acos };
+  if (ageHours < 72 && spend < 5) return { strategy: 'fixed', tosBoost: 0, rosBoost: 0, reason: 'Campanha com menos de 72h e pouca evidência: lance fixo sem placement.', acos };
+  if (!economicsAreActionable(economics, assessment)) return { strategy: 'down_only', tosBoost: 0, rosBoost: 0, reason: 'Economia do SKU incompleta: somente redução dinâmica.', acos };
 
   const pressure = classifyProfitPressure(assessment, economics);
   if (['critical', 'defensive', 'watch'].includes(pressure)) {
-    return { strategy: 'down_only', tosBoost: 0, reason: `Proteção econômica ${pressure}: Down Only e Top of Search zerado.`, acos };
+    return { strategy: 'down_only', tosBoost: 0, rosBoost: 0, reason: `Proteção econômica ${pressure}: Down Only e Top of Search zerado.`, acos };
   }
-  if (orders === 0 || acos === null) return { strategy: 'down_only', tosBoost: 0, reason: 'Sem conversão atribuída: Down Only, sem boost.', acos };
-  if (acos > targetAcos) return { strategy: 'down_only', tosBoost: 0, reason: `ACoS ${roundMoney(acos)}% acima da meta segura ${targetAcos}%.`, acos };
+  if (orders === 0 || acos === null) return { strategy: 'down_only', tosBoost: 0, rosBoost: 0, reason: 'Sem conversão atribuída: Down Only, sem boost.', acos };
+  if (acos > targetAcos) return { strategy: 'down_only', tosBoost: 0, rosBoost: 0, reason: `ACoS ${roundMoney(acos)}% acima da meta segura ${targetAcos}%.`, acos };
 
   const headroom = Math.max(0, (targetAcos - acos) / Math.max(targetAcos, 1));
   const proposedBoost = Math.min(MAX_TOP_OF_SEARCH_BOOST, Math.max(5, Math.round(5 + headroom * 15)));
@@ -96,7 +98,7 @@ function decideStrategy(params: {
   if (requestedStrategy === 'up_and_down' && orders >= 2 && positiveEconomics && aiConfidence >= AI_OPPORTUNITY_CONFIDENCE) {
     return {
       strategy: 'up_and_down',
-      tosBoost: proposedBoost,
+      tosBoost: proposedBoost, rosBoost: 0,
       reason: `IA aprovou aumento dinâmico com confiança ${Math.round(aiConfidence * 100)}%: ${orders} pedidos, ACoS ${roundMoney(acos)}% e lucro pós-Ads positivo.`,
       acos,
     };
@@ -148,9 +150,18 @@ Deno.serve(async (req) => {
     const assessmentByAsin = latestAssessments(assessments);
     const metricsByCampaign = aggregateCampaignMetrics(metricsRows.filter((row: any) => String(row.date || '') >= cutoff));
 
-    const requestedStrategy = body.strategy_mode === 'up_and_down' ? 'up_and_down' : 'down_only';
+    const requestedStrategy = body.strategy_mode === 'up_and_down' ? 'up_and_down' : body.strategy_mode === 'fixed' ? 'fixed' : 'down_only';
     const directCampaignId = body.campaign_id ? String(body.campaign_id) : null;
-    const directRequested = Boolean(directCampaignId && body.force_strategy === true);
+    const userOverride = body.force_override === true;
+    const directRequested = Boolean(directCampaignId && (body.force_strategy === true || userOverride));
+    const targetBidRaw = Number(body.target_bid ?? body.bid_value);
+    const requestedBid = Number.isFinite(targetBidRaw) && targetBidRaw > 0 ? targetBidRaw : null;
+    const requestedTosRaw = Number(body.top_of_search_adjustment);
+    const requestedRosRaw = Number(body.rest_of_search_adjustment);
+    const requestedTos = Number.isFinite(requestedTosRaw) ? Math.max(0, Math.min(MAX_TOP_OF_SEARCH_BOOST, requestedTosRaw)) : null;
+    const requestedRos = Number.isFinite(requestedRosRaw) ? Math.max(0, Math.min(MAX_REST_OF_SEARCH_BOOST, requestedRosRaw)) : null;
+    const bidPolicy = await loadConfiguredBidPolicy(base44, aid);
+    const targetBid = requestedBid == null ? null : Number(clampBidToConfiguredPolicy(requestedBid, bidPolicy));
     const candidateById = new Map<string, any>();
     for (const campaign of campaigns.filter((candidate: any) =>
       (campaignState(candidate) === 'enabled' || (directRequested && campaignIdOf(candidate) === directCampaignId)) &&
@@ -176,7 +187,7 @@ Deno.serve(async (req) => {
         String(history.campaign_id || '') === campaignId &&
         hoursSince(history.applied_at || history.created_at || history.created_date) < COOLDOWN_HOURS
       );
-      if (recent && !directRequested) {
+      if (recent && !directRequested && !userOverride) {
         skippedCooldown++;
         continue;
       }
@@ -197,12 +208,13 @@ Deno.serve(async (req) => {
         inventory: product ? availableInventory(product) : -1,
         requestedStrategy,
       });
-      if (directRequested) {
+      if (userOverride || directRequested) {
         decision = {
           ...decision,
           strategy: requestedStrategy,
-          tosBoost: numberValue(campaign.top_of_search_adjustment, 0),
-          reason: `Estratégia definida manualmente no painel: ${requestedStrategy === 'up_and_down' ? 'Dinâmico — sobe e desce' : 'Dinâmico — só reduz'}.`,
+          tosBoost: requestedTos ?? numberValue(campaign.top_of_search_adjustment, 0),
+          rosBoost: requestedRos ?? numberValue(campaign.rest_of_search_adjustment, 0),
+          reason: `Configuração consolidada definida no painel: ${requestedStrategy === 'up_and_down' ? 'Dinâmico — sobe e desce' : requestedStrategy === 'fixed' ? 'Lance fixo' : 'Dinâmico — só reduz'}${targetBid == null ? '' : `, bid ${targetBid.toFixed(2)}`}.`,
         };
       }
 
@@ -210,7 +222,11 @@ Deno.serve(async (req) => {
         ? 'up_and_down'
         : ['manual', 'fixed'].includes(String(campaign.bidding_strategy || '').toLowerCase()) ? 'fixed' : 'down_only';
       const previousTos = numberValue(campaign.top_of_search_adjustment, 0);
-      const changed = previousStrategy !== decision.strategy || previousTos !== decision.tosBoost;
+      const previousRos = numberValue(campaign.rest_of_search_adjustment, 0);
+      const previousBid = numberValue(campaign.bid_value ?? campaign.default_bid, 0);
+      const bidChanged = targetBid != null && previousBid !== targetBid;
+      const placementChanged = previousTos !== decision.tosBoost || previousRos !== decision.rosBoost;
+      const changed = previousStrategy !== decision.strategy || placementChanged || bidChanged;
       const preview = {
         campaign_id: campaignId,
         asin,
@@ -235,23 +251,7 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      const strategyResponse = unwrap(await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
-        amazon_account_id: aid,
-        _service_role: true,
-        method: 'PUT',
-        path: '/sp/campaigns',
-        content_type: 'application/vnd.spCampaign.v3+json',
-        accept: 'application/vnd.spCampaign.v3+json',
-        payload: { campaigns: [{ campaignId, dynamicBidding: { strategy: STRATEGY_MAP[decision.strategy] } }] },
-      }).catch((error: any) => ({ ok: false, error: error.message })));
-
-      if (strategyResponse.ok !== true) {
-        errors++;
-        results.push({ ...preview, status: 'strategy_error', amazon_status: strategyResponse.status, error: strategyResponse.message || strategyResponse.error || strategyResponse.errors?.[0]?.message });
-        continue;
-      }
-
-      const placementResponse = unwrap(await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
+      const campaignResponse = unwrap(await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
         amazon_account_id: aid,
         _service_role: true,
         method: 'PUT',
@@ -261,21 +261,62 @@ Deno.serve(async (req) => {
         payload: {
           campaigns: [{
             campaignId,
-            placement: { placementBidAdjustment: [{ predicate: 'PLACEMENT_TOP', percentage: decision.tosBoost }] },
+            dynamicBidding: {
+              strategy: STRATEGY_MAP[decision.strategy],
+              placementBidding: [
+                { placement: 'PLACEMENT_TOP', percentage: decision.tosBoost },
+                { placement: 'PLACEMENT_REST_OF_SEARCH', percentage: decision.rosBoost },
+              ],
+            },
           }],
         },
       }).catch((error: any) => ({ ok: false, error: error.message })));
 
-      if (placementResponse.ok !== true) {
+      if (campaignResponse.ok !== true) {
         errors++;
-        results.push({ ...preview, status: 'placement_error', amazon_status: placementResponse.status, error: placementResponse.message || placementResponse.error || placementResponse.errors?.[0]?.message });
+        results.push({ ...preview, status: 'campaign_config_error', amazon_status: campaignResponse.status, error: campaignResponse.message || campaignResponse.error || campaignResponse.errors?.[0]?.message });
         continue;
+      }
+
+      if (targetBid != null) {
+        const groupsResponse = unwrap(await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
+          amazon_account_id: aid,
+          _service_role: true,
+          method: 'POST',
+          path: '/sp/adGroups/list',
+          content_type: 'application/vnd.spAdGroup.v3+json',
+          accept: 'application/vnd.spAdGroup.v3+json',
+          payload: {
+            campaignIdFilter: { include: [campaignId] },
+            stateFilter: { include: ['ENABLED'] },
+            maxResults: 100,
+          },
+        }).catch((error: any) => ({ ok: false, error: error.message })));
+        const groups = Array.isArray(groupsResponse.payload?.adGroups) ? groupsResponse.payload.adGroups : Array.isArray(groupsResponse.adGroups) ? groupsResponse.adGroups : [];
+        for (const group of groups) {
+          const bidResponse = unwrap(await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
+            amazon_account_id: aid,
+            _service_role: true,
+            method: 'PUT',
+            path: '/sp/adGroups',
+            content_type: 'application/vnd.spAdGroup.v3+json',
+            accept: 'application/vnd.spAdGroup.v3+json',
+            payload: { adGroups: [{ adGroupId: String(group.adGroupId), defaultBid: targetBid }] },
+          }).catch((error: any) => ({ ok: false, error: error.message })));
+          if (bidResponse.ok !== true) {
+            errors++;
+            results.push({ ...preview, status: 'bid_error', error: bidResponse.message || bidResponse.error || 'Falha ao atualizar o bid do grupo.' });
+            continue;
+          }
+        }
       }
 
       const now = new Date().toISOString();
       await base44.asServiceRole.entities.Campaign.update(campaign.id, {
         bidding_strategy: decision.strategy,
         top_of_search_adjustment: decision.tosBoost,
+        rest_of_search_adjustment: decision.rosBoost,
+        ...(targetBid != null ? { bid_value: targetBid, default_bid: targetBid } : {}),
         last_activity_at: now,
       }).catch(() => {});
       await base44.asServiceRole.entities.CampaignChangeHistory.create({
@@ -283,9 +324,9 @@ Deno.serve(async (req) => {
         campaign_id: campaignId,
         asin,
         change_type: 'bidding_strategy_auto',
-        field_changed: 'bidding_strategy + top_of_search_adjustment',
-        old_value: `${previousStrategy} / ToS ${previousTos}%`,
-        new_value: `${decision.strategy} / ToS ${decision.tosBoost}%`,
+        field_changed: 'bidding_strategy + bid + placements',
+        old_value: `${previousStrategy} / bid ${previousBid || '—'} / ToS ${previousTos}% / RoS ${previousRos}%`,
+        new_value: `${decision.strategy} / bid ${targetBid ?? previousBid || '—'} / ToS ${decision.tosBoost}% / RoS ${decision.rosBoost}%`,
         reason: decision.reason,
         acos_at_change: decision.acos || 0,
         target_acos_at_change: policy.target_acos,
@@ -303,6 +344,8 @@ Deno.serve(async (req) => {
       dry_run: dryRun,
       policy: {
         max_top_of_search_boost_pct: MAX_TOP_OF_SEARCH_BOOST,
+        max_rest_of_search_boost_pct: MAX_REST_OF_SEARCH_BOOST,
+        bid_ceiling: bidPolicy.ceiling,
         requested_strategy: requestedStrategy,
         automatic_up_and_down_requires_ai_confidence: AI_OPPORTUNITY_CONFIDENCE,
         product_economics_required: true,
