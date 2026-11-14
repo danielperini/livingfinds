@@ -38,18 +38,21 @@ export default function CampaignConfigPanel({ campaign, account, products, onSav
     setStatus('idle');
     setErrorMsg('');
     try {
-      const strategyChanged = form.bidding_strategy !== (normalizeBiddingStrategy(campaign.bidding_strategy));
-      if (strategyChanged) {
-        const strategyResponse = await base44.functions.invoke('applyBiddingStrategyByCampaign', {
-          amazon_account_id: account.id,
-          campaign_id: campaign.campaign_id || campaign.amazon_campaign_id,
-          strategy_mode: form.bidding_strategy === 'dynamic_up_down' ? 'up_and_down' : 'down_only',
-          force_strategy: true,
-        });
-        const strategyData = strategyResponse?.data || strategyResponse;
-        if (!strategyData?.ok || Number(strategyData?.applied || 0) < 1) {
-          throw new Error(strategyData?.error || strategyData?.results?.[0]?.error || 'A Amazon não confirmou a estratégia de lance.');
-        }
+      const strategyResponse = await base44.functions.invoke('applyBiddingStrategyByCampaign', {
+        amazon_account_id: account.id,
+        campaign_id: campaign.campaign_id || campaign.amazon_campaign_id,
+        strategy_mode: form.bidding_strategy === 'dynamic_up_down'
+          ? 'up_and_down'
+          : form.bidding_strategy === 'fixed' ? 'fixed' : 'down_only',
+        force_strategy: true,
+        force_override: true,
+        target_bid: Number(form.bid_value),
+        top_of_search_adjustment: Number(form.top_of_search_adjustment),
+        rest_of_search_adjustment: Number(form.rest_of_search_adjustment),
+      });
+      const strategyData = strategyResponse?.data || strategyResponse;
+      if (!strategyData?.ok || Number(strategyData?.applied || 0) < 1) {
+        throw new Error(strategyData?.error || strategyData?.results?.[0]?.error || 'A Amazon não confirmou a configuração consolidada de lance.');
       }
 
       // Salvar no banco local somente após a confirmação da estratégia remota
@@ -58,6 +61,10 @@ export default function CampaignConfigPanel({ campaign, account, products, onSav
         status: form.state,
         daily_budget: Number(form.daily_budget),
         bidding_strategy: form.bidding_strategy,
+        bid_value: Number(form.bid_value),
+        default_bid: Number(form.bid_value),
+        top_of_search_adjustment: Number(form.top_of_search_adjustment),
+        rest_of_search_adjustment: Number(form.rest_of_search_adjustment),
       });
 
       // Se mudou o estado, envia para Amazon via função
@@ -89,7 +96,7 @@ export default function CampaignConfigPanel({ campaign, account, products, onSav
       }
 
       setStatus('success');
-      onSaved?.({ ...campaign, ...form, daily_budget: Number(form.daily_budget) });
+      onSaved?.({ ...campaign, ...form, daily_budget: Number(form.daily_budget), bid_value: Number(form.bid_value), default_bid: Number(form.bid_value) });
       setTimeout(() => setStatus('idle'), 3000);
     } catch (e) {
       setStatus('error');
@@ -103,7 +110,10 @@ export default function CampaignConfigPanel({ campaign, account, products, onSav
   const changed =
     form.state !== (campaign.state || 'enabled') ||
     Number(form.daily_budget) !== (campaign.daily_budget || 10) ||
-    form.bidding_strategy !== (normalizeBiddingStrategy(campaign.bidding_strategy));
+    form.bidding_strategy !== (normalizeBiddingStrategy(campaign.bidding_strategy)) ||
+    Number(form.bid_value) !== Number(campaign.bid_value ?? campaign.default_bid ?? 0.5) ||
+    Number(form.top_of_search_adjustment) !== Number(campaign.top_of_search_adjustment ?? 0) ||
+    Number(form.rest_of_search_adjustment) !== Number(campaign.rest_of_search_adjustment ?? 0);
 
   return (
     <div className="p-6 space-y-6 max-w-2xl">
@@ -204,6 +214,28 @@ export default function CampaignConfigPanel({ campaign, account, products, onSav
               className="w-40 px-3 py-2 bg-surface-3 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50"
             />
             <span className="text-xs text-slate-500">/ dia</span>
+          </div>
+        </div>
+
+        {/* Bid base e placements */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div>
+            <label className="text-xs text-slate-400 mb-1.5 block">Bid base (R$)</label>
+            <input type="number" step="0.01" min="0.02" value={form.bid_value}
+              onChange={e => setForm(f => ({ ...f, bid_value: e.target.value }))}
+              className="w-full px-3 py-2 bg-surface-3 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50" />
+          </div>
+          <div>
+            <label className="text-xs text-slate-400 mb-1.5 block">Topo da pesquisa (%)</label>
+            <input type="number" step="1" min="0" max="900" value={form.top_of_search_adjustment}
+              onChange={e => setForm(f => ({ ...f, top_of_search_adjustment: e.target.value }))}
+              className="w-full px-3 py-2 bg-surface-3 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50" />
+          </div>
+          <div>
+            <label className="text-xs text-slate-400 mb-1.5 block">Restante da pesquisa (%)</label>
+            <input type="number" step="1" min="0" max="900" value={form.rest_of_search_adjustment}
+              onChange={e => setForm(f => ({ ...f, rest_of_search_adjustment: e.target.value }))}
+              className="w-full px-3 py-2 bg-surface-3 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50" />
           </div>
         </div>
 
