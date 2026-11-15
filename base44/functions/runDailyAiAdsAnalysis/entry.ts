@@ -354,37 +354,44 @@ async function callOpenAi(apiKey: string, model: string, evidence: any): Promise
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20_000);
   try {
+    const reasoningModel = /^(gpt-5|o[1-9])/i.test(model);
+    const requestBody: Record<string, unknown> = {
+      model,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: 'Você é o analista econômico de Amazon Ads. Responda somente JSON válido.' },
+        { role: 'user', content: JSON.stringify({
+          objective: 'propor alterações econômicas com baixo risco',
+          rules: [
+            'verifique todos os indicadores recebidos: gasto, vendas, pedidos, impressões, cliques, CTR, CPC, CVR, ACoS, ROAS, orçamento, participação do budget, estoque, margem, lucro pós-Ads, idade e qualidade da evidência',
+            'analise todos os active_sku_coverage e active_sku_campaigns: todo SKU ativo com estoque deve ter cobertura AUTO; campanha ativa sem entrega deve ser diagnosticada antes de alterar bid; campanha ligada a produto inativo deve permanecer pausada e fora da gestão econômica',
+            'compare campanha, keyword e search term; compare também com o próprio histórico, com o SKU e com campanhas equivalentes',
+            'reduza bids de termos com gasto sem venda, ACoS acima do máximo, CPC acima do econômico ou prejuízo, sempre respeitando o bid mínimo e o teto econômico',
+            'nunca reduza bid apenas por comparar ontem com hoje; para redução, exija evidência de pelo menos dois dias',
+            'impulsione vencedores somente com conversões, ACoS dentro da meta, estoque e margem positiva, respeitando o passo máximo configurado',
+            'não aumente o orçamento total diário; redistribuição deve ser neutra e considerar a participação e o desempenho de cada campanha',
+            'campanha sem gasto deve receber aumento somente se houver impressões, estoque, elegibilidade e oportunidade mensurável; caso contrário propor investigação',
+            'crie campanha manual apenas para termo vencedor com conversão do mesmo SKU; use a API Amazon e nunca invente IDs',
+            'para a inteligência de keywords: termos long tail elegíveis devem ser promovidos para campanha manual EXACT com bid inicial de R$0,40 e estratégia dinâmica de aumento e redução; no máximo 3 termos medium tail por ASIN; não duplicar por ASIN+termo',
+            'um termo pode ser propagado para mais de um ASIN somente quando os produtos estiverem ativos e pertencerem ao mesmo grupo de produto; criar uma campanha manual separada por ASIN e negativar o termo na campanha AUTO de origem',
+            'aplicar ajuste de placement de topo da pesquisa de 25% apenas dentro dos limites e da confirmação da Amazon',
+            'avaliar a distribuição de budget três vezes ao dia sem ultrapassar o teto global; campanha manual nova usa R$15/dia, mas o gasto efetivo agregado deve permanecer dentro do cap',
+            'se uma campanha ativa com estoque e dados válidos não tiver gasto por 24 horas, aumentar o bid em no máximo 10% por avaliação, por até 5 dias consecutivos; interromper a recuperação ao atingir entrega, limite econômico ou cap',
+            'termos irrelevantes, caros ou sem venda podem ser negative_keyword somente com evidência suficiente e correspondência segura',
+            'não pausar campanhas econômicas por falta de venda; o ciclo determinístico já pausa campanhas de produto inativo e só reativa produto ativo com histórico de venda',
+            'métricas são somente leitura; altere apenas bid, budget dentro do teto, keyword/negative keyword e campanha pelos IDs fornecidos',
+            'nunca altere a política de risco; no máximo 5 campanhas novas por dia, sem criação em massa e com budget máximo de R$20 por campanha',
+          ],
+          output_schema: { recommendations: [{ entity_id: 'string', action: 'update_bid|negative_keyword|update_budget|create_manual_campaign|pause_campaign', proposed_value: 'number', confidence: '0..1', rationale: 'string', evidence: ['string'], last_resort: 'boolean' }] },
+          evidence,
+        }) },
+      ],
+    };
+    if (!reasoningModel) requestBody.temperature = 0.1;
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST', signal: controller.signal,
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        temperature: 0.1,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: 'Você é o analista econômico de Amazon Ads. Responda somente JSON válido.' },
-          { role: 'user', content: JSON.stringify({
-            objective: 'propor alterações econômicas com baixo risco',
-            rules: [
-              'verifique todos os indicadores recebidos: gasto, vendas, pedidos, impressões, cliques, CTR, CPC, CVR, ACoS, ROAS, orçamento, participação do budget, estoque, margem, lucro pós-Ads, idade e qualidade da evidência',
-              'analise todos os active_sku_coverage e active_sku_campaigns: todo SKU ativo com estoque deve ter cobertura AUTO; campanha ativa sem entrega deve ser diagnosticada antes de alterar bid; campanha ligada a produto inativo deve permanecer pausada e fora da gestão econômica',
-              'compare campanha, keyword e search term; compare também com o próprio histórico, com o SKU e com campanhas equivalentes',
-              'reduza bids de termos com gasto sem venda, ACoS acima do máximo, CPC acima do econômico ou prejuízo, sempre respeitando o bid mínimo e o teto econômico',
-              'nunca reduza bid apenas por comparar ontem com hoje; para redução, exija evidência de pelo menos dois dias',
-              'impulsione vencedores somente com conversões, ACoS dentro da meta, estoque e margem positiva, respeitando o passo máximo configurado',
-              'não aumente o orçamento total diário; redistribuição deve ser neutra e considerar a participação e o desempenho de cada campanha',
-              'campanha sem gasto deve receber aumento somente se houver impressões, estoque, elegibilidade e oportunidade mensurável; caso contrário propor investigação',
-              'crie campanha manual apenas para termo vencedor com conversão do mesmo SKU; use a API Amazon e nunca invente IDs',
-              'termos irrelevantes, caros ou sem venda podem ser negative_keyword somente com evidência suficiente e correspondência segura',
-              'não pausar campanhas econômicas por falta de venda; o ciclo determinístico já pausa campanhas de produto inativo e só reativa produto ativo com histórico de venda',
-              'métricas são somente leitura; altere apenas bid, budget dentro do teto, keyword/negative keyword e campanha pelos IDs fornecidos',
-              'nunca altere a política de risco; no máximo 5 campanhas novas por dia, sem criação em massa e com budget máximo de R$20 por campanha',
-            ],
-            output_schema: { recommendations: [{ entity_id: 'string', action: 'update_bid|negative_keyword|update_budget|create_manual_campaign|pause_campaign', proposed_value: 'number', confidence: '0..1', rationale: 'string', evidence: ['string'], last_resort: 'boolean' }] },
-            evidence,
-          }) },
-        ],
-      }),
+      body: JSON.stringify(requestBody),
     });
     if (!response.ok) throw new Error(`OPENAI_HTTP_${response.status}`);
     const payload = await response.json();
@@ -441,20 +448,8 @@ async function persistProposal(base44: any, accountId: string, candidate: DailyA
 Deno.serve(async (request) => {
   const startedAt = nowIso();
   const startedMs = Date.now();
-  let lockClient: any = null;
-  let dailyRunLock: any = null;
-  const finishDailyRunLock = async (status: string, details: any = {}) => {
-    if (!lockClient || !dailyRunLock?.id) return;
-    await lockClient.asServiceRole.entities.SyncExecutionLog.update(dailyRunLock.id, {
-      status,
-      completed_at: nowIso(),
-      duration_ms: Date.now() - startedMs,
-      result_summary: JSON.stringify(details).slice(0, 4000),
-    }).catch(() => null);
-  };
   try {
     const base44 = createClientFromRequest(request);
-    lockClient = base44;
     const body = await request.json().catch(() => ({}));
     const authenticated = await base44.auth.isAuthenticated().catch(() => false);
     if (!authenticated && !body._service_role) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
@@ -466,36 +461,17 @@ Deno.serve(async (request) => {
     if (!account) return Response.json({ ok: false, error: 'Nenhuma conta Amazon conectada' }, { status: 400 });
     const accountId = String(account.id);
     const date = todayBrt();
+    const targetAsins = new Set((Array.isArray(body.target_asins) ? body.target_asins : [])
+      .map((value: unknown) => String(value || '').trim().toUpperCase()).filter(Boolean));
+    const dryRun = body.dry_run === true;
 
     const prior = await base44.asServiceRole.entities.SyncExecutionLog.filter({
       [ACCOUNT_ID]: accountId, operation: 'daily_ai_ads_analysis', execution_date: date, status: 'success',
     }, '-started_at', 1).catch(() => []);
     if (prior.length && body.force !== true) return Response.json({ ok: true, skipped: true, reason: 'already_completed_today', date });
 
-    // Durable daily lock: do not load reports, keywords or metrics twice for the same account/day.
-    const running = await base44.asServiceRole.entities.SyncExecutionLog.filter({
-      [ACCOUNT_ID]: accountId, operation: 'daily_ai_ads_analysis', execution_date: date, status: 'started',
-    }, '-started_at', 5).catch(() => []);
-    const freshRunning = running.find((row: any) => {
-      const started = new Date(String(value(row, 'started_at', ''))).getTime();
-      return Number.isFinite(started) && Date.now() - started < 6 * 60 * 60 * 1000;
-    });
-    if (freshRunning) return Response.json({ ok: true, skipped: true, reason: 'already_running', date, lock_id: freshRunning.id });
-
-    dailyRunLock = await base44.asServiceRole.entities.SyncExecutionLog.create({
-      [ACCOUNT_ID]: accountId,
-      operation: 'daily_ai_ads_analysis',
-      trigger_type: body._service_role ? 'automatic' : 'manual',
-      status: 'started',
-      execution_date: date,
-      started_at: startedAt,
-      idempotency_key: `daily_ai_ads_analysis|${accountId}|${date}`,
-      source_function: 'runDailyAiAdsAnalysis',
-      message: 'Daily AI analysis lock acquired before report and metric reads.',
-    }).catch(() => null);
-
     const precheck = await runAmazonAdsTokenPrecheck(base44, accountId, 'runDailyAiAdsAnalysis');
-    if (!precheck.ok) { await finishDailyRunLock('failed', { error: precheck.error }); return Response.json({ ok: false, error: precheck.error, token_precheck: precheck.details }, { status: precheck.httpStatus }); }
+    if (!precheck.ok) return Response.json({ ok: false, error: precheck.error, token_precheck: precheck.details }, { status: precheck.httpStatus });
 
     // A análise diária só pode propor mudanças com os relatórios fechados e a
     // sincronização intradiária atualizados. Se a atualização falhar, não cria
@@ -508,7 +484,6 @@ Deno.serve(async (request) => {
     }).catch((error: any) => ({ ok: false, error: error?.response?.data?.error || error?.message || String(error) }));
     const reportSync = reportSyncRaw?.data || reportSyncRaw || {};
     if (reportSync.ok === false) {
-      await finishDailyRunLock('failed', { error: 'RELATORIOS_NAO_ATUALIZADOS', report_sync: reportSync });
       return Response.json({ ok: false, error: 'RELATORIOS_NAO_ATUALIZADOS', report_sync: reportSync }, { status: 503 });
     }
 
@@ -521,13 +496,15 @@ Deno.serve(async (request) => {
       execution_date: date,
       status: 'success',
     }, '-started_at', 1).catch(() => []);
-    const lifecycle = lifecycleAlreadyRun.length
+    const lifecycle = targetAsins.size
+      ? { ok: true, skipped: true, reason: 'target_asin_scope' }
+      : lifecycleAlreadyRun.length
       ? { ok: true, skipped: true, reason: 'already_completed_today' }
       : await base44.asServiceRole.functions.invoke('reconcileDailyActiveSkuAds', {
           _service_role: true,
           [ACCOUNT_ID]: accountId,
           pause_inactive: true,
-          dry_run: false,
+          dry_run: dryRun,
           trigger_type: 'daily_ai_ads_analysis',
         }).then((result: any) => result?.data || result || {})
         .catch((error: any) => ({ ok: false, error: error?.response?.data?.error || error?.message || String(error) }));
@@ -547,6 +524,17 @@ Deno.serve(async (request) => {
       { [ACCOUNT_ID]: accountId }, '-date', MAX_ROWS);
     const economics = await pagedFilter(base44, base44.asServiceRole.entities.ProductEconomics,
       { [ACCOUNT_ID]: accountId }, '-updated_at', 1000);
+    if (targetAsins.size) {
+      const asinOf = (row: any) => String(value(row, 'asin', value(row, 'advertised_asin', ''))).toUpperCase();
+      const campaignIds = new Set(campaigns.filter((row: any) => targetAsins.has(asinOf(row)))
+        .map((row: any) => String(value(row, 'campaign_id', value(row, 'amazon_campaign_id', '')))).filter(Boolean));
+      products.splice(0, products.length, ...products.filter((row: any) => targetAsins.has(asinOf(row))));
+      campaigns.splice(0, campaigns.length, ...campaigns.filter((row: any) => targetAsins.has(asinOf(row))));
+      keywords.splice(0, keywords.length, ...keywords.filter((row: any) => targetAsins.has(asinOf(row)) || campaignIds.has(String(value(row, 'campaign_id', '')))));
+      searchTerms.splice(0, searchTerms.length, ...searchTerms.filter((row: any) => targetAsins.has(asinOf(row)) || campaignIds.has(String(value(row, 'campaign_id', '')))));
+      metrics.splice(0, metrics.length, ...metrics.filter((row: any) => campaignIds.has(String(value(row, 'campaign_id', '')))));
+      economics.splice(0, economics.length, ...economics.filter((row: any) => targetAsins.has(asinOf(row))));
+    }
     const recentDecisions = await base44.asServiceRole.entities.OptimizationDecision.filter(
       { [ACCOUNT_ID]: accountId, rule_key: 'daily_ai_ads_analysis' }, '-created_at', 100,
     ).catch(() => []);
@@ -566,8 +554,9 @@ Deno.serve(async (request) => {
       if (!row.asin) return false;
       const asin = String(row.asin).toUpperCase();
       const sku = String(row.sku || '').toUpperCase();
-      // Exact ASIN/SKU matching keeps inactive variations out of AI/bid management.
-      // ASIN-only rows are accepted only when the ASIN has one active SKU.
+      // Exact ASIN/SKU matching is authoritative. ASIN-only candidates are
+      // allowed only when that ASIN has one active SKU, avoiding cross-variant
+      // management of inactive products.
       if (sku) return activeKeys.has(`${asin}|${sku}`);
       return activeCoverage.filter((item) => item.asin === asin).length === 1 && activeAsins.has(asin);
     });
@@ -616,8 +605,8 @@ Deno.serve(async (request) => {
     };
 
     const apiKey = Deno.env.get('OPENAI_API_KEY') || '';
-    if (!apiKey) { await finishDailyRunLock('failed', { error: 'OPENAI_API_KEY ausente' }); return Response.json({ ok: false, error: 'OPENAI_API_KEY ausente', ai_unavailable: true }, { status: 503 }); }
-    const model = Deno.env.get('OPENAI_MODEL') || String(body.model || 'gpt-4o-mini');
+    if (!apiKey) return Response.json({ ok: false, error: 'OPENAI_API_KEY ausente', ai_unavailable: true }, { status: 503 });
+    const model = String(body.model || Deno.env.get('OPENAI_MODEL') || 'gpt-4o-mini');
     const ai = await callOpenAi(apiKey, model, evidence);
     const recommendations = Array.isArray(ai?.recommendations) ? ai.recommendations : [];
     const byEntity = new Map(candidates.map((candidate) => [candidate.entity_id, candidate]));
@@ -667,16 +656,20 @@ Deno.serve(async (request) => {
         const current = Number(candidate.daily_budget || 0);
         const proposed = Number(checked.normalized.proposed_value || 0);
         const delta = Math.max(0, proposed - current);
-        // Campaign budgets are nominal Amazon limits. Only realized account spend
-        // is capped here; the kill-switch/controller remains the enforcement owner.
-        if (metricSummary.totals.spend >= settings.dailyBudgetCap) {
-          rejected.push({ entity_id: candidate.entity_id, reason: 'ACCOUNT_SPEND_CAP_REACHED' });
+        if (budgetPlan.totalBudget + plannedBudgetIncrease + delta > settings.dailyBudgetCap) {
+          rejected.push({ entity_id: candidate.entity_id, reason: 'DAILY_BUDGET_CAP_REACHED' });
           continue;
         }
         plannedBudgetIncrease += delta;
       }
-      const outcome = await persistProposal(base44, accountId, candidate, checked.normalized, checked.autoApprove, date);
-      persisted.push({ ...outcome, entity_id: candidate.entity_id, action: checked.normalized.action, auto_approved: checked.autoApprove });
+      if (dryRun) {
+        persisted.push({ preview: true, id: null, duplicate: false, entity_id: candidate.entity_id,
+          action: checked.normalized.action, auto_approved: false, confidence: checked.normalized.confidence,
+          proposed_value: checked.normalized.proposed_value, rationale: checked.normalized.rationale });
+      } else {
+        const outcome = await persistProposal(base44, accountId, candidate, checked.normalized, checked.autoApprove, date);
+        persisted.push({ ...outcome, entity_id: candidate.entity_id, action: checked.normalized.action, auto_approved: checked.autoApprove });
+      }
       if (persisted.length >= settings.maxProposals) break;
     }
 
@@ -702,7 +695,7 @@ Deno.serve(async (request) => {
       decisions: autoDecisionIds.length,
       results: executionBatches,
     };
-    const confirmation = execution?.ok === false
+    const confirmation = dryRun ? { ok: true, skipped: true, reason: 'dry_run' } : execution?.ok === false
       ? { ok: false, skipped: true, reason: 'execution_failed' }
       : await base44.asServiceRole.functions.invoke('confirmExecutedDecisions', {
           _service_role: true,
@@ -711,33 +704,24 @@ Deno.serve(async (request) => {
         }).then((result: any) => result?.data || result || {})
           .catch((error: any) => ({ ok: false, error: error?.response?.data?.error || error?.message || String(error) }));
 
-    const completedSummary = { model, report_sync: reportSync, candidates: candidates.length, recommendations: recommendations.length, persisted: persisted.length, rejected: rejected.length, execution, confirmation, budget_plan: budgetPlan };
-    if (dailyRunLock?.id) {
-      await base44.asServiceRole.entities.SyncExecutionLog.update(dailyRunLock.id, {
-        status: 'success',
-        completed_at: nowIso(),
-        duration_ms: Date.now() - startedMs,
-        records_processed: persisted.length,
-        result_summary: JSON.stringify(completedSummary).slice(0, 4000),
-      }).catch(() => null);
-    } else {
-      await base44.asServiceRole.entities.SyncExecutionLog.create({
-        [ACCOUNT_ID]: accountId,
-        operation: 'daily_ai_ads_analysis',
-        trigger_type: body._service_role ? 'automatic' : 'manual',
-        status: 'success',
-        execution_date: date,
-        started_at: startedAt,
-        completed_at: nowIso(),
-        duration_ms: Date.now() - startedMs,
-        records_processed: persisted.length,
-        result_summary: JSON.stringify(completedSummary).slice(0, 4000),
-      }).catch(() => {});
-    }
+    await base44.asServiceRole.entities.SyncExecutionLog.create({
+      [ACCOUNT_ID]: accountId,
+      operation: 'daily_ai_ads_analysis',
+      trigger_type: body._service_role ? 'automatic' : 'manual',
+      status: 'success',
+      execution_date: date,
+      started_at: startedAt,
+      completed_at: nowIso(),
+      duration_ms: Date.now() - startedMs,
+      records_processed: persisted.length,
+      result_summary: JSON.stringify({ model, report_sync: reportSync, candidates: candidates.length, recommendations: recommendations.length, persisted: persisted.length, rejected: rejected.length, execution, confirmation, budget_plan: budgetPlan }).slice(0, 4000),
+    }).catch(() => {});
 
     return Response.json({
       ok: true,
       date,
+      dry_run: dryRun,
+      target_asins: [...targetAsins],
       model,
       report_sync: reportSync,
       lifecycle,
@@ -770,7 +754,7 @@ Deno.serve(async (request) => {
       proposals: persisted,
     });
   } catch (error: any) {
-    await finishDailyRunLock('failed', { error: error?.message || String(error) });
     return Response.json({ ok: false, error: error?.message || 'Falha na análise diária de IA' }, { status: 500 });
   }
 });
+
