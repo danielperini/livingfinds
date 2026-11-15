@@ -372,7 +372,7 @@ async function callOpenAi(apiKey: string, model: string, evidence: any): Promise
             'não aumente o orçamento total diário; redistribuição deve ser neutra e considerar a participação e o desempenho de cada campanha',
             'campanha sem gasto deve receber aumento somente se houver impressões, estoque, elegibilidade e oportunidade mensurável; caso contrário propor investigação',
             'crie campanha manual apenas para termo vencedor com conversão do mesmo SKU; use a API Amazon e nunca invente IDs',
-            'para a inteligência de keywords: termos long tail elegíveis devem ser promovidos para campanha manual EXACT com bid inicial de R$0,40 e estratégia dinâmica de aumento e redução; no máximo 3 termos medium tail por ASIN; não duplicar por ASIN+termo',
+            'para a inteligência de keywords: selecionar os 5 termos long tail com maior potencial e até 2 termos medium tail com maior potencial por ASIN ativo; promover para campanha manual EXACT com bid inicial de R$0,40 e estratégia dinâmica de aumento e redução; não duplicar por ASIN+termo',
             'um termo pode ser propagado para mais de um ASIN somente quando os produtos estiverem ativos e pertencerem ao mesmo grupo de produto; criar uma campanha manual separada por ASIN e negativar o termo na campanha AUTO de origem',
             'aplicar ajuste de placement de topo da pesquisa de 25% apenas dentro dos limites e da confirmação da Amazon',
             'avaliar a distribuição de budget três vezes ao dia sem ultrapassar o teto global; campanha manual nova usa R$15/dia, mas o gasto efetivo agregado deve permanecer dentro do cap',
