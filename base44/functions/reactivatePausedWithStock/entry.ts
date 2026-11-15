@@ -6,6 +6,7 @@
 // include_incomplete=true inclui campanhas com state='incomplete'.
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { findPauseLockedProduct } from '../../shared/productCampaignPauseGuard.ts';
+import { hasExplicitCampaignReactivationConfirmation } from '../../shared/campaignReactivationPolicy.js';
 
 const BLOCKED_REASONS = ['OUT_OF_STOCK', 'USER_MANUAL', 'POLICY', 'ABOVE_BREAK_EVEN', 'LISTING_BLOCKED'];
 
@@ -133,6 +134,12 @@ Deno.serve(async (req) => {
     try { user = await base44.auth.me(); } catch {}
 
     const body             = await req.json().catch(() => ({}));
+    if (!hasExplicitCampaignReactivationConfirmation(body)) {
+      return Response.json({
+        ok: false, blocked: true, reactivated: 0,
+        error: 'Reativação automática bloqueada. Confirme a ação explicitamente na interface.',
+      }, { status: 409 });
+    }
     const dryRun           = body.dry_run === true;
     const forceAccountId   = body.amazon_account_id || null;
     const targetingFilter  = body.targeting_type_filter ? String(body.targeting_type_filter).toUpperCase() : null; // 'AUTO' | 'MANUAL' | null
