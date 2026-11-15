@@ -13,6 +13,32 @@ const MIN_NEGATIVE_CLICKS = 20;
 const MIN_NEGATIVE_DAYS = 7;
 const MAX_NEGATIVES_PER_RUN = 10;
 const MAX_PROMOTIONS_PER_RUN = 10;
+const KEYWORD_PROMOTION_POLICY = Object.freeze({
+  match_type: 'EXACT',
+  bid: 0.40,
+  daily_budget: 15,
+  bidding_strategy: 'dynamic_up_and_down',
+  top_of_search_placement_pct: 25,
+  long_tail: { enabled: true, max_per_asin: null },
+  medium_tail: { enabled: true, max_per_asin: 3 },
+  active_products_only: true,
+  deduplicate_by_asin_term: true,
+  negative_in_source_auto_campaign: true,
+  propagate_to_related_active_asins: true,
+  require_same_product_group: true,
+  budget_guard: {
+    evaluate_per_day: 3,
+    never_exceed_account_daily_cap: true,
+    new_campaign_daily_budget: 15,
+  },
+  zero_spend_recovery: {
+    enabled: true,
+    no_spend_window_hours: 24,
+    bid_increase_pct: 10,
+    max_consecutive_days: 5,
+    require_stock_and_active_campaign: true,
+  },
+});
 
 function n(value: unknown): number {
   const parsed = Number(value);
@@ -121,22 +147,51 @@ Deno.serve(async (request) => {
     }
     const accountId = String(body.amazon_account_id || '');
     if (!accountId) return Response.json({ ok: false, error: 'amazon_account_id é obrigatório' }, { status: 400 });
+    const evaluationSlot = Number.isInteger(Number(body.evaluation_slot))
+      ? Math.max(0, Math.min(2, Number(body.evaluation_slot)))
+      : null;
+    const executionOperation = evaluationSlot === null
+      ? 'daily_keyword_intelligence'
+      : `daily_keyword_intelligence_${evaluationSlot}`;
     const common = { amazon_account_id: accountId, _service_role: true };
+    const targetAsins = new Set((Array.isArray(body.target_asins) ? body.target_asins : [])
+      .map((value: unknown) => String(value || '').trim().toUpperCase())
+      .filter(Boolean));
+    const dryRun = body.dry_run === true;
+    const scoped = {
+      ...common,
+      ...(targetAsins.size ? { target_asins: [...targetAsins] } : {}),
+      dry_run: dryRun,
+    };
     const phases: any[] = [];
 
     // Fase 1/2: sinais econômicos, cauda e calibração determinística.
     for (const functionName of ['buildKeywordLearningSignals', 'runKeywordMLPipeline', 'mineSearchTermOpportunities']) {
-      phases.push({ phase: functionName, result: await invoke(base44, functionName, common) });
+      phases.push({ phase: functionName, result: await invoke(base44, functionName, scoped) });
     }
 
     phases.push({ phase: 'runDailyAiAdsAnalysis', result: await invoke(base44,
-      'runDailyAiAdsAnalysis', { ...common, model: body.model || undefined }) });
+      'runDailyAiAdsAnalysis', { ...scoped, model: body.model || undefined, force: body.force === true }) });
 
     // Fase 3: promoção same-SKU, com teto diário e estoque fresco.
-    phases.push({ phase: 'runImmediateSameSkuSearchTermHarvest', result: await invoke(base44,
-      'runImmediateSameSkuSearchTermHarvest', { ...common, max_promotions: MAX_PROMOTIONS_PER_RUN, require_fresh_inventory: true }) });
-    phases.push({ phase: 'promoteWinningSearchTerms', result: await invoke(base44,
-      'promoteWinningSearchTerms', { ...common, max_promotions: MAX_PROMOTIONS_PER_RUN }) });
+    if (dryRun) {
+      phases.push({ phase: 'runImmediateSameSkuSearchTermHarvest', skipped: true, reason: 'dry_run' });
+      phases.push({ phase: 'promoteWinningSearchTerms', skipped: true, reason: 'dry_run' });
+    } else {
+      phases.push({ phase: 'runImmediateSameSkuSearchTermHarvest', result: await invoke(base44,
+        'runImmediateSameSkuSearchTermHarvest', {
+          ...scoped,
+          max_promotions: MAX_PROMOTIONS_PER_RUN,
+          require_fresh_inventory: true,
+          promotion_policy: KEYWORD_PROMOTION_POLICY,
+        }) });
+      phases.push({ phase: 'promoteWinningSearchTerms', result: await invoke(base44,
+        'promoteWinningSearchTerms', {
+          ...scoped,
+          max_promotions: MAX_PROMOTIONS_PER_RUN,
+          promotion_policy: KEYWORD_PROMOTION_POLICY,
+        }) });
+    }
 
     // Fase 4: negativação conservadora. A seleção é feita antes da execução e
     // só candidatos com evidência suficiente chegam à rotina que chama a Ads API.
@@ -145,17 +200,24 @@ Deno.serve(async (request) => {
       base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, '-updated_at', 5000).catch(() => []),
       base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, '-updated_at', 2000).catch(() => []),
     ]);
-    const negatives = selectNegativeCandidates(terms, campaigns, products);
+    const negatives = selectNegativeCandidates(terms, campaigns, products)
+      .filter((candidate) => !targetAsins.size || targetAsins.has(candidate.asin));
     const negativeResults = [];
-    for (const candidate of negatives) {
-      negativeResults.push(await invoke(base44, 'negateKeywordInAutoCampaign', {
-        ...common,
-        asin: candidate.asin,
-        sku: candidate.sku,
-        keyword_text: candidate.keyword_text,
-        source_campaign_id: candidate.source_campaign_id,
-        triggered_by: 'daily_keyword_intelligence',
-      }));
+    if (dryRun) {
+      negativeResults.push({ skipped: true, reason: 'dry_run' });
+    } else {
+      for (const candidate of negatives) {
+        negativeResults.push(await invoke(base44, 'negateKeywordInAutoCampaign', {
+          ...common,
+          asin: candidate.asin,
+          sku: candidate.sku,
+          keyword_text: candidate.keyword_text,
+          source_campaign_id: candidate.source_campaign_id,
+          negative_match_type: 'NEGATIVE_EXACT',
+          negative_in_source_auto_campaign: true,
+          triggered_by: 'daily_keyword_intelligence',
+        }));
+      }
     }
     phases.push({ phase: 'negative_exact', candidates: negatives, results: negativeResults });
 
@@ -180,18 +242,32 @@ Deno.serve(async (request) => {
     await base44.asServiceRole.entities.LearningEvent.create(learning).catch(() => {});
     await base44.asServiceRole.entities.SyncExecutionLog.create({
       amazon_account_id: accountId,
-      operation: 'daily_keyword_intelligence',
+      operation: executionOperation,
       trigger_type: body._service_role ? 'automatic' : 'manual',
       status: 'success',
       execution_date: new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date()),
       started_at: startedAt,
       completed_at: new Date().toISOString(),
       records_processed: terms.length,
-      result_summary: JSON.stringify({ phases: phases.length, negatives: negatives.length, confidence_threshold: MIN_CONFIDENCE }),
+      result_summary: JSON.stringify({
+        phases: phases.length,
+        negatives: negatives.length,
+        confidence_threshold: MIN_CONFIDENCE,
+        evaluation_slot: evaluationSlot,
+        promotion_policy: KEYWORD_PROMOTION_POLICY,
+      }),
     }).catch(() => {});
 
-    return Response.json({ ok: true, cycle: 'daily_keyword_intelligence_v1', confidence_threshold: MIN_CONFIDENCE, phases, negative_candidates: negatives });
+    return Response.json({ ok: true, cycle: 'daily_keyword_intelligence_v1', confidence_threshold: MIN_CONFIDENCE,
+      dry_run: dryRun,
+      target_asins: [...targetAsins],
+      evaluation_slot: evaluationSlot,
+      promotion_policy: KEYWORD_PROMOTION_POLICY,
+      phases,
+      negative_candidates: negatives,
+    });
   } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || String(error) }, { status: 500 });
   }
 });
+
