@@ -25,6 +25,14 @@ function brtHour(now = new Date()): number {
   return Number(hour) % 24;
 }
 
+function keywordEvaluationSlot(now = new Date()): number {
+  const hour = brtHour(now);
+  if (hour < 10) return -1;
+  if (hour < 14) return 0;
+  if (hour < 18) return 1;
+  return 2;
+}
+
 async function wasRunTodaySuccessfully(base44: any, aid: string, operation: string): Promise<boolean> {
   try {
     const logs = await base44.asServiceRole.entities.SyncExecutionLog.filter(
@@ -217,12 +225,52 @@ Deno.serve(async (req) => {
     // Ciclo diário unificado: descoberta, previsão econômica, promoção,
     // defesa contra desperdício e registro de aprendizagem. As rotinas
     // internas mantêm seus próprios guardrails e limites de idempotência.
-    const keywordIntelligenceDue = dailyDue('daily_keyword_intelligence') &&
-      (brtHour() >= 10 || body.daily_ai_force === true);
-    if (keywordIntelligenceDue) add('runDailyKeywordIntelligence', 'daily_keyword_intelligence', {
+    const keywordSlot = keywordEvaluationSlot();
+    const keywordLabel = keywordSlot >= 0 ? `daily_keyword_intelligence_${keywordSlot}` : 'daily_keyword_intelligence';
+    const keywordIntelligenceDue = (keywordSlot >= 0 && dailyDue(keywordLabel)) || body.daily_ai_force === true;
+    if (keywordIntelligenceDue) add('runDailyKeywordIntelligence', keywordLabel, {
       model: body.daily_ai_model || undefined,
+      evaluation_slot: keywordSlot >= 0 ? keywordSlot : undefined,
+      promotion_policy: {
+        match_type: 'EXACT',
+        bid: 0.40,
+        daily_budget: 15,
+        bidding_strategy: 'dynamic_up_and_down',
+        top_of_search_placement_pct: 25,
+        long_tail: { enabled: true, max_per_asin: null },
+        medium_tail: { enabled: true, max_per_asin: 3 },
+        active_products_only: true,
+        deduplicate_by_asin_term: true,
+        negative_in_source_auto_campaign: true,
+        propagate_to_related_active_asins: true,
+        require_same_product_group: true,
+        budget_guard: {
+          evaluate_per_day: 3,
+          never_exceed_account_daily_cap: true,
+          new_campaign_daily_budget: 15,
+        },
+        zero_spend_recovery: {
+          enabled: true,
+          no_spend_window_hours: 24,
+          bid_increase_pct: 10,
+          max_consecutive_days: 5,
+          require_stock_and_active_campaign: true,
+        },
+      },
     }, true);
     else skipped.push('daily_keyword_intelligence');
+
+    // Promoção diária de termos vencedores entre lixeiras e outros ASINs
+    // compatíveis. A rotina exige atribuição no mesmo SKU, pelo menos dois
+    // pedidos, relevância alta, estoque e ausência de keyword/campanha
+    // duplicada; seus limites internos protegem a API e o orçamento.
+    const crossAsinWinnerTermsDue = dailyDue('cross_asin_winner_terms') &&
+      (brtHour() >= 10 || body.daily_ai_force === true);
+    if (crossAsinWinnerTermsDue) add('promoteWinningSearchTerms', 'cross_asin_winner_terms', {
+      dry_run: false,
+      trigger_type: 'daily_cross_asin_winner_terms',
+    }, true);
+    else skipped.push('cross_asin_winner_terms');
 
     // Negative Product Target Guard: bloqueia ASINs concorrentes com clicks sem conversão
     // Executado após promoção de termos — age imediatamente na API da Amazon
@@ -397,3 +445,4 @@ Deno.serve(async (req) => {
     return Response.json({ ok: false, error: error?.message, duration_ms: Date.now() - t0 }, { status: 500 });
   }
 });
+
