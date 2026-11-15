@@ -17,6 +17,7 @@ jobs:
   cycle:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule != '0 13 * * *' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Preparar SSH
         run: |
@@ -32,95 +33,102 @@ jobs:
           VPS_PATH: ${{ secrets.VPS_PATH }}
         run: |
           set -euo pipefail
-          success=0
-          for attempt in 1 2 3 4 5; do
-            echo "Tentativa SSH ${attempt}/5"
-            if ssh $SSHOPTS "$TARGET" "bash -s" <<EOF
-              set -euo pipefail
-              cd "$VPS_PATH"
-
-              ready=0
-              for health_attempt in \$(seq 1 30); do
-                if curl -sf http://127.0.0.1:8000/health >/dev/null; then
-                  ready=1
-                  break
-                fi
-                sleep 2
-              done
-              if [ "\$ready" -ne 1 ]; then
-                echo "Backend não ficou saudável para o ciclo do motor"
-                exit 1
-              fi
-
-              docker compose -f server/docker-compose.yml exec -T app deno eval '
-                const TOKEN_REVOKED = "ADS_TOKEN_REVOKED_REAUTH_REQUIRED";
-                const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-                const call = async (name, payload) => {
-                  const response = await fetch("http://127.0.0.1:8000/functions/" + name, {
-                    method: "POST",
-                    headers: { "content-type": "application/json", "x-api-token": token },
-                    body: JSON.stringify(payload),
-                  });
-                  const data = await response.json().catch(() => ({}));
-                  console.log(name.toUpperCase() + "_HTTP=" + response.status + "|OK=" + data.ok + "|DATA=" + JSON.stringify(data).slice(0, 20000));
-                  const operationalError = String(data.error_message || data.error || "");
-                  if (operationalError === TOKEN_REVOKED) {
-                    console.error(TOKEN_REVOKED + ": token Amazon Ads inválido após tentativa automática de recuperação. Ciclo abortado antes das demais funções.");
-                    Deno.exit(42);
-                  }
-                  if (!response.ok || data.ok === false) throw new Error(operationalError || ("Falha em " + name));
-                  return data;
-                };
-
-                const common = { _service_role: true, dry_run: false, trigger_type: "github_actions_unified_engine_cycle" };
-
-                await call("refreshAmazonAdsTokenDailyOrHourly", {
-                  _service_role: true,
-                  force: true,
-                  precheck_operation: "unified_engine_cycle",
-                  trigger_type: "github_actions_unified_engine_token_precheck",
-                });
-
-                await call("classifyMarketplaceCampaignJourneys", common);
-                await call("reactivatePausedWithStock", common);
-                await call("runUnifiedDecisionEngine", { ...common, force_campaign_lifecycle: true });
-                await call("runEconomicBudgetBalancer", common);
-                const orchestrator = await call("runDailyMasterOrchestrator", common);
-
-                const executor = await call("executeApprovedDecisionQueue", {
-                  _service_role: true,
-                  max_decisions: 25,
-                  trigger_type: "github_actions_unified_engine_executor",
-                });
-
-                await new Promise((resolve) => setTimeout(resolve, 5000));
-                const confirmation = await call("confirmExecutedDecisions", {
-                  _service_role: true,
-                  trigger_type: "github_actions_unified_engine_confirmation",
-                });
-
-                console.log("UNIFIED_ENGINE_CYCLE_SUMMARY=" + JSON.stringify({
-                  orchestrator_ok: orchestrator?.ok ?? null,
-                  executor_executed: executor?.executed ?? null,
-                  confirmation,
-                }).slice(0, 20000));
-              ' </dev/null
-          EOF
-            then
-              success=1
+          connected=0
+          for attempt in 1 2 3; do
+            echo "Verificando conexão SSH \${attempt}/3"
+            if ssh $SSHOPTS "$TARGET" "true"; then
+              connected=1
               break
-            else
-              ssh_status=$?
-              if [ "$ssh_status" -eq 42 ]; then
-                echo "ADS_TOKEN_REVOKED_REAUTH_REQUIRED: job encerrado; nenhuma função decisória foi executada."
-                exit 42
-              fi
             fi
             sleep $((attempt * 15))
           done
 
-          if [ "$success" -ne 1 ]; then
-            echo "Falha após 5 tentativas de conexão/execução na VPS"
+          if [ "$connected" -ne 1 ]; then
+            echo "Falha de conexão SSH antes de iniciar o ciclo; nenhuma etapa decisória foi enviada."
+            exit 1
+          fi
+
+          if ! ssh $SSHOPTS "$TARGET" "bash -s" <<EOF
+            set -euo pipefail
+            cd "$VPS_PATH"
+
+            ready=0
+            for health_attempt in \$(seq 1 30); do
+              if curl -sf --max-time 10 http://127.0.0.1:8000/health >/dev/null; then
+                ready=1
+                break
+              fi
+              sleep 2
+            done
+            if [ "\$ready" -ne 1 ]; then
+              echo "Backend não ficou saudável para o ciclo do motor; nenhuma etapa decisória foi enviada."
+              exit 1
+            fi
+
+            docker compose -f server/docker-compose.yml exec -T app deno eval '
+              const TOKEN_REVOKED = "ADS_TOKEN_REVOKED_REAUTH_REQUIRED";
+              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
+              const call = async (name, payload) => {
+                let response;
+                try {
+                  response = await fetch("http://127.0.0.1:8000/functions/" + name, {
+                    method: "POST",
+                    headers: { "content-type": "application/json", "x-api-token": token },
+                    body: JSON.stringify(payload),
+                    signal: AbortSignal.timeout(240000),
+                  });
+                } catch (error) {
+                  console.error("REMOTE_OUTCOME_UNKNOWN=" + name + "|No replay: " + String(error));
+                  throw error;
+                }
+                const data = await response.json().catch(() => ({}));
+                console.log(name.toUpperCase() + "_HTTP=" + response.status + "|OK=" + data.ok + "|DATA=" + JSON.stringify(data).slice(0, 20000));
+                const operationalError = String(data.error_message || data.error || "");
+                if (operationalError === TOKEN_REVOKED) {
+                  console.error(TOKEN_REVOKED + ": token Amazon Ads inválido após tentativa automática de recuperação. Ciclo abortado antes das demais funções.");
+                  Deno.exit(42);
+                }
+                if (!response.ok || data.ok === false) throw new Error(operationalError || ("Falha em " + name));
+                return data;
+              };
+
+              const common = { _service_role: true, dry_run: false, trigger_type: "github_actions_unified_engine_cycle" };
+
+              await call("refreshAmazonAdsTokenDailyOrHourly", {
+                _service_role: true,
+                force: true,
+                precheck_operation: "unified_engine_cycle",
+                trigger_type: "github_actions_unified_engine_token_precheck",
+              });
+
+              await call("classifyMarketplaceCampaignJourneys", common);
+              // Não reativa campanhas pausadas automaticamente. A recuperação deve passar
+              // pela fila canônica e respeitar a intenção do operador e os guardrails.
+              await call("runUnifiedDecisionEngine", { ...common, force_campaign_lifecycle: true });
+              await call("runEconomicBudgetBalancer", common);
+              const orchestrator = await call("runDailyMasterOrchestrator", common);
+
+              const executor = await call("executeApprovedDecisionQueue", {
+                _service_role: true,
+                max_decisions: 25,
+                trigger_type: "github_actions_unified_engine_executor",
+              });
+
+              await new Promise((resolve) => setTimeout(resolve, 5000));
+              const confirmation = await call("confirmExecutedDecisions", {
+                _service_role: true,
+                trigger_type: "github_actions_unified_engine_confirmation",
+              });
+
+              console.log("UNIFIED_ENGINE_CYCLE_SUMMARY=" + JSON.stringify({
+                orchestrator_ok: orchestrator?.ok ?? null,
+                executor_executed: executor?.executed ?? null,
+                confirmation,
+              }).slice(0, 20000));
+            ' </dev/null
+          EOF
+          then
+            echo "Ciclo falhou ou resultado remoto incerto. Não repetindo etapas para evitar duplicar ações."
             exit 1
           fi
 
