@@ -31,6 +31,10 @@ function clearRecursiveLoginRedirect() {
   );
 }
 
+// Normalize recursive login URLs before the first React effect/paint so the
+// auth bootstrap cannot observe and re-emit a nested from_url.
+clearRecursiveLoginRedirect();
+
 export default function Login() {
   const openingAudioRef = useRef(null);
   const [email, setEmail] = useState("");
