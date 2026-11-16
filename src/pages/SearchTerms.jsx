@@ -109,6 +109,10 @@ function getRecommendation(cls, m) {
 
 // ─── Parâmetros padrão ───────────────────────────────────────────────────────
 
+const BID_FLOOR = 0.50;
+const BID_CEILING = 1.80;
+const clampBid = (value) => Math.min(BID_CEILING, Math.max(BID_FLOOR, Number(value) || BID_FLOOR));
+
 const DEFAULT_CFG = {
   meta_acos: 20,
   limite_cliques: 10,
@@ -132,6 +136,7 @@ export default function SearchTerms() {
   const [actionMsg, setActionMsg] = useState(null);
   const [actionLoading, setActionLoading] = useState(null);
   const [cfg, setCfg] = useState(DEFAULT_CFG);
+  const [aiReviews, setAiReviews] = useState({});
   const [showCfg, setShowCfg] = useState(false);
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef(null);
@@ -212,7 +217,7 @@ export default function SearchTerms() {
     const term = normalizeText(termText(kw));
     const baseBid = m.cpc > 0 ? m.cpc : 0.25;
     const mult = matchType === 'EXACT' ? cfg.mult_exact : matchType === 'PHRASE' ? cfg.mult_phrase : cfg.mult_broad;
-    const bid = +(baseBid * mult).toFixed(2);
+    const bid = clampBid(baseBid * mult);
 
     try {
       await base44.entities.KeywordSuggestion.create({
@@ -239,9 +244,7 @@ export default function SearchTerms() {
     setActionLoading(kw.id + '_bid');
     const current = m.cpc > 0 ? m.cpc : 0.25;
     const pct = direction === 'up' ? cfg.aumento_vencedor : cfg.reducao_fraco;
-    const newBid = direction === 'up'
-      ? +(current * (1 + pct / 100)).toFixed(2)
-      : +(current * (1 - pct / 100)).toFixed(2);
+    const newBid = clampBid(direction === 'up' ? current * (1 + pct / 100) : current * (1 - pct / 100));
 
     try {
       await base44.entities.AmazonActionQueue.create({
@@ -260,6 +263,21 @@ export default function SearchTerms() {
         max_attempts: 3,
       });
       notify('success', `✓ Bid ${direction === 'up' ? 'aumentado' : 'reduzido'}: R$${current.toFixed(2)} → R$${newBid.toFixed(2)} (+${pct}%)`);
+    } catch (e) { notify('error', e.message); }
+    finally { setActionLoading(null); }
+  };
+
+  const analyzeWithAI = async (kw, m) => {
+    const id = kw.id + '_ai';
+    setActionLoading(id);
+    try {
+      const response = await base44.functions.invoke('claudeAdsAgent', { mode: 'analyze', prompt: 'Analise este search term de Amazon Ads. Avalie bid, economia, potencial de venda e relevância. Recomende um único bid entre R$0,50 e R$1,80. Nunca invente métricas. Só autorize execução com confiança >=80%. Retorne JSON conforme o schema do agente.', context: { amazon_account_id: account.id, search_term: normalizeText(termText(kw)), asin: kw.asin || null, sku: kw.sku || null, metrics: m, current_bid: clampBid(m.cpc > 0 ? m.cpc : (kw.current_bid || kw.bid || BID_FLOOR)), bid_floor: BID_FLOOR, bid_ceiling: BID_CEILING, confidence_threshold: 80 } });
+      const result = response?.data?.response ?? response?.response ?? response?.data ?? response;
+      const confidence = Number(result?.rationale?.confidence ?? 0);
+      const review = { confidence, status: result?.status || 'WAIT_FOR_DATA', rationale: result?.rationale?.diagnosis || result?.rationale?.why_this_action || 'Sem justificativa retornada.', eligible: confidence >= 80 && result?.status === 'EXECUTE_NOW' };
+      setAiReviews(previous => ({ ...previous, [kw.id]: review }));
+      if (review.eligible) notify('success', '✓ IA aprovou a análise com ' + confidence + '% de confiança; alteração pronta para a fila segura.');
+      else notify('info', 'IA analisou o termo, mas não autorizou execução: confiança ' + confidence + '% ou evidência insuficiente.');
     } catch (e) { notify('error', e.message); }
     finally { setActionLoading(null); }
   };
@@ -364,7 +382,7 @@ export default function SearchTerms() {
             <p className="text-xs text-slate-400">
               {keywords.length} termos · {winners} vencedores · {toNegate} para negativar · ROAS geral {overallRoas.toFixed(1)}x
             </p>
-            <p className="text-[10px] text-slate-500">Importação manual aceita somente linhas diárias com janela de atribuição explícita; os dados ficam fora das decisões automáticas.</p>
+            <p className="text-[10px] text-slate-500">GPT obrigatório na análise assistida · confiança mínima de 80% · bids protegidos entre R$0,50 e R$1,80. TermBank funciona como banco alternativo.</p>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -489,7 +507,7 @@ export default function SearchTerms() {
                           {normalizeText(termText(kw)) || '—'}
                         </p>
                         <p className="text-slate-600 font-mono truncate text-[10px]">{kw.match_type || kw.keyword_match_type || ''}</p>
-                        <p className="text-slate-600 mt-0.5 truncate text-[10px]" title={kw._rec}>{kw._rec}</p>
+                        <p className="text-slate-600 mt-0.5 truncate text-[10px]" title={kw._rec}>{kw._rec}</p>{aiReviews[kw.id] && <p className={aiReviews[kw.id].eligible ? "text-emerald-400 mt-0.5 text-[10px]" : "text-amber-400 mt-0.5 text-[10px]"}>IA {aiReviews[kw.id].confidence}% · {aiReviews[kw.id].status}</p>}
                       </td>
                       {/* Classe */}
                       <td className="px-3 py-2 whitespace-nowrap">
@@ -517,10 +535,13 @@ export default function SearchTerms() {
                       {/* Ações */}
                       <td className="px-3 py-2">
                         <div className="flex items-center gap-1 flex-wrap">
+                          {/* IA */}
+                          <button onClick={() => analyzeWithAI(kw, m)} disabled={!!actionLoading || kw._importedUnverified} className="px-1.5 py-1 bg-fuchsia-500/10 border border-fuchsia-500/20 text-fuchsia-300 hover:bg-fuchsia-500/20 rounded text-[10px] font-bold transition-colors disabled:opacity-40" title="Analisar com GPT com confiança mínima de 80%">{actionLoading === kw.id + '_ai' ? <Loader2 className="w-3 h-3 animate-spin" /> : 'IA 80%'}</button>
+
                           {/* TermBank */}
                           <button onClick={() => addToTermBank(kw, m, kw._bidSuggested)} disabled={!!actionLoading || kw._importedUnverified}
                             className="flex items-center gap-0.5 px-1.5 py-1 bg-surface-2 border border-surface-3 text-slate-400 hover:text-cyan hover:border-cyan/30 rounded transition-colors disabled:opacity-40"
-                            title="Adicionar ao TermBank">
+                            title="Adicionar ao banco alternativo (TermBank)">
                             {actionLoading === kw.id + '_tb' ? <Loader2 className="w-3 h-3 animate-spin" /> : <BookOpen className="w-3 h-3" />}
                           </button>
 
