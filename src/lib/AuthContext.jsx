@@ -5,6 +5,13 @@ import { createAxiosClient } from '@base44/sdk/dist/utils/axios-client';
 
 const AuthContext = createContext();
 
+function getSafeLoginReturnPath() {
+  if (typeof window === 'undefined') return '/';
+  const { pathname, search, hash } = window.location;
+  if (pathname === '/login' || pathname.startsWith('/login/')) return '/';
+  return `${pathname}${search}${hash}`;
+}
+
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -84,11 +91,11 @@ export const AuthProvider = ({ children }) => {
   const logout = (shouldRedirect = true) => {
     setUser(null);
     setIsAuthenticated(false);
-    if (shouldRedirect) base44.auth.logout(window.location.href);
+    if (shouldRedirect) base44.auth.logout(getSafeLoginReturnPath());
     else base44.auth.logout();
   };
 
-  const navigateToLogin = () => base44.auth.redirectToLogin(window.location.href);
+  const navigateToLogin = () => base44.auth.redirectToLogin(getSafeLoginReturnPath());
 
   return (
     <AuthContext.Provider value={{
