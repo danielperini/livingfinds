@@ -21,7 +21,18 @@ export const AuthProvider = ({ children }) => {
   const [authChecked, setAuthChecked] = useState(false);
   const [appPublicSettings, setAppPublicSettings] = useState(null);
 
-  useEffect(() => { checkAppState(); }, []);
+  const isPublicAuthRoute = typeof window !== 'undefined' &&
+    ['/login', '/register', '/forgot-password', '/reset-password'].includes(window.location.pathname);
+
+  useEffect(() => {
+    if (isPublicAuthRoute) {
+      setIsLoadingAuth(false);
+      setIsLoadingPublicSettings(false);
+      setAuthChecked(true);
+      return;
+    }
+    checkAppState();
+  }, [isPublicAuthRoute]);
 
   const checkAppState = async () => {
     try {
