@@ -1,8 +1,35 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Lock, Loader2, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { safeReturnTo } from "@/lib/authReturnTo";
+
+function clearRecursiveLoginRedirect() {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  const fromUrl = url.searchParams.get("from_url");
+  if (!fromUrl) return;
+
+  try {
+    const target = new URL(fromUrl, window.location.origin);
+    const isLoginLoop =
+      target.origin === window.location.origin &&
+      (target.pathname === "/login" || target.searchParams.has("from_url"));
+
+    if (!isLoginLoop) return;
+  } catch {
+    // Malformed redirect parameters are removed below.
+  }
+
+  url.searchParams.delete("from_url");
+  url.searchParams.delete("returnTo");
+  window.history.replaceState(
+    {},
+    document.title,
+    `${url.pathname}${url.search ? `?${url.searchParams.toString()}` : ""}${url.hash}`,
+  );
+}
 
 export default function Login() {
   const openingAudioRef = useRef(null);
@@ -10,6 +37,10 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    clearRecursiveLoginRedirect();
+  }, []);
 
   const playOpeningAudio = async () => {
     const audio = openingAudioRef.current;
@@ -46,7 +77,7 @@ export default function Login() {
       await playOpeningAudio();
       window.location.href = data.user?.must_change_password
         ? "/users?change_password=1"
-        : "/";
+        : safeReturnTo();
     } catch (err) {
       setError(err.message || "Erro ao autenticar");
     } finally {
@@ -63,7 +94,6 @@ export default function Login() {
         aria-hidden="true"
       />
       <div className="w-full max-w-sm">
-        {/* Logo / cabeçalho */}
         <div className="flex flex-col items-center mb-8">
           <img
             src="/logo.jpg"
@@ -73,7 +103,6 @@ export default function Login() {
           <p className="text-sm text-muted-foreground">Painel Ads · Acesso restrito</p>
         </div>
 
-        {/* Card */}
         <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
           {error && (
             <div className="mb-4 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
