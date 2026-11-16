@@ -3,7 +3,7 @@ import { waitUntil } from 'base44:runtime';
 
 const PHASES = [
   { key: 'classify', fn: 'classifyMarketplaceCampaignJourneys', payload: { _service_role: true }, background: true },
-  { key: 'reactivate', fn: 'reactivatePausedWithStock', payload: { _service_role: true } },
+  // Automatic reactivation of paused campaigns is intentionally excluded.
   {
     key: 'lifecycle',
     fn: 'runUnifiedDecisionEngine',

@@ -379,6 +379,7 @@ export default function AdsManagement() {
         amazon_account_id: account.id,
         targeting_type_filter: 'MANUAL',
         include_incomplete: true,
+        user_confirmed_reactivation: true,
         _service_role: true
       });
       const d = res?.data;
@@ -527,6 +528,7 @@ export default function AdsManagement() {
         amazon_account_id: account.id,
         targeting_type_filter: 'AUTO',
         include_incomplete: true,
+        user_confirmed_reactivation: true,
         _service_role: true
       });
       const d = res?.data;
@@ -763,14 +765,7 @@ export default function AdsManagement() {
         }, 3000);
       }
 
-      // Reativar campanhas canônicas pausadas — fire-and-forget, sem bloquear UI
-      const hasCanonicalPaused = operational.some(
-        (c) => campaignState(c) === 'paused' &&
-        /^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(String(c.name || c.campaign_name || ''))
-      );
-      if (hasCanonicalPaused) {
-        base44.functions.invoke('reactivatePausedWithStock', { amazon_account_id: acc.id, _service_role: true }).catch(() => {});
-      }
+      // Não retomar campanhas pausadas automaticamente ao carregar a tela.
 
       // Disparar migração canônica automaticamente em background se houver pendentes
       const hasPendingMigration = operational.some(

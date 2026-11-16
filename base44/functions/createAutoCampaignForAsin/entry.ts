@@ -6,6 +6,7 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { proportionalActivationBid } from '../../shared/activationBidPolicy.ts';
 import { hasFreshAdsInventory, availableAdsStock } from '../../shared/stockAdsPolicy.ts';
 import { campaignCoverageEligible } from '../../shared/campaignCoverageEligibility.ts';
+import { isEnabledCampaignState } from '../../shared/campaignReactivationPolicy.js';
 
 const tokenCache = {};
 
@@ -140,7 +141,10 @@ async function reconcileCampaign(token, profileId, campaignName) {
       // multiple distinct seller offers and would reactivate the wrong one.
       const found = campaigns.find(c => String(c.state || '').toUpperCase() !== 'ARCHIVED'
         && String(c.name || '') === campaignName);
-      if (found?.campaignId) return String(found.campaignId);
+      if (found?.campaignId) return {
+        campaignId: String(found.campaignId),
+        state: String(found.state || '').toUpperCase(),
+      };
       nextToken = data?.nextToken;
       if (!nextToken) break;
     }
@@ -159,7 +163,6 @@ Deno.serve(async (req) => {
       if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const { amazon_account_id, asin, sku, product_name } = body;
-    const forceReactivate = body.force_reactivate === true;
     const requestedBidValue = Number(body.initial_bid ?? body.auto_initial_bid);
     const requestedInitialBid = Number.isFinite(requestedBidValue)
       ? Math.min(1000, Math.max(0.02, Math.round(requestedBidValue * 100) / 100))
@@ -243,46 +246,15 @@ Deno.serve(async (req) => {
       const identityMatches = linkedSkus.size === 1 && linkedSkus.has(productSku)
         || linkedSkus.size === 0 && String(c.sku || '').trim().toUpperCase() === productSku
         || linkedSkus.size === 0 && !c.sku && distinctAsinSkus.size === 1;
-      return identityMatches && c.archived !== true && state !== 'ARCHIVED'
-        && !name.includes('MANUAL') && (name.includes('AUTO') || (targeting === 'AUTO' && !name.includes('EXACT')));
+      return identityMatches && isEnabledCampaignState(state)
+        && c.archived !== true && !name.includes('MANUAL')
+        && (name.includes('AUTO') || (targeting === 'AUTO' && !name.includes('EXACT')));
     });
     if (autoCampaign) {
-      // O estado confirmado pela sincronização atual tem precedência. Um
-      // amazon_status legado nunca pode bloquear a cobertura AUTO do SKU.
-      const state = String(autoCampaign.state || autoCampaign.status || autoCampaign.amazon_status || '').toUpperCase();
+      // Reuse only an already enabled AUTO campaign. A paused campaign is
+      // preserved and does not prevent creating a fresh AUTO campaign.
       const effectiveCampaignId = autoCampaign.campaign_id || autoCampaign.amazon_campaign_id;
       if (!effectiveCampaignId) return Response.json({ ok: false, error: 'Campanha AUTO local sem ID Amazon' });
-      const paused = ['PAUSED', 'PAUSED_BY_ADVERTISER'].includes(state);
-      if (paused && !forceReactivate) {
-        // Preserve manual/business pauses unless the caller explicitly opts in.
-        return Response.json({
-          ok: true, campaign_id: String(effectiveCampaignId), already_exists: true,
-          reactivated: false, action_label: 'existing_paused_preserved',
-          reason: 'awaiting_explicit_force_reactivate',
-        });
-      }
-      if (paused && forceReactivate) {
-        const enabled = await adsRequestWithDetails(
-          'PUT', '/sp/campaigns',
-          { campaigns: [{ campaignId: String(effectiveCampaignId), state: 'ENABLED' }] },
-          refreshToken, String(profileId), 'application/vnd.spCampaign.v3+json'
-        );
-        const enabledError = extractCampaignError(enabled.data);
-        if (![200, 201, 207].includes(enabled.status) || enabledError) {
-          return Response.json({
-            ok: false, error: 'Falha ao reativar AUTO pausada',
-            campaign_id: String(effectiveCampaignId), http_status: enabled.status,
-            amazon_error: enabledError, request_id: enabled.headers?.requestId || '',
-          });
-        }
-        await base44.asServiceRole.entities.Campaign.update(autoCampaign.id, {
-          state: 'enabled', status: 'enabled', amazon_status: 'enabled', synced_at: new Date().toISOString(),
-        }).catch(() => {});
-      }
-      // Nao redefinir o lance de uma AUTO existente. O mesmo endpoint e
-      // chamado a cada ciclo de cobertura; rebaixar o Ad Group ao piso aqui
-      // apagaria a evolucao gradual feita por bid/dayparting e esconderia o
-      // efeito das decisoes economicas anteriores.
       await base44.asServiceRole.entities.Product.update(product.id, {
         has_campaign: true, campaign_status: 'active', linked_campaign_id: effectiveCampaignId,
       }).catch(() => {});
@@ -293,8 +265,7 @@ Deno.serve(async (req) => {
         daily_budget: autoCampaign.daily_budget,
         already_exists: true,
         reactivated: false,
-        action_label: paused && forceReactivate ? 'reactivated_explicitly' : 'existing_enabled',
-        reactivated: paused && forceReactivate,
+        action_label: 'existing_enabled',
         launch_bid_policy: launchAtMinimum ? 'configured_minimum' : 'proportional_override',
         proportional_bid: initialBid,
       });
@@ -320,31 +291,24 @@ Deno.serve(async (req) => {
     const today = new Date().toISOString().slice(0, 10);
 
     const token = await getAdsToken(refreshToken);
-    const existingCampaignId = await reconcileCampaign(token, profileId, campaignName);
-    
-    let campaignResult;
-    let campaignId = existingCampaignId;
-
-    // Reconcile encontra campanhas que existem na Amazon mesmo quando o banco
-    // local perdeu o vinculo. Nesse caminho tambem precisamos reativar a
-    // campanha; antes ela era apenas importada localmente e permanecia PAUSED.
-    if (campaignId) {
-      const enabled = await adsRequestWithDetails(
-        'PUT', '/sp/campaigns',
-        { campaigns: [{ campaignId: String(campaignId), state: 'ENABLED' }] },
-        refreshToken, String(profileId), 'application/vnd.spCampaign.v3+json'
-      );
-      const enabledError = extractCampaignError(enabled.data);
-      if (![200, 201, 207].includes(enabled.status) || enabledError) {
-        return Response.json({
-          ok: false,
-          error: `Falha ao reativar AUTO reconciliada ${campaignId}`,
-          http_status: enabled.status,
-          amazon_error: enabledError,
-          request_id: enabled.headers?.requestId || '',
-        });
-      }
+    const existingRemoteCampaign = await reconcileCampaign(token, profileId, campaignName);
+    if (existingRemoteCampaign) {
+      const remoteState = existingRemoteCampaign.state || 'UNKNOWN';
+      return Response.json({
+        ok: true,
+        campaign_id: existingRemoteCampaign.campaignId,
+        already_exists: true,
+        reactivated: false,
+        remote_state: remoteState,
+        action_label: isEnabledCampaignState(remoteState)
+          ? 'existing_remote_preserved'
+          : 'existing_paused_preserved',
+        reason: 'same_day_campaign_exists; no_reactivation_or_duplicate_creation',
+      });
     }
+
+    let campaignResult;
+    let campaignId = null;
     
     if (!campaignId) {
       const campaignPayload = {
@@ -372,7 +336,15 @@ Deno.serve(async (req) => {
       if (!campaignId && [200, 201, 207].includes(campaignResult.status)) {
         for (let attempt = 0; attempt < 4 && !campaignId; attempt++) {
           if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 750 * attempt));
-          campaignId = await reconcileCampaign(token, profileId, campaignName);
+          const recovered = await reconcileCampaign(token, profileId, campaignName);
+          if (recovered && !isEnabledCampaignState(recovered.state)) {
+            return Response.json({
+              ok: false, blocked: true, uncertain: true,
+              campaign_id: recovered.campaignId, remote_state: recovered.state,
+              error: 'A Amazon pode ter aceitado a campanha, mas ela não está habilitada; estado preservado para reconciliação.',
+            }, { status: 202 });
+          }
+          campaignId = recovered?.campaignId || null;
         }
       }
 
@@ -530,9 +502,10 @@ Deno.serve(async (req) => {
       request_id: campaignResult.headers.requestId,
       ad_confirmed: !!adGroupId,
       product_ad_confirmed: !!productAdId,
-      already_exists: !!existingCampaignId,
+      already_exists: false,
+      reactivated: false,
       currency_code: account.currency_code || 'BRL',
-      action_label: existingCampaignId ? 'reactivated' : 'created',
+      action_label: 'created',
     });
 
   } catch (error) {

@@ -325,9 +325,8 @@ Deno.serve(async (req) => {
     if (dailyDue('repair_incomplete_manual_exact')) add('repairIncompleteManualExactCampaigns', 'repair_incomplete_manual_exact', { target: 'manual_only' }, true);
     else skipped.push('repair_incomplete_manual_exact');
 
-    // Sempre: reativar campanhas AUTO pausadas com estoque + reparar incompletas
-    if (dailyDue('reactivate_paused_with_stock')) add('reactivatePausedWithStock', 'reactivate_paused_with_stock', { targeting_type_filter: 'AUTO', include_incomplete: true }, true);
-    else skipped.push('reactivate_paused_with_stock');
+    // Campanhas pausadas são preservadas; a reativação exige ação explícita.
+    skipped.push('reactivate_paused_with_stock:explicit_user_action_required');
 
     // Sempre: criar campanhas MANUAL EXACT para winners do TermBank (1 campanha por termo)
     if (dailyDue('term_bank_to_campaigns')) add('runTermBankToCampaigns', 'term_bank_to_campaigns', { max_per_run: 5, max_per_asin: 5 }, true);

@@ -292,29 +292,10 @@ Deno.serve(async (request) => {
         const asin = text(product, 'asin').toUpperCase();
         const sku = text(product, 'sku').toUpperCase();
         const linked = (activeCampaignsByKey.get(`${asin}|${sku}`) || activeCampaignsByKey.get(`${asin}|`) || []);
-        const autos = linked.filter(isAutoCampaign);
+        const autos = linked.filter(isAutoCampaign).filter(isEnabledCampaign);
         if (!autos.length) missingProducts.push(product);
-
-        if (!dryRun) {
-          for (const campaign of linked.filter(isPausedOrIncomplete)) {
-            try {
-              const result = await updateRemoteCampaignState(await ensureToken(), account, campaignId(campaign), 'ENABLED');
-              if (!result.ok) {
-                report.errors.push({ campaign_id: campaignId(campaign), action: 'reactivate', error: result.detail || `HTTP_${result.status}` });
-                continue;
-              }
-              await base44.asServiceRole.entities.Campaign.update(campaign.id, {
-                status: 'enabled', state: 'enabled', reconciliation_status: 'ok',
-                reconciliation_notes: 'reactivated_active_sku_with_stock',
-                last_sync_at: new Date().toISOString(),
-              }).catch(() => {});
-              report.reactivated_sold_campaigns += 1;
-              report.reactivated.push({ campaign_id: campaignId(campaign), asin, sku });
-            } catch (error: any) {
-              report.errors.push({ campaign_id: campaignId(campaign), action: 'reactivate', error: String(error?.message || error).slice(0, 300) });
-            }
-          }
-        }
+        // Paused/incomplete campaigns stay untouched and do not count as active
+        // AUTO coverage; eligible products can receive a new campaign instead.
       }
       report.missing_auto_before = missingProducts.length;
 
