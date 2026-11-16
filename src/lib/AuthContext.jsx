@@ -27,6 +27,21 @@ export const AuthProvider = ({ children }) => {
     try {
       setIsLoadingPublicSettings(true);
       setAuthError(null);
+
+      // Self-hosted deployments do not require a Base44 app id for the
+      // password login page. Avoid polling the public-settings endpoint with
+      // a literal null id, which can keep the auth bootstrap unresolved.
+      if (!appParams.appId) {
+        if (appParams.token) await checkUserAuth();
+        else {
+          setIsLoadingAuth(false);
+          setIsAuthenticated(false);
+          setAuthChecked(true);
+        }
+        setIsLoadingPublicSettings(false);
+        return;
+      }
+
       const appClient = createAxiosClient({
         baseURL: `/api/apps/public`,
         headers: { 'X-App-Id': appParams.appId },
