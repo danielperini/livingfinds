@@ -94,7 +94,7 @@ const AuthenticatedApp = () => {
     checkSplash();
   }, [isPublicAuthRoute]);
 
-  if (isLoadingPublicSettings || isLoadingAuth) {
+  if (!isPublicAuthRoute && (isLoadingPublicSettings || isLoadingAuth)) {
     return (
       <div className="fixed inset-0 flex items-center justify-center bg-canvas">
         <div className="flex flex-col items-center gap-4">
@@ -107,9 +107,9 @@ const AuthenticatedApp = () => {
     );
   }
 
-  if (authError?.type === 'user_not_registered') return <UserNotRegisteredError />;
+  if (!isPublicAuthRoute && authError?.type === 'user_not_registered') return <UserNotRegisteredError />;
 
-  if (!splashDone && !showSplash && !isLoadingAuth && !isLoadingPublicSettings && !authError) {
+  if (!isPublicAuthRoute && !splashDone && !showSplash && !isLoadingAuth && !isLoadingPublicSettings && !authError) {
     return (
       <div className="fixed inset-0 flex items-center justify-center bg-canvas">
         <div className="w-6 h-6 border-2 border-cyan/40 border-t-cyan rounded-full animate-spin" />
